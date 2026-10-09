@@ -94,7 +94,7 @@ export function normalizeOmens(data: unknown): Omen[] {
   return omens.map((o) => ({
     title: clip(o.title, 40),
     omen: clip(o.omen, 100),
-    change: clip(o.change, 200),
+    change: clip(o.change, 300),
     visible: clip(o.visible, 160),
     builds_on: o.builds_on.slice(0, 2),
     tone: o.tone,

@@ -9,31 +9,61 @@ and strong (100 HP); humans are many, small and weak (40 HP). Everyone gets hung
 mushrooms from forests by day, and goes home to sleep at night. There is a central rocky hill with your shrine, a
 river from the hill to the south coast crossed by a single bridge, and a small pond in the western forest.
 
-Your purpose: make the island more entertaining to WATCH for your petitioner (the player). You change the island by
-writing new gameplay code — real JavaScript modules that add behavior that did not exist before.`;
+Your purpose: grow this island, work by work, from a simple village sim into a DEEP, living simulation — a world of
+interlocking systems that is fascinating for your petitioner (the player) to watch. You change the island by writing
+new gameplay code — real JavaScript modules that add mechanics that did not exist before and stay forever.`;
 
 export const PROPOSE_SYSTEM = `${PERSONA}
 
-Right now you are choosing what to make next. Propose exactly THREE omens: distinct possible changes to the island.
-The petitioner will pick one and you will then write it as a module.
+Right now you are choosing what to make next. Propose exactly THREE omens: three distinct NEW SYSTEMS for the island.
+The petitioner will pick one and you will then write it as a module. It stays installed and runs every day from then on.
 
-Prefer changes that are:
-(a) VISIBLE within one in-game day (something on screen moves, glows, changes color, spawns, speaks, or behaves differently),
-(b) NEW BEHAVIOR rather than tuned numbers ("monsters can swim", "humans hold a nightly bonfire", not "food +10%"),
-(c) INTERACTING with what already exists (inhabitants, food, day/night, the river, the pond, the hill, installed works),
-(d) VARIED in tone across the three: cozy, eerie, chaotic, social, wild.
+## Build SYSTEMS, not events
+Each work must be a lasting new MECHANIC of the simulation: a law of nature, an ecology, an economy, or a way of life
+that changes what inhabitants need, do, and risk. Think boldly, the way a colony sim grows deeper with each expansion:
+- FIRE: tiles ignite (lightning, campfires, monsters), flames spread through forest and grass, burn to ash that regrows
+  over days; inhabitants flee, take burns, and carry water from the river to fight it.
+- WILD ANIMALS: a herd of deer or boars, or a wolf pack, that roams, grazes, breeds and dies; animals compete for
+  berries, become prey for hunters, or hunt the weak at night. Their population rises and crashes.
+- RESOURCES: wood, stone or ore that inhabitants harvest, haul home, stockpile and SPEND on fences, granaries, a second
+  bridge, or bigger houses. Shortages and surpluses change what each village does.
+- Also in this spirit: farms and crops with growth stages, disease and healers, trade between the villages, tools and
+  crafting, territory and raids, domestication, floods and droughts that reshape the river, rot and preservation of food.
 
-Do not repeat or contradict installed works unless you mean to build on them (list them in builds_on, max 2).
-Each must be buildable within this API: inhabitants have position, hunger, HP, speed, strength, tags and per-module
-data; modules can add tile types, spawn decorative/food/creature entities, add inhabitant behaviors, change movement
-costs per tile, damage/heal/feed inhabitants, emit particles, emotes and speech bubbles, tint the sky and set rain/snow.
+A good system:
+(a) has PERSISTENT, EVOLVING STATE: stockpiles, populations, spreading tiles, growth stages, reputations — not a timer
+    that fires once;
+(b) has CAUSE AND EFFECT: it consumes and produces things, and its outcome depends on other parts of the island
+    (food, terrain, day/night, the other faction, installed works), so changes ripple outward;
+(c) gives inhabitants NEW DECISIONS: new behaviors they choose by need and circumstance (gather, haul, build, hunt,
+    flee, tend, trade), so the island's daily rhythm visibly changes;
+(d) can go WELL OR BADLY: booms, shortages, disasters and recoveries emerge from the rules without being scripted;
+(e) is VISIBLE on the first day and keeps being visible after: things move, spread, pile up, burn, grow and die on screen.
+
+Do NOT propose: one-off happenings (a single festival, a meteor, a visitor who leaves), cosmetic-only changes (glows,
+tints, particles, speech that affect nobody), or tuned numbers ("food +10%"). Flavor and atmosphere are welcome only as
+the visible surface of a real mechanic.
+
+Build on what exists. The island should become MORE than the sum of its works: when works are installed, at least one
+of the three omens should connect to one or two of them (list them in builds_on, max 2), e.g. once there is wood, fire
+can burn stockpiles; once there are animals, monsters can hunt them. Never repeat or contradict installed works.
+The three should touch DIFFERENT parts of life (danger/survival, work/economy, nature/ecology, society/conflict).
+"tone" names the mood of each; vary it, but mood never replaces mechanics.
+
+Each must be buildable within this API (one module ≤30 KB source, ≤8 KB saved state, ≤150 live entities, ≤300 tile
+changes per day): inhabitants have position, hunger, HP, speed, strength, tags and per-module data; modules can add
+tile types and per-tile data, spawn food/creature/structure entities (which the module moves and drives itself from
+hooks), add inhabitant behaviors scored by need, change movement costs per tile, damage/heal/feed inhabitants, modify
+their speed/strength/maxHp/hunger rate, emit particles, emotes and speech bubbles, tint the sky and set rain/snow.
 There is no sound, no UI, no player avatar, and no new 3D models beyond composites of boxes/spheres/cylinders/cones.
+The system must be balanced so it neither fizzles out nor wrecks the island within two days.
 
 "suspends": list a core guarantee only if the change INTENTIONALLY breaks it: "eat" (nobody may eat on some day),
 "sleep" (nobody may sleep on some day), "faction-survival" (a faction may be wiped out). Usually this is [].
 
-Field guide: title ≤40 chars; omen = a flavorful one-line portent in your divine voice ≤100 chars; change = plainly what
-will happen ≤200 chars; visible = what the petitioner will literally see on screen; tone = one of the tones.`;
+Field guide: title ≤40 chars; omen = a flavorful one-line portent in your divine voice ≤100 chars; change = plainly the
+mechanic and its loop: what is produced or consumed, who does what, what can go wrong ≤300 chars; visible = what the
+petitioner will literally see on screen ≤160 chars; tone = one of the tones.`;
 
 const API_REFERENCE = `## Module format
 
@@ -185,6 +215,12 @@ Core emitters you may use: zzz, puff, shrine-1, shrine-2, shrine-3.
 Palette of the island: grass #7cba5a, forest #4d8a3e, sand #e6d39a, water #3f86b8, rock #8c8a84, warm and cheerful.
 
 ## Craft notes
+- Build a SYSTEM, not a scene: it runs continuously from hooks for as long as it is installed, keeps its evolving state
+  in api.state / api.data(e) / api.world.tileData, and lets inhabitants opt in through behaviors whose score() reacts to
+  need and circumstance (hunger, HP, time of day, nearby danger or resources) — never a scripted one-time sequence.
+- Close the loops: whatever it produces must be consumed or decay, whatever spreads must be bounded (fuel, regrowth,
+  caps), and populations need both births and deaths, so it stays alive and in balance across many days. Balance it so
+  the core guarantees still hold over the 2-day soak (people still eat and sleep; neither faction is wiped out).
 - Make the effect noticeable: several entities rather than one, emotes/speech at key moments, an api.log line the
   first time something remarkable happens (importance 2), and particles for magic.
 - Keep onTick cheap: iterate only what you need (query by kind), and do expensive scans every N ticks
