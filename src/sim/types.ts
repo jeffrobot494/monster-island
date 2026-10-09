@@ -96,6 +96,7 @@ export interface Entity {
   diedAt?: number; // gravestones
   reservedBy?: number; // food reservation
   reservedUntil?: number;
+  harmedBy?: string; // last module that damaged this inhabitant
 }
 
 export interface ChronicleEvent {

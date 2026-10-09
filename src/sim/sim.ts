@@ -300,7 +300,33 @@ export class Sim {
     return isFinite(this.costsFor(kind).get(this.grid.get(x, z)) ?? Infinity);
   }
 
-  private requeue(e: Entity) {
+  /** A tile changed type: requeue every path that crosses it. */
+  tileChanged(i: number) {
+    for (const e of this.ents.values()) if (e.path && e.path.pts.includes(i)) this.requeue(e);
+  }
+
+  /** Move an inhabitant standing on a tile it can't walk on to the nearest walkable tile. */
+  private unstrand(e: Entity) {
+    const cx = Math.floor(e.x), cz = Math.floor(e.z);
+    for (let r = 1; r <= 8; r++) {
+      let best: [number, number] | null = null, bd = Infinity;
+      for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        if (!this.walkableFor(e.kind, cx + dx, cz + dz)) continue;
+        const d = dx * dx + dz * dz;
+        if (d < bd) { bd = d; best = [cx + dx, cz + dz]; }
+      }
+      if (best) {
+        e.x = best[0] + 0.5;
+        e.z = best[1] + 0.5;
+        this.stop(e);
+        this.out.emitterOps.push({ op: 'burst', emitter: 'puff', x: e.x, y: this.grid.height(best[0], best[1]) + 0.3, z: e.z });
+        return;
+      }
+    }
+  }
+
+  requeue(e: Entity) {
     if (!e.path) return;
     e.want = { gx: e.path.gx, gz: e.path.gz };
     if (!this.repathQueue.includes(e.id)) this.repathQueue.push(e.id);
@@ -646,6 +672,7 @@ export class Sim {
         dying.push(e);
         continue;
       }
+      if (!e.path && !e.want && !e.hidden && !this.walkableFor(e.kind, Math.floor(e.x), Math.floor(e.z))) this.unstrand(e);
       // behavior
       const entry = this.chooseBehavior(e, t);
       this.dayStats.behaviorTicks[e.behavior] = (this.dayStats.behaviorTicks[e.behavior] ?? 0) + 1;
@@ -653,7 +680,10 @@ export class Sim {
       else this.actCore(e, e.behavior, t);
       if (this.ents.has(e.id) && (e.path || e.want) && !e.hidden) this.advancePath(e);
     }
-    for (const e of dying) this.kill(e, e.hunger >= 100 ? 'starvation' : 'wounds');
+    for (const e of dying) {
+      const by = e.harmedBy ?? '';
+      this.kill(e, e.hunger >= 100 && !by ? 'starvation' : by ? `wounds from ${by}` : 'wounds');
+    }
 
     for (const l of this.listeners) l.onTick?.();
   }
