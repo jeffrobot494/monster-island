@@ -48,7 +48,7 @@ export class Ui {
   private bannerTimer = 0;
   private shownOmens: Omen[] | null = null;
 
-  constructor(private cb: UiCallbacks, badge: string, devMode: boolean) {
+  constructor(readonly cb: UiCallbacks, badge: string, devMode: boolean) {
     this.pauseBtn = h('button', { class: 'btn', title: 'Pause (space)', onclick: () => cb.onPause() }, '⏸');
     for (const s of [1, 2]) {
       const b = h('button', { class: 'btn', onclick: () => cb.onSpeed(s) }, `${s}×`);
@@ -65,7 +65,7 @@ export class Ui {
     this.dev.append(
       h('div', { class: 'panel-head' }, h('h2', {}, 'Dev'), h('button', { class: 'x', onclick: () => this.togglePanel(this.dev) }, '×')),
       h('p', { class: 'muted' }, 'Install a reference module directly (skips the god and validation):'),
-      h('div', { class: 'row' }, h('button', { class: 'btn wide', onclick: () => cb.onDevInstall('fireflies') }, 'fireflies'), h('button', { class: 'btn wide', onclick: () => cb.onDevInstall('wading') }, 'wading')),
+      h('div', { class: 'row' }, ...['fireflies', 'wading', 'thrower', 'hang'].map((n) => h('button', { class: 'btn wide', onclick: () => cb.onDevInstall(n) }, n))),
       h('h3', {}, 'Modules'),
       this.devMods,
     );

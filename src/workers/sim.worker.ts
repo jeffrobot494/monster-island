@@ -100,7 +100,7 @@ function tickOnce() {
   const out = sim.drainOut();
   const tiles = sim.grid.drainChanged().map((i) => [i, sim.grid.types[i]] as [number, string]);
   const ents = packEnts();
-  post({ type: 'frame', seq: ++seq, tick: sim.tick, ents, tiles, emitterOps: out.emitterOps, emotes: out.emotes, atmosphere: out.atmosphereDirty ? { ...sim.atmosphere } : undefined }, [ents.buffer]);
+  post({ type: 'frame', seq: ++seq, tick: sim.tick, ents, tiles, emitterOps: out.emitterOps, emotes: out.emotes, atmosphere: out.atmosphereDirty ? { ...sim.atmosphere } : undefined, pops: [sim.inhabitants('monster').length, sim.inhabitants('human').length] }, [ents.buffer]);
   if (out.events.length) post({ type: 'events', events: out.events });
   if (sim.tick % 5 === 0 && inspectId !== null) sendInspect();
   if (sim.tick % 30 === 0) sendStats();

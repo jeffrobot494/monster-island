@@ -10,6 +10,7 @@ import type { ChronicleEvent } from './sim/types';
 import type { ModuleStat, SimToMain } from './protocol';
 import firefliesSrc from './god/reference-modules/fireflies.js?raw';
 import wadingSrc from './god/reference-modules/wading.js?raw';
+import { DEV_BROKEN } from './god/reference-modules/dev-broken';
 import { TICKS_PER_DAY } from './sim/time';
 
 const params = new URLSearchParams(location.search);
@@ -39,8 +40,8 @@ async function boot() {
     const name = params.get('manualsrc');
     const id = prompt.match(/Its id MUST be '([^']+)'/)?.[1];
     if (!devMode || !name || !id) return null;
-    const src = name === 'fireflies' ? firefliesSrc : name === 'wading' ? wadingSrc : null;
-    return src ? src.replace(/id: '(fireflies|wading)'/, `id: '${id}'`) : null;
+    const src = name === 'fireflies' ? firefliesSrc : name === 'wading' ? wadingSrc : DEV_BROKEN[name] ?? null;
+    return src ? src.replace(/id: '(fireflies|wading|hang|thrower)'/, `id: '${id}'`) : null;
   };
   const platform = await pickPlatform(params, (p) => ui.askSource(p), autoSource);
   const store = platform.store;
@@ -128,7 +129,7 @@ async function boot() {
     },
     onToggleModule: (id, active) => sim.post({ type: 'setModuleStatus', id, status: active ? 'active' : 'quarantined' }),
     onDevInstall: async (name) => {
-      const src = name === 'fireflies' ? firefliesSrc : wadingSrc;
+      const src = name === 'fireflies' ? firefliesSrc : name === 'wading' ? wadingSrc : DEV_BROKEN[name];
       if (sources[name]) return ui.showBanner(`${name} is already installed.`, false);
       const r = await install(name, src);
       ui.showBanner(r.ok ? `Installed ${name}.` : `Install failed: ${r.error}`, false);
@@ -182,7 +183,7 @@ async function boot() {
           reveal.untilTick = Infinity;
           if (s) doReveal({ x: s.x, z: s.z });
         }
-        if (tick % 10 === 0) countPops();
+        if (tick % 10 === 0) ui.setPops(m.pops[0], m.pops[1]);
         break;
       }
       case 'events':
@@ -237,25 +238,6 @@ async function boot() {
     for (const v of renderer.shapes.ents.values()) if (v.shapeIdx === idx) shrineId = v.id;
     shrineStage = -1;
     updateShrine();
-  }
-
-  function countPops() {
-    let mo = 0, hu = 0;
-    const mi = renderer.shapes.shapeIds.indexOf('monster'), hi = renderer.shapes.shapeIds.indexOf('human');
-    for (const v of renderer.shapes.ents.values()) {
-      if (!v.inhabitant) continue;
-      if (v.shapeIdx === mi) mo++;
-      else if (v.shapeIdx === hi) hu++;
-      else if (v.scale > 1.1) mo++;
-      else hu++;
-    }
-    // sleeping inhabitants are hidden from frames; use the last save for the true count at night
-    if (world && mo + hu < 2) {
-      const inh = world.core.ents.filter((e) => e.inhabitant);
-      mo = inh.filter((e) => e.faction === 'monster').length;
-      hu = inh.length - mo;
-    }
-    ui.setPops(mo, hu);
   }
 
   function updateShrine() {
@@ -339,6 +321,8 @@ async function boot() {
   ui.showOmens(pipeline.choosing ? pipeline.state.omens : null);
   applyPause();
   pipeline.kick();
+  const devInstall = devMode ? params.get('devinstall') : null;
+  if (devInstall) setTimeout(() => ui.cb.onDevInstall(devInstall), 1500);
   renderer.renderer.setAnimationLoop(() => renderer.render());
   (window as any).__mi = { sim, pipeline, renderer, store, chronicle: () => chronicle };
 }

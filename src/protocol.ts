@@ -29,6 +29,7 @@ export interface FramePayload {
   emitterOps: EmitterOp[];
   emotes: Emote[];
   atmosphere?: Atmosphere;
+  pops: [number, number]; // monsters, humans (incl. sleepers)
 }
 
 export interface InspectInfo {

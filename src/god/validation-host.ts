@@ -8,6 +8,8 @@ export function runValidation(req: ValidationRequest, onStage?: (stage: string) 
   return new Promise((resolve) => {
     const w = new Worker(new URL('../workers/validator.worker.ts', import.meta.url), { type: 'module' });
     let stage = 'static';
+    // progress reports name the stage just completed; a stall happens in the one after it
+    const running = () => (stage === 'static' ? 'install' : stage === 'install' ? 'the soak' : stage === 'round-trip' ? 'the tests' : stage === 'soak' ? 'the soak' : stage);
     const started = performance.now();
     let last = started;
     const finish = (r: ValidationReport) => {
@@ -22,8 +24,8 @@ export function runValidation(req: ValidationRequest, onStage?: (stage: string) 
     });
     const timer = setInterval(() => {
       const now = performance.now();
-      if (now - last > STALL_MS) finish(hang(`the module froze the simulation during ${stage} (no progress for ${STALL_MS / 1000} s) — probably an infinite loop or a very slow hook`));
-      else if (now - started > TOTAL_MS) finish(hang(`validation took longer than ${TOTAL_MS / 60000} minutes during ${stage}`));
+      if (now - last > STALL_MS) finish(hang(`the module froze the simulation during ${running()} (no progress for ${STALL_MS / 1000} s) — probably an infinite loop or a very slow hook`));
+      else if (now - started > TOTAL_MS) finish(hang(`validation took longer than ${TOTAL_MS / 60000} minutes during ${running()}`));
     }, 1000);
     w.onmessage = (ev) => {
       last = performance.now();
