@@ -1,5 +1,6 @@
 // DOM overlay: HUD, omen cards, shrine status, banner, chronicle, inspector, dev panel.
 import type { Omen } from '../god/schemas';
+import type { LiveCall, TraceEntry } from '../god/pipeline';
 import type { InspectInfo, ModuleStat } from '../protocol';
 import type { ChronicleEvent } from '../sim/types';
 import { timeInfo } from '../sim/time';
@@ -18,6 +19,60 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
 
 const TONE_ICON: Record<string, string> = { cozy: '☕', eerie: '🌫', chaotic: '🌀', social: '🎉', wild: '🌿' };
 const SUSPEND_TEXT: Record<string, string> = { eat: 'some days nobody may eat', sleep: 'some nights nobody may sleep', 'faction-survival': 'a whole people may perish' };
+
+/**
+ * Make a streamed, still-incomplete JSON answer readable: string values are unescaped and shown under their key
+ * (so a module's "source" reads as code), everything else is dropped.
+ */
+export function readablePartialJson(raw: string): string {
+  let out = '';
+  let lastKey = '';
+  const stack: ('{' | '[')[] = [];
+  let expectKey = false; // in an object, the next string is a key
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '{' || c === '[') {
+      stack.push(c);
+      expectKey = c === '{';
+    } else if (c === '}' || c === ']') {
+      stack.pop();
+      expectKey = false;
+    } else if (c === ',') expectKey = stack[stack.length - 1] === '{';
+    else if (c === '"') {
+      let v = '';
+      let done = false;
+      for (i++; i < raw.length; i++) {
+        const ch = raw[i];
+        if (ch === '"') {
+          done = true;
+          break;
+        }
+        if (ch !== '\\') {
+          v += ch;
+          continue;
+        }
+        const n = raw[++i];
+        if (n === undefined) break;
+        if (n === 'n') v += '\n';
+        else if (n === 't') v += '\t';
+        else if (n === 'u') {
+          const hex = raw.slice(i + 1, i + 5);
+          if (hex.length < 4) break;
+          v += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else if (n !== 'r') v += n;
+      }
+      if (expectKey) {
+        lastKey = v;
+        expectKey = false;
+      } else out += lastKey === 'source' ? `${v}${done ? '\n' : ''}` : `${lastKey}: ${v}${done ? '\n' : ''}`;
+      if (!done) break;
+    }
+  }
+  return out;
+}
+
+const fmtClock = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 export interface UiCallbacks {
   onSpeed(speed: number): void;
@@ -45,6 +100,15 @@ export class Ui {
   private dev = h('aside', { class: 'panel dev hidden' });
   private devMods = h('div');
   private manual = h('div', { class: 'manual hidden' });
+  private godlog = h('aside', { class: 'panel godlog hidden' });
+  private godLive = h('div', { class: 'god-live hidden' });
+  private godLiveHead = h('div', { class: 'god-live-head' });
+  private godThinking = h('pre', { class: 'god-stream thinking' });
+  private godThinkingBox = h('details', { class: 'hidden' }, h('summary', {}, 'Thinking'), this.godThinking);
+  private godOutput = h('pre', { class: 'god-stream' });
+  private godList = h('ol', { class: 'god-list' });
+  private godVersion = -1;
+  private godLast: TraceEntry | null = null;
   private bannerTimer = 0;
   private shownOmens: Omen[] | null = null;
 
@@ -55,9 +119,12 @@ export class Ui {
       this.speedBtns.push(b);
     }
     const chronBtn = h('button', { class: 'btn wide', onclick: () => this.togglePanel(this.chronicle) }, '📜 Chronicle');
+    const godBtn = h('button', { class: 'btn wide', title: 'What the god is doing', onclick: () => this.togglePanel(this.godlog) }, '🔮 God');
+    this.shrine.addEventListener('click', () => this.togglePanel(this.godlog));
+    this.shrine.title = 'Show what the god is doing';
     const hud = h('header', { class: 'hud' },
       h('div', { class: 'hud-left' }, h('strong', { class: 'title' }, 'Monster Island'), this.clock, this.pops),
-      h('div', { class: 'hud-right' }, this.pauseBtn, ...this.speedBtns, chronBtn,
+      h('div', { class: 'hud-right' }, this.pauseBtn, ...this.speedBtns, chronBtn, godBtn,
         devMode ? h('button', { class: 'btn wide', onclick: () => this.togglePanel(this.dev) }, '🛠 Dev') : null,
         h('span', { class: 'badge', title: 'platform · AI provider' }, badge)),
     );
@@ -69,16 +136,30 @@ export class Ui {
       h('h3', {}, 'Modules'),
       this.devMods,
     );
-    this.root.append(hud, this.shrine, this.banner, this.cards, this.chronicle, this.inspector, this.dev, this.manual);
+    this.godLive.append(this.godLiveHead, this.godThinkingBox, this.godOutput);
+    this.godlog.append(
+      h('div', { class: 'panel-head' }, h('h2', {}, 'The god at work'), h('button', { class: 'x', onclick: () => this.togglePanel(this.godlog) }, '×')),
+      this.godLive,
+      h('h3', {}, 'Activity'),
+      this.godList,
+    );
+    this.root.append(hud, this.shrine, this.banner, this.cards, this.chronicle, this.inspector, this.dev, this.godlog, this.manual);
     this.setSpeed(1, false);
   }
 
   isPanelOpen() {
-    return [this.chronicle, this.inspector, this.dev].some((p) => !p.classList.contains('hidden')) || !this.manual.classList.contains('hidden');
+    return [this.chronicle, this.inspector, this.dev, this.godlog].some((p) => !p.classList.contains('hidden')) || !this.manual.classList.contains('hidden');
   }
 
   private togglePanel(p: HTMLElement) {
+    const opening = p.classList.contains('hidden');
+    // right-hand panels share a slot
+    if (opening) for (const o of [this.chronicle, this.dev, this.godlog]) if (o !== p) o.classList.add('hidden');
     p.classList.toggle('hidden');
+    if (p === this.godlog) {
+      this.godVersion = -1;
+      this.godLast = null;
+    }
     this.cb.onPanelChange();
   }
 
@@ -116,14 +197,16 @@ export class Ui {
       list.append(h('button', { class: `card tone-${o.tone}`, onclick: () => this.cb.onChoose(i, whisper.value) },
         h('div', { class: 'card-tone' }, `${TONE_ICON[o.tone] ?? '✦'} ${o.tone}`),
         h('h3', {}, o.title),
-        h('p', { class: 'omen-line' }, `“${o.omen}”`),
         h('p', { class: 'change' }, o.change),
-        h('p', { class: 'visible' }, h('b', {}, 'You will see: '), o.visible),
+        h('div', { class: 'card-more' },
+          h('p', { class: 'omen-line' }, `“${o.omen}”`),
+          h('p', { class: 'visible' }, h('b', {}, 'You will see: '), o.visible),
+        ),
         o.suspends.length ? h('p', { class: 'warn' }, `⚠ This bends the island's laws: ${o.suspends.map((s) => SUSPEND_TEXT[s] ?? s).join('; ')}.`) : null,
       ));
     });
     this.cards.append(
-      h('div', { class: 'omens-head' }, h('h2', {}, 'The god offers three omens'), h('span', { class: 'muted' }, 'The island holds its breath while you choose.')),
+      h('div', { class: 'omens-head' }, h('h2', {}, 'The god offers three omens'), h('span', { class: 'muted' }, 'Choose whenever you like. Hover a card for more.')),
       list,
       h('div', { class: 'omens-foot' }, whisper, h('button', { class: 'btn wide', onclick: () => this.cb.onChoose('god', whisper.value) }, '🎲 Let the god decide')),
     );
@@ -160,6 +243,46 @@ export class Ui {
       this.inspector.classList.remove('hidden');
       this.cb.onPanelChange();
     }
+  }
+
+  openGodLog() {
+    if (this.godlog.classList.contains('hidden')) this.togglePanel(this.godlog);
+  }
+
+  /** The god panel; cheap to call often (redraws only when open and something changed). */
+  setGodActivity(trace: TraceEntry[], live: LiveCall | null, version: number) {
+    if (this.godlog.classList.contains('hidden')) return;
+    if (live) {
+      const secs = Math.floor((Date.now() - live.startedAt) / 1000);
+      const out = live.output.length;
+      this.godLiveHead.replaceChildren(
+        h('b', {}, live.label),
+        h('span', { class: 'muted' }, ` · ${live.status}${live.thinkingTokens ? ` (~${live.thinkingTokens.toLocaleString()} thinking tokens)` : ''} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}${out ? ` · ${(out / 1024).toFixed(1)} KB written` : ''}`),
+      );
+    }
+    if (version === this.godVersion) return;
+    this.godVersion = version;
+    this.godLive.classList.toggle('hidden', !live);
+    if (live) {
+      this.godThinkingBox.classList.toggle('hidden', !live.thinking);
+      this.godThinking.textContent = live.thinking.slice(-4000);
+      const stick = this.godOutput.scrollTop + this.godOutput.clientHeight >= this.godOutput.scrollHeight - 30;
+      this.godOutput.textContent = live.output ? readablePartialJson(live.output) : live.thinkingTokens ? 'The god is thinking. Its words appear here as it writes…' : 'Waiting for the first words…';
+      if (stick) this.godOutput.scrollTop = this.godOutput.scrollHeight;
+    }
+    const last = this.godLast ? trace.lastIndexOf(this.godLast) : -1;
+    if (last === trace.length - 1 && this.godLast) return;
+    const stick = this.godlog.scrollTop + this.godlog.clientHeight >= this.godlog.scrollHeight - 40;
+    const row = (e: TraceEntry) => h('li', { class: `lvl-${e.level}` },
+      h('span', { class: 'time' }, fmtClock(e.t)),
+      e.detail ? h('details', {}, h('summary', {}, e.text), h('pre', {}, e.detail)) : h('span', {}, e.text),
+    );
+    // append only what's new so expanded details stay open; rebuild if the start of the log was trimmed
+    if (last < 0 || this.godList.children.length > 400) this.godList.replaceChildren(...trace.map(row));
+    else this.godList.append(...trace.slice(last + 1).map(row));
+    if (!trace.length) this.godList.replaceChildren(h('li', { class: 'muted' }, 'Nothing yet. Activity appears here as the god works.'));
+    this.godLast = trace[trace.length - 1] ?? null;
+    if (stick) this.godlog.scrollTop = this.godlog.scrollHeight;
   }
 
   setModuleStats(stats: ModuleStat[], titles: Record<string, string>) {

@@ -30,7 +30,7 @@ Optional model overrides go in `.env.local`: `CLAUDE_CODE_PROPOSE_MODEL=sonnet`,
 
 Dev-only (for headless testing): `?nogod=1`, `?skip=N` (fast-forward ticks at boot), `?speed=2`, `?cam=x,z,dist`,
 `?auto=1` (auto-pick the first omen), `?manualsrc=fireflies|wading|hang|thrower` (auto-answer the manual god),
-`?devinstall=name` (install a reference/broken module directly), `?shot=ms` (hold the load event for screenshots).
+`?devinstall=name` (install a reference/broken module directly), `?godlog=1` (open the god panel at boot), `?shot=ms` (hold the load event for screenshots).
 
 ## How it works
 

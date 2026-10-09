@@ -33,21 +33,60 @@ function transcript(messages: Req['messages']): string {
 }
 
 let queue: Promise<unknown> = Promise.resolve();
+let inFlight = 0;
 
-function runClaude(req: Req, model: string): Promise<{ data: unknown; usage: { input: number; output: number } }> {
+/** Live progress forwarded to the browser while claude -p runs. */
+type Progress = { kind: 'status'; text: string } | { kind: 'delta'; channel: 'thinking' | 'output'; text: string } | { kind: 'thinking'; tokens: number };
+
+function runClaude(req: Req, model: string, onProgress: (p: Progress) => void, signal: AbortSignal): Promise<{ data: unknown; usage: { input: number; output: number } }> {
   const dir = mkdtempSync(join(tmpdir(), 'mi-god-'));
   const sysFile = join(dir, 'system.txt');
   writeFileSync(sysFile, req.system);
-  const args = ['-p', '--output-format', 'json', '--json-schema', JSON.stringify(req.schema), '--system-prompt-file', sysFile,
-    '--model', model, '--tools', '', '--safe-mode', '--no-session-persistence'];
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--json-schema', JSON.stringify(req.schema),
+    '--system-prompt-file', sysFile, '--model', model, '--tools', '', '--safe-mode', '--no-session-persistence'];
   return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('the page went away before the call started'));
     const p = spawn('claude', args, { env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
-    let out = '', err = '';
+    // the page went away (reload, closed tab): stop spending usage on an answer nobody will read
+    const abort = () => p.kill('SIGTERM');
+    signal.addEventListener('abort', abort, { once: true });
+    let buf = '', err = '', env: any = null;
     const timer = setTimeout(() => {
       p.kill('SIGKILL');
       reject(new Error('claude -p timed out after 15 minutes'));
     }, TIMEOUT_MS);
-    p.stdout.on('data', (d) => (out += d));
+    const onLine = (line: string) => {
+      let e: any;
+      try {
+        e = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (e.type === 'result') env = e;
+      // thinking text is not exposed by claude -p, only a running estimate of its length
+      else if (e.type === 'system' && e.subtype === 'thinking_tokens') onProgress({ kind: 'thinking', tokens: Number(e.estimated_tokens) || 0 });
+      else if (e.type === 'system' && e.subtype === 'init') onProgress({ kind: 'status', text: `connected (${e.model ?? model})` });
+      else if (e.type === 'stream_event') {
+        const ev = e.event;
+        if (ev?.type === 'message_start') onProgress({ kind: 'status', text: 'Claude is responding' });
+        else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'thinking') onProgress({ kind: 'status', text: 'thinking' });
+        else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'tool_use') onProgress({ kind: 'status', text: 'writing the answer' });
+        else if (ev?.type === 'content_block_delta') {
+          const d = ev.delta;
+          if (d?.type === 'thinking_delta' && d.thinking) onProgress({ kind: 'delta', channel: 'thinking', text: d.thinking });
+          else if (d?.type === 'input_json_delta' && d.partial_json) onProgress({ kind: 'delta', channel: 'output', text: d.partial_json });
+          else if (d?.type === 'text_delta' && d.text) onProgress({ kind: 'delta', channel: 'output', text: d.text });
+        }
+      }
+    };
+    p.stdout.on('data', (d) => {
+      buf += d;
+      let i: number;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        onLine(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+      }
+    });
     p.stderr.on('data', (d) => (err += d));
     p.on('error', (e) => {
       clearTimeout(timer);
@@ -55,13 +94,11 @@ function runClaude(req: Req, model: string): Promise<{ data: unknown; usage: { i
     });
     p.on('close', (code) => {
       clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) return reject(new Error('cancelled: the page went away'));
       rmSync(dir, { recursive: true, force: true });
-      let env: any;
-      try {
-        env = JSON.parse(out);
-      } catch {
-        return reject(new Error(`claude -p exited ${code} without JSON: ${(err || out).slice(0, 400)}`));
-      }
+      if (buf.trim()) onLine(buf);
+      if (!env) return reject(new Error(`claude -p exited ${code} without a result: ${err.slice(0, 400)}`));
       if (env.is_error) {
         const msg = String(env.result ?? env.subtype ?? 'error');
         const e: any = new Error(msg);
@@ -135,17 +172,36 @@ export function claudeCodePlugin(): Plugin {
           return send(res, 400, { error: 'bad JSON' });
         }
         const model = body.role === 'propose' ? models.propose : models.implement;
+        // NDJSON stream: {type:'progress',...} lines while it runs, then one {type:'result'} or {type:'error'} line
+        res.statusCode = 200;
+        res.setHeader('content-type', 'application/x-ndjson');
+        res.setHeader('cache-control', 'no-cache');
+        const line = (o: unknown) => res.writableEnded || res.write(JSON.stringify(o) + '\n');
+        let closed = false;
+        const gone = new AbortController();
+        res.on('close', () => {
+          closed = true;
+          if (!res.writableFinished) gone.abort();
+        });
         const t0 = Date.now();
-        const job = queue.then(() => runClaude(body, model));
+        if (inFlight > 0) line({ type: 'progress', kind: 'status', text: 'queued behind another god call' });
+        inFlight++;
+        const job = queue.then(() => {
+          line({ type: 'progress', kind: 'status', text: `starting claude -p (${model})` });
+          return runClaude(body, model, (p) => closed || line({ type: 'progress', ...p }), gone.signal);
+        });
         queue = job.catch(() => undefined);
+        job.finally(() => inFlight--).catch(() => undefined);
         try {
           const result = await job;
-          server.config.logger.info(`[god] ${body.role} via ${model}: ${((Date.now() - t0) / 1000).toFixed(1)}s, ${result.usage.input} in / ${result.usage.output} out`);
-          send(res, 200, result);
+          const secs = (Date.now() - t0) / 1000;
+          server.config.logger.info(`[god] ${body.role} via ${model}: ${secs.toFixed(1)}s, ${result.usage.input} in / ${result.usage.output} out`);
+          line({ type: 'result', ...result, model, seconds: secs });
         } catch (err: any) {
           server.config.logger.warn(`[god] ${body.role} failed: ${err.message}`);
-          send(res, err.rateLimit ? 429 : 502, { error: err.message });
+          line({ type: 'error', error: err.message, rateLimit: !!err.rateLimit });
         }
+        res.end();
       });
     },
   };

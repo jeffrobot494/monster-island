@@ -1,5 +1,5 @@
 // The god's cycle (§8): idle → propose → choose → implement → validate → repair (≤2) → staged → active at dawn.
-import { AiRateLimitError, type AiProvider } from './providers/ai-provider';
+import { AiRateLimitError, type AiProvider, type AiRequest, type AiResponse } from './providers/ai-provider';
 import { IMPLEMENT_SCHEMA, PROPOSE_SCHEMA, checkAgainstSchema, normalizeOmens, type Omen } from './schemas';
 import { IMPLEMENT_SYSTEM, PROPOSE_SYSTEM, implementUser, proposeUser, repairUser } from './prompts';
 import { emptyHistory, observe, type PlayerHistory } from './observe';
@@ -10,6 +10,14 @@ import type { Suspendable, ValidationReport, ValidationRequest } from '../sim/va
 export const MAX_ATTEMPTS = 3;
 const REST_MS = 10 * 60_000;
 const PROPOSE_RETRY_MS = 60_000;
+
+/** Fingerprint of the proposal prompt; saved omens made under a different prompt are discarded on load. */
+function promptKey(text: string): string {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+const PROPOSE_KEY = promptKey(PROPOSE_SYSTEM);
 
 export interface Job {
   omen: Omen;
@@ -31,8 +39,31 @@ export interface PendingState {
   job: Job | null;
   usedIds: string[];
   history: PlayerHistory;
+  /** PROPOSE_KEY of the prompt that produced omens/nextOmens */
+  proposeKey?: string;
   usage: { input: number; output: number; calls: number };
 }
+
+/** One line of the god's activity log (the "God" panel). Kept in memory only. */
+export interface TraceEntry {
+  t: number; // Date.now()
+  level: 'info' | 'ok' | 'warn' | 'error';
+  text: string;
+  detail?: string;
+}
+
+/** The model call in flight, with what it has streamed so far. */
+export interface LiveCall {
+  label: string;
+  startedAt: number;
+  status: string;
+  thinking: string;
+  /** estimated thinking tokens so far (the thinking text itself is usually not available) */
+  thinkingTokens: number;
+  output: string;
+}
+
+const MAX_TRACE = 300;
 
 export interface PipelineHost {
   provider: AiProvider;
@@ -66,6 +97,10 @@ export class GodPipeline {
   /** 0 idle/choosing, 1 pondering/shaping, 2 testing, 3 ready */
   stage = 0;
   busy = false;
+  trace: TraceEntry[] = [];
+  live: LiveCall | null = null;
+  /** bumps on every trace/live change, so the panel can redraw cheaply */
+  traceVersion = 0;
   private restingUntil = 0;
   private running = false;
   private stopped = false;
@@ -78,6 +113,11 @@ export class GodPipeline {
       try {
         const s = JSON.parse(raw) as PendingState;
         if (s.v === 1) this.state = { ...this.state, ...s, history: { ...emptyHistory(), ...s.history } };
+        if (this.state.proposeKey !== PROPOSE_KEY) {
+          // the god's proposal prompt changed: omens waiting from the old prompt are stale
+          this.state.omens = null;
+          this.state.nextOmens = null;
+        }
       } catch {
         /* corrupt pending: start fresh */
       }
@@ -85,7 +125,50 @@ export class GodPipeline {
     this.refreshStatus();
   }
 
+  note(text: string, level: TraceEntry['level'] = 'info', detail?: string) {
+    this.trace.push({ t: Date.now(), level, text, detail });
+    console.info(`[god] ${text}`);
+    if (this.trace.length > MAX_TRACE) this.trace.splice(0, this.trace.length - MAX_TRACE);
+    this.traceVersion++;
+  }
+
+  /** A provider call that records itself in the trace and streams into `live`. */
+  private async call(label: string, req: Omit<AiRequest, 'onProgress'>): Promise<AiResponse> {
+    const live: LiveCall = { label, startedAt: Date.now(), status: 'sending the petition', thinking: '', thinkingTokens: 0, output: '' };
+    this.live = live;
+    this.traceVersion++;
+    const kb = (req.system.length + req.messages.reduce((n, m) => n + m.content.length, 0)) / 1024;
+    this.note(`${label}: asking ${this.host.provider.name} (${kb.toFixed(1)} KB prompt)`);
+    try {
+      const r = await this.host.provider.complete({
+        ...req,
+        onProgress: (p) => {
+          if (p.kind === 'status') {
+            live.status = p.text;
+            this.note(`${label}: ${p.text}`);
+          } else if (p.kind === 'thinking') live.thinkingTokens = p.tokens;
+          else if (p.channel === 'thinking') live.thinking += p.text;
+          else {
+            live.output += p.text;
+            live.status = 'writing the answer';
+          }
+          this.traceVersion++;
+        },
+      });
+      const secs = r.seconds ?? (Date.now() - live.startedAt) / 1000;
+      this.note(`${label}: answered in ${secs.toFixed(0)}s${r.model ? ` by ${r.model}` : ''} (${r.usage.input.toLocaleString()} tokens in, ${r.usage.output.toLocaleString()} out)`, 'ok');
+      return r;
+    } catch (err) {
+      this.note(`${label}: ${err instanceof AiRateLimitError ? 'usage limit reached' : 'call failed'}: ${(err as Error).message}`, 'error');
+      throw err;
+    } finally {
+      if (this.live === live) this.live = null;
+      this.traceVersion++;
+    }
+  }
+
   private async persist() {
+    this.state.proposeKey = PROPOSE_KEY;
     this.refreshStatus();
     this.host.onChange();
     await this.host.savePending(JSON.stringify(this.state));
@@ -106,7 +189,7 @@ export class GodPipeline {
     else this.setStatus(j.attempt > 1 ? `The god is displeased, tries again (${j.attempt}/${MAX_ATTEMPTS})` : 'The god shapes…', 1);
   }
 
-  /** True when the omen cards should be up (and the simulation paused). */
+  /** True when the omen cards should be up (the simulation keeps running). */
   get choosing(): boolean {
     return !!this.state.omens && !this.state.job;
   }
@@ -171,6 +254,7 @@ export class GodPipeline {
   private rest(err: unknown): boolean {
     if (err instanceof AiRateLimitError) {
       this.restingUntil = Date.now() + REST_MS;
+      this.note(`Usage limit reached; resting ${REST_MS / 60000} minutes`, 'warn');
       this.host.log('The god is resting. It will return in a while.', 1);
       this.refreshStatus();
       return true;
@@ -184,13 +268,19 @@ export class GodPipeline {
     try {
       const { world } = await this.world();
       const obs = observe(world, this.host.chronicle(), this.state.history);
-      const r = await this.host.provider.complete({ role: 'propose', system: PROPOSE_SYSTEM, messages: [{ role: 'user', content: proposeUser(obs, this.state.history.whisper) }], schema: PROPOSE_SCHEMA, maxTokens: 2000 });
+      const whisper = this.state.history.whisper;
+      this.note(this.state.job ? 'Pondering the next omens while the work waits for dawn' : 'Pondering three new omens', 'info',
+        `day ${obs.day} · ${obs.population.monsters} monsters, ${obs.population.humans} humans · ${obs.installedWorks.length} works installed${whisper ? ` · whisper: "${whisper}"` : ''}`);
+      const r = await this.call('Propose', { role: 'propose', system: PROPOSE_SYSTEM, messages: [{ role: 'user', content: proposeUser(obs, whisper) }], schema: PROPOSE_SCHEMA, maxTokens: 2000 });
       this.track(r.usage);
       this.state.history.whisper = null;
-      return normalizeOmens(r.data);
+      const omens = normalizeOmens(r.data);
+      this.note(`Omens ready: ${omens.map((o) => o.title).join(' · ')}`, 'ok', omens.map((o) => `${o.title} [${o.tone}]${o.builds_on.length ? ` (builds on ${o.builds_on.join(', ')})` : ''}\n  ${o.change}`).join('\n'));
+      return omens;
     } catch (err) {
       if (!this.rest(err)) {
         console.warn('[god] propose failed:', err);
+        this.note(`Proposal failed; retrying in ${PROPOSE_RETRY_MS / 1000}s`, 'warn', (err as Error).message);
         if (!this.state.job) this.setStatus('The god’s thoughts scatter… (retrying soon)', 1);
         await sleep(PROPOSE_RETRY_MS);
       }
@@ -213,6 +303,7 @@ export class GodPipeline {
     if (whisper?.trim()) this.state.history.whisper = whisper.trim().slice(0, 140);
     this.state.job = { omen, id, chosenBy: index === 'god' ? 'god' : 'player', attempt: 1, phase: 'implement', source: null, notes: '', report: null, messages: [], providerFailures: 0 };
     this.state.omens = null;
+    this.note(`${index === 'god' ? 'Left to the god' : 'Chosen'}: ${omen.title} (module id ${id})`, 'ok', omen.change);
     this.host.log(`The petitioner ${index === 'god' ? 'left the choice to the god' : 'chose'}: ${omen.title}.`, 1);
     await this.persist();
     this.kick();
@@ -230,13 +321,15 @@ export class GodPipeline {
         const others = world.manifest.filter((m) => !j.omen.builds_on.includes(m.id)).map((m) => ({ id: m.id, title: m.title, description: m.description }));
         j.messages.push({ role: 'user', content: implementUser(obs, j.omen, j.id, buildsOn, others) });
       }
-      const r = await this.host.provider.complete({ role: j.attempt === 1 ? 'implement' : 'repair', system: IMPLEMENT_SYSTEM, messages: j.messages, schema: IMPLEMENT_SCHEMA, maxTokens: 16000 });
+      const label = j.attempt === 1 ? `Write "${j.omen.title}"` : `Repair "${j.omen.title}" (attempt ${j.attempt}/${MAX_ATTEMPTS})`;
+      const r = await this.call(label, { role: j.attempt === 1 ? 'implement' : 'repair', system: IMPLEMENT_SYSTEM, messages: j.messages, schema: IMPLEMENT_SCHEMA, maxTokens: 16000 });
       this.track(r.usage);
       const bad = checkAgainstSchema(r.data, IMPLEMENT_SCHEMA);
       if (bad) throw new Error(`implementation did not match the schema: ${bad}`);
       const { source, notes } = r.data as { source: string; notes: string };
       j.source = source.replace(/^\s*```(?:js|javascript)?\s*\n([\s\S]*?)\n```\s*$/, '$1');
       j.notes = notes;
+      this.note(`Module written: ${j.source.split('\n').length} lines, ${(j.source.length / 1024).toFixed(1)} KB`, 'ok', notes);
       j.messages.push({ role: 'assistant', content: `\`\`\`js\n${j.source}\n\`\`\`\nNotes: ${notes}` });
       j.phase = 'validate';
       await this.persist();
@@ -244,6 +337,7 @@ export class GodPipeline {
       if (this.rest(err)) return;
       console.warn('[god] implement failed:', err);
       j.providerFailures++;
+      this.note(j.providerFailures > 1 ? 'Writing failed twice; giving up on this work' : 'Writing failed; trying once more in 5s', 'warn', (err as Error).message);
       if (j.providerFailures > 1) await this.abandon(j, `the god could not find the words (${(err as Error).message})`);
       else {
         await this.persist();
@@ -259,14 +353,29 @@ export class GodPipeline {
     this.busy = true;
     try {
       const { json } = await this.world();
+      this.note(`Validating attempt ${j.attempt}/${MAX_ATTEMPTS}: static checks, install, 2-day soak, save round-trip, tests`);
+      const t0 = Date.now();
+      let lastStage = '';
       const report = await this.host.validate(
         { world: json, sources: this.host.sources(), candidate: { id: j.id, source: j.source! }, suspends: j.omen.suspends as Suspendable[] },
-        (s) => this.setStatus(`The god tests… (${s})`, 2),
+        (s) => {
+          this.setStatus(`The god tests… (${s})`, 2);
+          if (s !== lastStage) this.note(`  validator: ${s}`);
+          lastStage = s;
+        },
       );
       if (this.state.job !== j) return;
       j.report = report;
+      const lines = [
+        ...report.checks.map((c) => `${c.ok ? '✓' : '✗'} ${c.check}${c.ok ? '' : `: ${c.message}`}`),
+        ...report.tests.map((t) => `${t.ok ? '✓' : '✗'} test "${t.name}"${t.ok ? '' : `: ${t.message}`}`),
+        ...report.errors.map((e) => `! threw in ${e.hook}${e.line ? ` (line ${e.line})` : ''}: ${e.error}`),
+        ...(Object.keys(report.invariants).length ? [`soak: ${JSON.stringify(report.invariants)}`] : []),
+      ];
+      this.note(`Validation ${report.ok ? 'passed' : 'FAILED'} in ${((Date.now() - t0) / 1000).toFixed(1)}s`, report.ok ? 'ok' : 'error', lines.join('\n'));
       if (report.ok) {
         j.phase = 'staged';
+        this.note(`"${j.omen.title}" is staged; it activates at the next dawn`, 'ok');
         this.host.log(`The god's work "${j.omen.title}" is ready. It will be revealed at dawn.`, 1);
         await this.persist();
         return;
@@ -277,6 +386,7 @@ export class GodPipeline {
         return;
       }
       j.attempt++;
+      this.note(`Sending the failures back to the god for repair (attempt ${j.attempt}/${MAX_ATTEMPTS})`, 'warn');
       j.messages.push({ role: 'user', content: repairUser(report, j.attempt - 1) });
       j.phase = 'implement';
       await this.persist();
@@ -287,6 +397,7 @@ export class GodPipeline {
 
   private async abandon(j: Job, why: string) {
     console.warn(`[god] abandoned ${j.id}: ${why}`);
+    this.note(`Abandoned "${j.omen.title}"`, 'error', why);
     this.host.log(`The god's attempt at ${j.omen.title} crumbled to dust.`, 2);
     this.state.history.abandoned.push(j.omen.title);
     this.state.job = null;
@@ -305,6 +416,7 @@ export class GodPipeline {
     }
     this.state.history.picked.push({ title: j.omen.title, day: 0, chosenBy: j.chosenBy });
     this.host.log(`The god has spoken: ${j.omen.title}.`, 3);
+    this.note(`Dawn: "${j.omen.title}" is now live on the island`, 'ok');
     this.state.job = null;
     this.state.omens = this.state.nextOmens;
     this.state.nextOmens = null;

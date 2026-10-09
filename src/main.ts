@@ -86,7 +86,7 @@ async function boot() {
   const godLog = (text: string, importance: number) => pushEvents([{ tick, day: Math.floor(tick / TICKS_PER_DAY), text, importance, source: 'god' }]);
 
   const applyPause = () => {
-    const paused = userPaused || pipeline.choosing || document.hidden;
+    const paused = userPaused || document.hidden;
     sim.setControl({ paused });
     renderer.paused = paused;
     ui.setSpeed(sim.speed, paused);
@@ -95,7 +95,7 @@ async function boot() {
   const titles = () => Object.fromEntries((world?.manifest ?? []).map((m) => [m.id, m.title]));
 
   const doReveal = (pos: { x: number; z: number }) => {
-    if (ui.isPanelOpen() || pipeline.choosing) {
+    if (ui.isPanelOpen()) {
       reveal!.pos = pos;
       ui.showBanner('The god’s work stirs somewhere on the island.', true, 12);
     } else {
@@ -285,6 +285,8 @@ async function boot() {
     pick: (n) => Math.floor(Math.random() * n),
   });
   await pipeline.load();
+  setInterval(() => ui.setGodActivity(pipeline.trace, pipeline.live, pipeline.traceVersion), 250);
+  if (devMode && params.has('godlog')) ui.openGodLog();
 
   // ---------- input ----------
   let down: { x: number; y: number } | null = null;
