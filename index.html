@@ -9,6 +9,11 @@
 <body>
   <canvas id="scene"></canvas>
   <div id="ui"></div>
+  <script>
+    // dev: ?shot=ms delays the load event so headless screenshots capture a running island
+    const shot = new URLSearchParams(location.search).get('shot');
+    if (shot) document.write('<img style="position:fixed;width:1px;height:1px;opacity:0" src="/dev-ai/delay?ms=' + Number(shot) + '">');
+  </script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

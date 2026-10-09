@@ -12,7 +12,7 @@ export interface ModuleSource {
 }
 
 export type MainToSim =
-  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; speed: number; paused: boolean; suspendModules?: boolean }
+  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; speed: number; paused: boolean; quarantine?: string[]; skip?: number }
   | { type: 'control'; speed?: number; paused?: boolean }
   | { type: 'install'; id: string; source: string }
   | { type: 'setModuleStatus'; id: string; status: 'active' | 'quarantined' }

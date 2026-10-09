@@ -74,7 +74,7 @@ export const CORE_SHAPES: Record<string, ShapeDef> = {
 };
 
 export const CORE_EMITTERS: Record<string, EmitterDef> = {
-  zzz: { color: '#ffffff', color2: '#b8c8ff', size: 0.18, rate: 1.2, life: 2.5, speed: 0.4, spread: 0.2, gravity: -0.05 },
+  zzz: { color: '#ffffff', color2: '#b8c8ff', size: 0.24, rate: 1.5, life: 2.5, speed: 0.4, spread: 0.2, gravity: -0.05 },
   puff: { color: '#e8e2d6', size: 0.25, rate: 20, life: 0.8, speed: 1.2, spread: 1, gravity: 0.2 },
   'shrine-1': { color: '#ffe6a0', size: 0.15, rate: 4, life: 1.5, speed: 1.0, spread: 0.15, gravity: -0.3, glow: true },
   'shrine-2': { color: '#ffe6a0', color2: '#ffb0e0', size: 0.2, rate: 12, life: 2.2, speed: 1.6, spread: 0.2, gravity: -0.4, glow: true },
