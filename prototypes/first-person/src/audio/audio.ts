@@ -177,25 +177,52 @@ export class GameAudio {
     sn.start();
     swell.start();
     this.surf = { gain: sg };
-    // the village altar fire: crackle at a position
+    // the village altar fire: a soft low roar that breathes, with sparse irregular pops on top
     const fn = this.noise(true);
     const ff = c.createBiquadFilter();
-    ff.type = 'highpass';
-    ff.frequency.value = 1500;
+    ff.type = 'lowpass';
+    ff.frequency.value = 420;
+    ff.Q.value = 0.4;
+    const roar = c.createGain();
+    roar.gain.value = 0.5;
+    // two slow, detuned swells so the roar never settles into an audible beat
+    for (const [hz, depth] of [[0.13, 0.14], [0.31, 0.09]]) {
+      const lfo = c.createOscillator();
+      lfo.frequency.value = hz;
+      const lg = c.createGain();
+      lg.gain.value = depth;
+      lfo.connect(lg).connect(roar.gain);
+      lfo.start();
+    }
+    // crackles: a long buffer of a few random clicks of random size, so the loop has no rhythm
+    const len = Math.floor(c.sampleRate * 9.7);
+    const cb = c.createBuffer(1, len, c.sampleRate);
+    const d = cb.getChannelData(0);
+    for (let k = 0; k < 26; k++) {
+      const at = Math.floor(Math.random() * (len - 2000));
+      const amp = 0.15 + Math.random() ** 3 * 0.85;
+      const dur = 60 + Math.floor(Math.random() * 500);
+      for (let i = 0; i < dur; i++) d[at + i] += (Math.random() * 2 - 1) * amp * Math.exp(-i / (dur * 0.25));
+    }
+    const cs = c.createBufferSource();
+    cs.buffer = cb;
+    cs.loop = true;
+    const cf = c.createBiquadFilter();
+    cf.type = 'bandpass';
+    cf.frequency.value = 2200;
+    cf.Q.value = 0.7;
+    const cgain = c.createGain();
+    cgain.gain.value = 0.22;
     const fg = c.createGain();
-    fg.gain.value = 0.25;
-    const pops = c.createOscillator();
-    pops.type = 'square';
-    pops.frequency.value = 7.3;
-    const popGain = c.createGain();
-    popGain.gain.value = 0.25;
-    pops.connect(popGain).connect(fg.gain);
+    fg.gain.value = 0.35;
     const panner = this.panner({ x: 0, y: 0, z: 0 }, 60, 2);
     panner.disconnect();
     panner.connect(this.amb);
-    fn.connect(ff).connect(fg).connect(panner);
+    fn.connect(ff).connect(roar).connect(fg);
+    cs.connect(cf).connect(cgain).connect(fg);
+    fg.connect(panner);
     fn.start();
-    pops.start();
+    cs.start();
     this.fire = { panner, gain: fg };
   }
 
