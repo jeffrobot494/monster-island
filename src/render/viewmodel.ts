@@ -51,15 +51,16 @@ export class ViewModel {
     swordPivot.add(grip, guard, blade, hook);
     swordPivot.rotation.x = -0.25;
     this.right.add(arm, sleeve, swordPivot);
-    this.right.position.set(0.26, -0.26, -0.42);
+    this.right.position.set(0.34, -0.34, -0.5);
+    this.right.scale.setScalar(0.8);
     this.camera.add(this.right);
     // left arm: shield or torch
     const larm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.07, 0.34), mat('#b07a54'));
     larm.position.set(0, 0, 0.12);
     this.left.add(larm);
-    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.03, 18), mat('#7a4a28'));
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.03, 18), mat('#7a4a28'));
     disc.rotation.x = Math.PI / 2;
-    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.018, 6, 24), mat('#c89a4a', 0.05));
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.016, 6, 24), mat('#c89a4a', 0.05));
     const boss = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 6), mat('#c89a4a', 0.05));
     boss.position.z = -0.02;
     this.shield.add(disc, rim, boss);
@@ -79,7 +80,8 @@ export class ViewModel {
     this.rope.add(ropeMesh);
     this.rope.visible = false;
     this.left.add(this.rope);
-    this.left.position.set(-0.28, -0.3, -0.45);
+    this.left.position.set(-0.4, -0.4, -0.5);
+    this.left.scale.setScalar(0.85);
     this.camera.add(this.left);
   }
 
@@ -111,7 +113,7 @@ export class ViewModel {
     const bobA = moving ? (sprinting ? 0.022 : 0.012) : 0.004;
     const bx = Math.sin(this.bobT * 0.5) * bobA, by = -Math.abs(Math.cos(this.bobT * 0.5)) * bobA;
     // right arm and sword
-    let rx = 0, ry = 0, rz = 0, px = 0.26 + bx, py = -0.26 + by, pz = -0.42;
+    let rx = 0, ry = 0, rz = 0, px = 0.34 + bx, py = -0.34 + by, pz = -0.5;
     if (this.swingT >= 0) {
       this.swingT += dt / 0.35;
       const k = this.swingT;
@@ -140,13 +142,13 @@ export class ViewModel {
       }
     }
     this.right.position.set(px, py, pz);
-    this.right.rotation.set(rx - 0.15, ry + 0.1, rz);
+    this.right.rotation.set(rx - 0.15, ry + 0.25, rz - 0.2);
     // left: shield block or torch
     const lb = this.blockK;
-    this.left.position.set(-0.28 + bx + 0.18 * lb, -0.3 + by + 0.16 * lb, -0.45 + 0.05 * lb);
-    this.left.rotation.set(0.1 + 0.2 * lb, -0.2 + 0.25 * lb, 0);
+    this.left.position.set(-0.4 + bx + 0.26 * lb, -0.4 + by + 0.24 * lb, -0.5 + 0.05 * lb);
+    this.left.rotation.set(0.1 + 0.2 * lb, 0.35 - 0.3 * lb, 0);
     if (this.torchOn) {
-      this.left.position.set(-0.24 + bx, -0.24 + by, -0.48);
+      this.left.position.set(-0.32 + bx, -0.3 + by, -0.52);
       this.left.rotation.set(0.25, 0, 0.1);
       this.flame.scale.setScalar(1 + Math.sin(t * 23) * 0.08 + Math.sin(t * 37) * 0.05);
     }

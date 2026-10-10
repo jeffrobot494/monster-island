@@ -25,10 +25,8 @@ function fill(el: HTMLElement, ...kids: (Node | string | null | false | undefine
 
 export interface UiCallbacks {
   action(a: Action): void;
-  finish(): void;
-  drop(): void;
-  goAltar(): void;
-  toggleMap(): void;
+  /** the Settings tab's controls/video/audio block */
+  settingsPanel(): HTMLElement;
   closeInspector(): void;
   newIsland(): void;
   showCreation(): void;
@@ -78,24 +76,21 @@ export class Ui {
       h('div', { class: 'top-row' }, this.clock, this.pop, this.skulls),
       h('div', { class: 'top-row' }, this.favor, this.foodBar),
     );
-    this.finishBtn = h('button', { class: 'act danger hidden', onclick: () => cb.finish() }, '⚔ Finish');
-    this.dropBtn = h('button', { class: 'act hidden', onclick: () => cb.drop() }, '✋ Drop');
-    this.altarBtn = h('button', { class: 'act', onclick: () => cb.goAltar() }, '🔥 Altar');
-    this.actions.append(
-      this.finishBtn, this.dropBtn, this.altarBtn,
-      h('button', { class: 'act', onclick: () => cb.toggleMap() }, '🗺 Map'),
-      h('button', { class: 'act', onclick: () => this.openSheet() }, '☰'),
-    );
+    this.finishBtn = h('button', { class: 'act hidden' });
+    this.dropBtn = h('button', { class: 'act hidden' });
+    this.altarBtn = h('button', { class: 'act hidden' });
     this.ready.addEventListener('click', () => cb.showCreation());
     const head = h('div', { class: 'sheet-head' });
-    for (const [k, label] of [['village', 'Village'], ['monsters', 'Monsters'], ['book', 'Book'], ['chronicle', 'Chronicle'], ['god', 'Gods'], ['settings', '⚙']] as const) {
+    head.append(h('div', { class: 'journal-title' }, 'Journal'));
+    for (const [k, label] of [['village', 'Village'], ['monsters', 'Monsters'], ['book', 'Book of Creation'], ['chronicle', 'Chronicle'], ['god', 'Gods'], ['settings', 'Settings']] as const) {
       const b = h('button', { class: 'tab', onclick: () => this.showTab(k) }, label);
       this.tabs[k] = b;
       head.append(b);
     }
     head.append(h('button', { class: 'x', onclick: () => this.closeSheet() }, '×'));
     this.sheet.append(head, this.sheetBody);
-    this.root.append(this.top, this.champ, this.actions, this.toasts, this.status, this.ready, this.inspector, this.sheet, this.modal, this.arrow, this.fallen);
+    // first person: the HUD (hud.ts) replaces the mobile top bar, champion card and buttons
+    this.root.append(this.toasts, this.status, this.ready, this.inspector, this.sheet, this.modal, this.fallen);
   }
 
   isBusy(): boolean {
@@ -142,7 +137,7 @@ export class Ui {
       this.altarBtn.classList.toggle('glow', c.nearAltar || !!c.dragging);
     }
     this.fallen.classList.toggle('hidden', !hud.championPendingDawn || !!hud.gameOver);
-    if (hud.championPendingDawn) this.fallen.textContent = 'Your champion has fallen. A new champion will rise at dawn.';
+    if (hud.championPendingDawn) this.fallen.textContent = 'Your champion has fallen. A new champion will rise at dawn. (WASD + mouse: look around)';
     if (this.altarOpen) this.renderAltar();
     if (!this.sheet.classList.contains('hidden') && (this.tab === 'book' || this.tab === 'god')) this.renderTab();
   }
@@ -225,6 +220,21 @@ export class Ui {
     this.cb.panelChanged(false);
   }
 
+  isSheetOpen() {
+    return !this.sheet.classList.contains('hidden');
+  }
+
+  isModalOpen() {
+    return !this.modal.classList.contains('hidden');
+  }
+
+  refreshSettings() {
+    if (this.tab === 'settings' && this.isSheetOpen()) {
+      this.renderedTab = '';
+      this.renderTab();
+    }
+  }
+
   showTab(k: string) {
     this.tab = k;
     for (const [n, b] of Object.entries(this.tabs)) b.classList.toggle('on', n === k);
@@ -302,8 +312,7 @@ export class Ui {
       if (this.renderedTab === 'settings') return;
       this.renderedTab = 'settings';
       fill(body, 
-        h('p', {}, 'Island Humans and Monsters — MVP.'),
-        h('p', { class: 'muted' }, 'Tap the ground to move. Tap a monster to attack; when its red ring flashes, tap away to dodge. Beat a monster down, tap it to bind it, drag it home and burn it on the altar for its full HP in favor. Judgment falls at midnight.'),
+        this.cb.settingsPanel(),
         h('button', { class: 'btn wide danger', onclick: () => { if (confirm('Abandon this island and start a new one?')) this.cb.newIsland(); } }, 'New island'),
         this.devMode ? h('div', { class: 'dev' },
           h('h3', {}, 'Dev'),

@@ -117,7 +117,7 @@ export class Structures {
       grp.position.set((h.x + 0.5) * M, gy, (h.z + 0.5) * M);
       grp.rotation.y = Math.atan2(V.x - h.x, V.z - h.z);
       const hh = 3.2 + (((h.x * 7 + h.z * 13) % 5) / 5) * 0.8;
-      put(grp, BOX, '#c9a77c', [6.4, hh, 6.4], [0, hh / 2, 0]);
+      put(grp, BOX, '#d6b88c', [6.4, hh, 6.4], [0, hh / 2, 0]);
       put(grp, BOX, '#8a6a4a', [6.8, 0.3, 6.8], [0, hh + 0.15, 0]);
       put(grp, BOX, '#b8956a', [6.8, 0.5, 0.3], [0, hh + 0.5, 3.25]);
       put(grp, BOX, '#b8956a', [6.8, 0.5, 0.3], [0, hh + 0.5, -3.25]);
@@ -135,7 +135,7 @@ export class Structures {
       put(grp, BOX, '#d0c4a8', [3.2, 0.4, 3.2], [0, 0.2, 0]);
       put(grp, BOX, '#c8b898', [2.2, 1.1, 2.2], [0, 0.95, 0]);
       for (const [hx, hz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) put(grp, CONE, '#c8b898', [0.3, 0.45, 0.3], [hx * 0.95, 1.7, hz * 0.95]);
-      const flame = put(grp, CONE, '#ffa030', [0.9, 1.3, 0.9], [0, 2.1, 0], 0, 1.5);
+      const flame = put(grp, CONE, '#ff8a20', [0.45, 0.7, 0.45], [0, 1.85, 0], 0, 1.2);
       flame.castShadow = false;
       this.group.add(grp);
       this.altarPos.set(ax * M, gy + 2.2, az * M);
@@ -188,7 +188,7 @@ export class Structures {
         const a = (k / 9) * Math.PI * 2;
         put(grp, BOX, '#7a746a', [1.2, 3.5 + (k % 3), 0.8], [Math.cos(a) * 9, 1.8, Math.sin(a) * 9], -a);
       }
-      const flame = put(grp, CONE, '#c03020', [0.8, 1.2, 0.8], [0, 1.8, 0], 0, 1.4);
+      const flame = put(grp, CONE, '#c03020', [0.45, 0.7, 0.45], [0, 1.55, 0], 0, 1.2);
       flame.castShadow = false;
       this.group.add(grp);
       this.highAltarPos.set(ax * M, gy + 1.8, az * M);
@@ -259,7 +259,7 @@ export class Structures {
 
   /** Per-frame: flames flicker, braziers lit at night, lamb count, lair eyes. */
   update(t: number, night: number, fold: number, lairsHome: Set<number>) {
-    for (const f of this.fires) f.flame.scale.y = 1.3 * (1 + Math.sin(t * 11 + f.pos.x) * 0.1 + Math.sin(t * 17) * 0.06);
+    for (const f of this.fires) f.flame.scale.y = 0.7 * (1 + Math.sin(t * 11 + f.pos.x) * 0.12 + Math.sin(t * 17) * 0.08);
     for (const b of this.braziers) {
       b.visible = night > 0.35;
       b.scale.y = 0.8 * (1 + Math.sin(t * 13 + b.position.x) * 0.12);

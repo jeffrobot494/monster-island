@@ -55,7 +55,7 @@ ${god === 'human' ? '- Honor the spirit of the champion\'s prayer if one is give
 
 Fields: title ≤40 chars; announcement = the creation in the voice of Genesis, e.g. "And the god of the beasts said, Let a
 fog rise from the salt flats, sweet to my children and bitter to men. And it was so." (≤300 chars); mechanic = plain
-rules: what changes, who it helps and harms, numbers (≤420 chars); visible = what the player will literally see (≤170);
+rules: what changes, who it helps and harms, numbers (≤420 chars); visible = what the player will literally see standing in the world, at eye level (≤170);
 priestsPrayer = ${god === 'monster' ? 'the priests\' cry (≤140)' : 'empty string'}.`;
 }
 
@@ -144,8 +144,12 @@ up to 144× longer. So:
   clock hooks fire, onTick does not, and humans/monsters do not move. Make sure the creation still matters then, by doing
   its work in clock hooks (e.g. damage or heal in onHour to anyone standing in a hazard, spawn/spread in onMidnight).
 
-## Coordinates
-- 1 tile = 1 unit (8 m); the grid is 128×128; x grows east, z grows SOUTH. Tile centers are n + 0.5.
+## Coordinates and how the player sees the world
+- Positions are in tiles: 1 tile = 8 m; the grid is 128×128; x grows east, z grows SOUTH. Tile centers are n + 0.5.
+- The player sees the island IN FIRST PERSON, at eye level (1.65 m), on a desktop. Nothing is seen from above, and there
+  is no camera to move. A creation must be visible from the ground: creatures with readable silhouettes, weather and
+  atmosphere, tile colors and emitters at eye level, sounds of the world described in the chronicle. Night is dark: give
+  night creations glow (emissive parts, glowing emitters).
 
 ## Host API
 api.id; api.time → { tick, clockMs, day, hour, isNight, msPerTick, light (0 dark..1 full day) }; api.perHour(x)
@@ -214,7 +218,9 @@ api.log(text, importance 1–3)   // the Chronicle; 3 = banner. Notable moments 
 
 shapeDef = { parts: [ { prim: 'box'|'sphere'|'cylinder'|'cone', size: [x,y,z], pos: [x,y,z], rot?: [deg,deg,deg],
   color: '#rrggbb'|'tint', emissive?: 0..1, opacity?: 0.2..1, anim?: { type: 'bob'|'spin'|'pulse'|'sway', speed, amount } } ] } (1–12 parts)
-  A human is ~0.8 tall; monsters are ~1 unit × scale 1.2–2.2.
+  Shape units: 1 unit = 2.25 m. A human is 0.8 units (1.8 m) at scale 1; monsters are ~1 unit × scale 1.2–2.2 (3–5 m);
+  a tile is 8 m ≈ 3.5 units. Give creatures 0.15–1.4 units of height so they read at eye level. Emitter size and speed
+  are in the same units (size 0.1 ≈ a 22 cm puff).
 emitterDef = { color, color2?, size, rate, life, speed, spread (0..1), gravity, glow? }
 Core shapes: human, champion, guard, shepherd, goat, ox, lamb, house, bones, blood, nephil, saraph, seir, lilit, rahab, anak, reem, tannin.
 Core emitters: blood, blood-big, fire, smoke, pillar, dark-pillar, whiff, dust, levelup, roar, torch.

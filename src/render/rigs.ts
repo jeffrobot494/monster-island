@@ -2,7 +2,6 @@
 // Rigs are built in shape units (a human is ~0.8 units tall); the renderer scales the root by UNIT_M × entity scale.
 import * as THREE from 'three';
 
-export const UNIT_M = 2.2;
 
 export const ANIM = { idle: 0, walk: 1, run: 2, work: 3, windup: 4, strike: 5, flee: 6, downed: 7, bound: 8, carried: 9, dead: 10, sleep: 11 } as const;
 
@@ -77,6 +76,7 @@ export class Rig {
   phase = Math.random() * 10;
   strideLen = 0.35;
   lastMask = -1;
+  castShadow = true;
   constructor() {
     this.root.add(this.pose);
     this.pose.add(this.body);
@@ -207,7 +207,7 @@ export const JOB_BY_TINT: Record<string, string> = {
   'e6dcc4': 'shepherd', '7a3a5a': 'vinedresser', '6a4a2a': 'woodcutter', '3a6a8a': 'fisherman', 'c8a050': 'farmer', '8a2a2a': 'guard', 'b02a20': 'champion',
 };
 
-function human(tint: string, shape: string): Rig {
+function human(tint: string, shape: string, seed: number): Rig {
   const r = new Rig();
   r.plan = 'biped';
   r.height = 0.82;
@@ -225,7 +225,7 @@ function human(tint: string, shape: string): Rig {
   const head = mesh(r.neck, 'sphere', [0.13, 0.15, 0.14], [0, 0.07, 0.005], SKIN);
   const hair = job === 'guard' || job === 'champion'
     ? mesh(r.neck, 'cone', [0.15, 0.08, 0.15], [0, 0.15, 0], job === 'champion' ? '#b08a3a' : '#8a6a3a')
-    : mesh(r.neck, 'sphere', [0.14, 0.08, 0.15], [0, 0.12, -0.01], ['#3a2a1a', '#2a1a10', '#5a3a1a', '#d8ccb0'][Math.floor(Math.random() * 4)]);
+    : mesh(r.neck, 'sphere', [0.14, 0.08, 0.15], [0, 0.12, -0.01], ['#3a2a1a', '#2a1a10', '#5a3a1a', '#d8ccb0'][seed % 4]);
   mesh(r.neck, 'box', [0.1, 0.05, 0.03], [0, 0.0, 0.06], '#3a2a1a'); // beard
   r.mark('head', head, hair);
   r.shL = limb(B, [0.15, 0.7, 0], 0.32, 0.065, tint);
@@ -463,10 +463,19 @@ export function hasRig(shape: string) {
   return MONSTERS.has(shape) || HUMANS.has(shape) || ANIMALS.has(shape);
 }
 
-export function buildRig(shape: string, tint: string): Rig {
-  if (MONSTERS.has(shape)) return monster(shape, tint);
-  if (ANIMALS.has(shape)) return animal(shape, tint);
-  return human(tint, shape);
+/** Monster palettes were tuned for a top-down view; lift them so they read at eye level. */
+function lift(hex: string): string {
+  const c = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
+  c.setHSL(hsl.h, Math.min(1, hsl.s * 1.1), Math.max(hsl.l, 0.3 + hsl.l * 0.4));
+  return '#' + c.getHexString();
+}
+
+export function buildRig(shape: string, tint: string, seed = 0): Rig {
+  const r = MONSTERS.has(shape) ? monster(shape, lift(tint)) : ANIMALS.has(shape) ? animal(shape, tint) : human(tint, shape, seed);
+  r.phase = (seed * 0.618) % 10;
+  return r;
 }
 
 /** Which body plan the sim's aim-zone rules use for an archetype (spec §5.2). */

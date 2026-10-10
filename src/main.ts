@@ -1,19 +1,28 @@
+// Boot and wiring for the first-person desktop game (spec §3–§12): sim worker, renderer, controller, HUD, journal,
+// map, audio, and the creation pipeline.
 import * as THREE from 'three';
 import { Renderer } from './render/renderer';
 import { SimClient } from './sim-client';
-import { Ui } from './ui/ui';
+import { Ui, h } from './ui/ui';
+import { HudView, type CompassMarker, type TargetInfo } from './ui/hud';
+import { WorldMap, type MapMarker } from './ui/map';
 import { pickPlatform } from './platform';
 import { KEYS } from './persist/save-store';
 import { CreationPipeline } from './god/pipeline';
 import { runValidation } from './god/validation-host';
 import type { SavedWorld } from './sim/island';
-import type { ChronicleEvent, CreationRecord } from './sim/types';
-import { F_BOUND, F_CHAMPION, F_DOWNED, F_INHABITANT, F_MONSTER, type Hud, type SimToMain } from './protocol';
+import type { ChronicleEvent, CreationRecord, Zone } from './sim/types';
+import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_MONSTER, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
 import type { Alert } from './sim/sim';
-import type { Order } from './sim/champion';
+import type { CtrlReason } from './sim/champion';
+import { Controls, loadSettings, saveSettings, keyLabel, ACTION_LABEL, type ActionName } from './input/controls';
+import { ChampionController, EYE_H } from './input/controller';
+import { GameAudio } from './audio/audio';
+import { M } from './sim/ground';
+import { zoneFor } from './sim/aim';
+import { REGION_NAMES } from './sim/island-gen';
 import houndsSrc from './god/reference-modules/war-hounds.js?raw';
 import fogSrc from './god/reference-modules/poison-fog.js?raw';
-import { HOUR_MS } from './sim/clock';
 
 const params = new URLSearchParams(location.search);
 const devMode = import.meta.env.DEV;
@@ -21,7 +30,7 @@ const REF: Record<string, string> = { 'war-hounds': houndsSrc, 'poison-fog': fog
 
 if (params.has('debug')) {
   const pre = document.createElement('pre');
-  pre.style.cssText = 'position:fixed;left:8px;top:120px;max-width:70vw;max-height:40vh;overflow:hidden;z-index:9;font:10px monospace;color:#fff;background:rgba(0,0,0,.6);padding:6px;white-space:pre-wrap;pointer-events:none';
+  pre.style.cssText = 'position:fixed;left:8px;top:160px;max-width:60vw;max-height:40vh;overflow:hidden;z-index:9;font:10px monospace;color:#fff;background:rgba(0,0,0,.6);padding:6px;white-space:pre-wrap;pointer-events:none';
   document.body.append(pre);
   for (const k of ['log', 'info', 'warn', 'error'] as const) {
     const orig = console[k].bind(console);
@@ -30,7 +39,7 @@ if (params.has('debug')) {
       pre.textContent = (pre.textContent + `\n[${k}] ` + a.map((x) => (x instanceof Error ? x.stack : typeof x === 'string' ? x : JSON.stringify(x))).join(' ')).slice(-3000);
     };
   }
-  addEventListener('error', (e) => console.error('uncaught', e.message, e.filename, e.lineno));
+  window.addEventListener('error', (e) => console.error('uncaught', e.message, e.filename, e.lineno));
 }
 
 /** Local wall time as epoch ms (see sim/clock.ts). */
@@ -38,38 +47,33 @@ function localNow(): number {
   return Date.now() - new Date().getTimezoneOffset() * 60_000;
 }
 
-let audio: AudioContext | null = null;
-function shofar() {
-  try {
-    audio ??= new AudioContext();
-    const t = audio.currentTime;
-    const g = audio.createGain();
-    const f = audio.createBiquadFilter();
-    f.type = 'lowpass';
-    f.frequency.value = 1400;
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.18, t + 0.15);
-    g.gain.setValueAtTime(0.18, t + 0.9);
-    g.gain.linearRampToValueAtTime(0, t + 1.6);
-    for (const [a, b] of [[196, 294], [198, 296]]) {
-      const o = audio.createOscillator();
-      o.type = 'sawtooth';
-      o.frequency.setValueAtTime(a, t);
-      o.frequency.linearRampToValueAtTime(b, t + 0.5);
-      o.connect(f);
-      o.start(t);
-      o.stop(t + 1.7);
-    }
-    f.connect(g).connect(audio.destination);
-  } catch {
-    /* no audio */
-  }
-}
+const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches;
 
 async function boot() {
+  if (touchOnly && !params.has('force')) {
+    document.body.append(h('div', { class: 'mobile-note' }, 'Island Humans and Monsters (first person) needs a desktop computer with a mouse and keyboard.'));
+    return;
+  }
   const canvas = document.getElementById('scene') as HTMLCanvasElement;
+  const settings = loadSettings();
   const renderer = new Renderer(canvas);
+  renderer.setFov(settings.fov);
+  renderer.sky.setShadows(settings.shadows);
+  renderer.renderer.shadowMap.enabled = settings.shadows !== 'off';
+  if (devMode && params.has('noshadow')) {
+    renderer.renderer.shadowMap.enabled = false;
+    renderer.sky.setShadows('off');
+  }
+  const controls = new Controls(canvas, settings);
+  controls.noLock = devMode && params.has('nolock');
+  const audio = new GameAudio();
+  audio.setVolumes(settings.volume, settings.fxVolume);
+  const uiRoot = document.getElementById('ui')!;
+  const hudView = new HudView(uiRoot, settings);
+  const map = new WorldMap(uiRoot);
+  map.reveal = params.has('reveal');
   let ui!: Ui;
+
   const autoSource = (prompt: string) => {
     const name = params.get('manualsrc');
     const id = prompt.match(/Its id MUST be '([^']+)'/)?.[1];
@@ -87,7 +91,7 @@ async function boot() {
   // ---------- persisted state ----------
   let worldJson = await store.get(KEYS.world);
   let world: SavedWorld | null = worldJson ? JSON.parse(worldJson) : null;
-  if (world && world.core?.v !== 2) {
+  if (world && world.core?.v !== 3) {
     world = null;
     worldJson = null;
   }
@@ -101,18 +105,26 @@ async function boot() {
 
   // ---------- live state ----------
   const sim = new SimClient();
+  const controller = new ChampionController(controls, renderer.terrain.ground, (m) => sim.post(m as never));
+  renderer.terrain.onColliders = () => (controller.decorSolids = renderer.terrain.colliders);
+  controller.onStep = () => audio.play('step', undefined, { surface: renderer.terrain.tileAt(controller.x, controller.z) });
   let hud: Hud | null = null;
   let chronicleDirty = false;
   let saveWaiters: ((w: string) => void)[] = [];
   let installWaiter: ((r: { ok: boolean; error?: string }) => void) | null = null;
-  let scream: { ent: number; until: number; text: string } | null = null;
   let readyCreation: CreationRecord | null = null;
+  let creationMarker: { x: number; z: number; until: number; label: string } | null = null;
   let safeSince = 0;
   const firstVisible = new Map<string, { x: number; z: number }>();
-  let panelOpen = false;
   let gameOverShown = false;
-  let revealed = params.has('reveal');
-  let lastOrderTarget: number | null = null;
+  const names = new Map<number, NameInfo>();
+  let monsterCards: MonsterCard[] = [];
+  let ctrlReason: CtrlReason = 'player';
+  let screams: FramePayload['screams'] = [];
+  let firstPlay = true;
+  let pendingSwing: { at: number } | null = null;
+  const spectator = { x: 0, y: 30, z: 0, yaw: 0, pitch: -0.4 };
+  let lastHurtAt = 0;
 
   const pushEvents = (events: ChronicleEvent[]) => {
     if (params.has('debug')) for (const e of events) console.info(`[chronicle] D${e.day}: ${e.text}`);
@@ -122,25 +134,74 @@ async function boot() {
     ui.setChronicle(chronicle);
   };
   const godLog = (text: string, importance: number) => pushEvents([{ tick: hud?.tick ?? 0, clockMs: hud?.clockMs ?? localNow(), day: hud?.day ?? 1, text, importance, source: 'god' }]);
+  const input = (i: unknown) => sim.post({ type: 'input', input: i as never });
 
-  const order = (o: Order) => sim.post({ type: 'order', order: o });
+  // ---------- settings panel (journal → Settings) ----------
+  function settingsPanel(): HTMLElement {
+    const apply = () => {
+      saveSettings(settings);
+      renderer.setFov(settings.fov);
+      renderer.sky.setShadows(settings.shadows);
+      renderer.renderer.shadowMap.enabled = settings.shadows !== 'off';
+      audio.setVolumes(settings.volume, settings.fxVolume);
+    };
+    const range = (label: string, min: number, max: number, step: number, get: () => number, set: (v: number) => void) => {
+      const out = h('span', {}, String(get()));
+      const inp = h('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(get()) }) as HTMLInputElement;
+      inp.addEventListener('input', () => {
+        set(Number(inp.value));
+        out.textContent = inp.value;
+        apply();
+      });
+      return h('label', {}, label, h('span', {}, inp, ' ', out));
+    };
+    const check = (label: string, get: () => boolean, set: (v: boolean) => void) => {
+      const inp = h('input', { type: 'checkbox', ...(get() ? { checked: true } : {}) }) as HTMLInputElement;
+      inp.addEventListener('change', () => {
+        set(inp.checked);
+        apply();
+      });
+      return h('label', {}, label, inp);
+    };
+    const shadows = h('select', {}) as HTMLSelectElement;
+    for (const q of ['off', 'low', 'high']) shadows.append(h('option', { value: q, ...(settings.shadows === q ? { selected: true } : {}) }, q));
+    shadows.addEventListener('change', () => {
+      settings.shadows = shadows.value as 'off' | 'low' | 'high';
+      apply();
+    });
+    const binds = (Object.keys(settings.bindings) as ActionName[]).map((a) => {
+      const b = h('button', { class: 'btn keybind' }, keyLabel(settings.bindings[a]));
+      b.addEventListener('click', () => {
+        controls.rebinding = a;
+        b.textContent = 'press a key…';
+        controls.onRebound = () => {
+          saveSettings(settings);
+          ui.refreshSettings();
+        };
+      });
+      return h('label', {}, ACTION_LABEL[a], b);
+    });
+    return h('div', {},
+      h('h3', { class: 'serif' }, 'How to play'),
+      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (Space) or raise your shield (right mouse). Judgment falls at local midnight: the god with more favor reshapes the island. The world runs on real time, even while you read this.'),
+      h('h3', { class: 'serif' }, 'Controls'),
+      h('div', { class: 'settings-block' },
+        range('Mouse sensitivity', 0.5, 6, 0.1, () => settings.sensitivity, (v) => (settings.sensitivity = v)),
+        check('Invert mouse Y', () => settings.invertY, (v) => (settings.invertY = v)),
+        ...binds),
+      h('h3', { class: 'serif' }, 'Video and audio'),
+      h('div', { class: 'settings-block' },
+        range('Field of view', 60, 100, 1, () => settings.fov, (v) => (settings.fov = v)),
+        h('label', {}, 'Shadows', shadows),
+        range('Master volume', 0, 1, 0.05, () => settings.volume, (v) => (settings.volume = v)),
+        range('Effects volume', 0, 1, 0.05, () => settings.fxVolume, (v) => (settings.fxVolume = v))),
+    );
+  }
 
   ui = new Ui({
     action: (a) => sim.post({ type: 'action', action: a }),
-    finish: () => {
-      const t = hud?.champion?.downedTarget;
-      if (t) order({ type: 'finish', id: t.id });
-    },
-    drop: () => order({ type: 'drop' }),
-    goAltar: () => {
-      if (hud?.champion?.nearAltar) ui.openAltar();
-      else order({ type: 'altar' });
-    },
-    toggleMap: () => {
-      renderer.mapMode = !renderer.mapMode;
-    },
+    settingsPanel,
     closeInspector: () => {
-      renderer.selectedId = null;
       sim.post({ type: 'inspect', id: null });
       ui.setInspector(null);
     },
@@ -158,17 +219,74 @@ async function boot() {
       else if (cmd === 'skip-8') sim.post({ type: 'devSkipHours', hours: 8 });
       else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
-        revealed = !revealed;
-        renderer.setReveal(revealed);
+        map.reveal = !map.reveal;
+        map.tilesChanged();
       }
     },
-    panelChanged: (open) => {
-      panelOpen = open;
-    },
+    panelChanged: () => updateLockUi(),
   }, devMode);
   if (platform.warning) ui.toast(platform.warning, 'info', 10);
   ui.setChronicle(chronicle);
-  if (revealed) renderer.setReveal(true);
+
+  // ---------- screens and pointer lock ----------
+  const screenOpen = () => ui.isSheetOpen() || ui.isModalOpen() || map.open;
+  function updateLockUi() {
+    hudView.showPlay(!controls.active && !screenOpen() && !gameOverShown, firstPlay);
+  }
+  const lockGame = () => {
+    audio.start();
+    if (screenOpen()) return;
+    controls.requestLock();
+  };
+  hudView.onPlay = () => lockGame();
+  canvas.addEventListener('click', () => {
+    if (!controls.active) lockGame();
+  });
+  controls.onLockChange = (locked) => {
+    input({ type: 'lock', on: locked });
+    if (locked) firstPlay = false;
+    // Esc released the pointer: show the journal (spec §3.1)
+    if (!locked && !screenOpen()) ui.openSheet();
+    updateLockUi();
+  };
+  const closeScreens = () => {
+    if (map.open) map.toggle(false);
+    if (ui.isModalOpen()) ui.closeModal();
+    if (ui.isSheetOpen()) ui.closeSheet();
+    updateLockUi();
+  };
+  controls.onAction = (a) => {
+    if (a === 'journal') {
+      if (ui.isSheetOpen()) {
+        closeScreens();
+        lockGame();
+      } else {
+        controls.exitLock();
+        ui.openSheet();
+      }
+    } else if (a === 'map') {
+      if (map.open) {
+        map.toggle(false);
+        lockGame();
+      } else {
+        controls.exitLock();
+        map.toggle(true, { x: controller.x, z: controller.z });
+      }
+      updateLockUi();
+    } else if (a === 'confirm') {
+      if (ui.isModalOpen()) {
+        ui.closeModal();
+        lockGame();
+      }
+    }
+  };
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && map.open) {
+      map.toggle(false);
+      updateLockUi();
+    }
+  });
+  if (controls.noLock) setTimeout(() => input({ type: 'lock', on: true }), 1500);
 
   // ---------- sim worker ----------
   const snapshotWorld = () =>
@@ -208,32 +326,35 @@ async function boot() {
     readyCreation = null;
     ui.setCreationReady(false);
     const p = firstVisible.get(rec.id);
-    if (p) renderer.flyTo(p.x, p.z, 30, 2);
+    if (p) creationMarker = { x: p.x, z: p.z, until: performance.now() + 600_000, label: rec.title };
+    controls.exitLock();
     ui.genesis(rec);
+    audio.play('judgment');
   }
 
   function handleAlert(a: Alert) {
     switch (a.kind) {
       case 'scream':
         ui.toast(a.text, 'scream', 8);
-        if (a.ent !== undefined) scream = { ent: a.ent, until: performance.now() + 60_000, text: a.text };
+        hudView.hintOnce('scream');
         break;
       case 'champion':
         ui.toast(a.text, 'champion', 8);
-        if (a.ent !== undefined) scream = { ent: a.ent, until: performance.now() + 60_000, text: a.text };
         break;
       case 'shofar':
         ui.toast(a.text, 'shofar', 6);
-        shofar();
+        audio.play('shofar');
         break;
       case 'judgment':
         ui.banner('Judgment', a.text, 'judgment', 9);
+        audio.play('judgment');
         break;
       case 'lair':
         ui.banner('A lair', a.text, 'lair', 6);
+        hudView.hintOnce('lair');
         break;
       case 'altar':
-        if (!panelOpen) ui.openAltar();
+        ui.toast(a.text, 'info', 4);
         break;
       case 'gameover':
         break;
@@ -242,44 +363,115 @@ async function boot() {
     }
   }
 
+  function onFrame(f: FramePayload) {
+    renderer.onFrame(f);
+    if (f.tiles.length) map.tilesChanged();
+    if (f.explored.length) map.markExplored(f.explored);
+    // authority and epochs (F6)
+    const prev = controller.ctrl;
+    controller.ctrl = f.ctrl;
+    ctrlReason = f.ctrlReason;
+    controller.view = f.ctrlReason === 'downed' ? 'downed' : f.ctrlReason === 'captive' ? 'carried' : f.ctrlReason === 'dead' ? 'spectate' : 'normal';
+    if (f.champ && (f.epoch !== controller.epoch || f.correction || (prev === 'sim' && f.ctrl === 'player'))) {
+      controller.epoch = f.epoch;
+      const p = f.correction ?? f.champ;
+      controller.snap(p.x, p.z);
+      if (!f.correction) controller.yaw = f.champ.yaw;
+    }
+    if (f.ctrl === 'sim' && f.champ) {
+      controller.x = f.champ.x;
+      controller.z = f.champ.z;
+    }
+    screams = f.screams;
+    for (const s of f.sounds) {
+      const kind = s.kind === 'thud' ? 'step' : s.kind;
+      audio.play(kind as never, { x: s.x * M, y: renderer.terrain.y(s.x, s.z) + 1.2, z: s.z * M }, { size: s.size });
+    }
+    for (const c of f.combat) {
+      if (c.kind === 'blocked') {
+        controller.blockedHit(c.amount ?? 0);
+        audio.play('block');
+      } else if (c.kind === 'hit' && c.severed) ui.toast(c.killed ? 'A killing blow!' : `You sever its ${c.zone === 'sig' ? 'signature limb' : c.zone}!`, 'info', 3);
+      else if (c.kind === 'hit' && c.downed) hudView.hintOnce('downed');
+    }
+    if (f.hurt > 0 && performance.now() - lastHurtAt > 150) {
+      lastHurtAt = performance.now();
+      hudView.flashHurt();
+      renderer.view.hurt();
+      audio.play('hurt');
+    }
+    for (const t of f.toasts) ui.toast(t, 'info', 3);
+    if (f.actionError) ui.toast(f.actionError, 'info', 3);
+  }
+
   let firstFull = true;
   sim.onMessage = (m: SimToMain) => {
     switch (m.type) {
       case 'defs':
         renderer.onDefs(m);
+        map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
         break;
-      case 'fullState':
+      case 'fullState': {
         renderer.onFullState(m);
+        map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
+        map.setExplored(m.explored);
+        controller.walk = m.walkCost;
+        controller.decorSolids = renderer.terrain.colliders;
+        controller.epoch = m.epoch;
         if (firstFull) {
           firstFull = false;
-          const cam = params.get('cam')?.split(',').map(Number);
-          if (cam?.length === 3) {
-            renderer.followId = null;
-            renderer.target.set(cam[0], 0, cam[1]);
-            renderer.dist = cam[2];
+          const L = m.layout;
+          spectator.x = (L.villageAltar.x + 0.5) * M;
+          spectator.z = (L.villageAltar.z + 4) * M;
+          const pose = params.get('pose')?.split(',').map(Number);
+          if (devMode && pose && pose.length >= 2) {
+            sim.post({ type: 'devScenario', name: `place:${pose[0]},${pose[1]}` });
+            controller.yaw = ((pose[2] ?? 0) * Math.PI) / 180;
+            controller.pitch = ((pose[3] ?? 0) * Math.PI) / 180;
+          } else {
+            // face the High Place from the village
+            const cx = L.villageAltar.x + 0.5, cz = L.villageAltar.z + 1;
+            controller.yaw = Math.atan2(L.highAltar.x - cx, L.highAltar.z - cz);
           }
         }
         break;
+      }
       case 'frame':
-        renderer.onFrame(m);
+        onFrame(m);
+        break;
+      case 'walkCost':
+        controller.walk = m.cost;
+        break;
+      case 'names':
+        for (const [id, n] of m.names) names.set(id, n);
         break;
       case 'hud': {
         hud = m.hud;
         renderer.hour = hud.hour;
         renderer.light = hud.light;
-        if (!params.get('cam')) renderer.followId = hud.champion?.id ?? null;
+        if (hud.champion) {
+          controller.speedMul = hud.champion.speedMul;
+          controller.dragging = !!hud.champion.dragging;
+          controller.torch = hud.champion.torch;
+          renderer.view.torchOn = hud.champion.torch;
+          renderer.view.dragging = !!hud.champion.dragging;
+          if (hud.champion.dragging) hudView.hintOnce('drag');
+        }
+        if (hud.light < 0.35) hudView.hintOnce('night');
         ui.setHud(hud);
         if (hud.gameOver && !gameOverShown) {
           gameOverShown = true;
+          controls.exitLock();
           ui.gameOver(hud.gameOver.winner, hud);
         }
-        // creation card waits until the champion is out of danger (R31)
+        // the Genesis card waits until the champion is out of danger (R31)
         if (hud.dangerNear) safeSince = performance.now();
-        if (readyCreation && !panelOpen && performance.now() - safeSince > 10_000) showCreation();
+        if (readyCreation && !screenOpen() && performance.now() - safeSince > 10_000) showCreation();
         if (pipeline && hud.pendingCreations.length) pipeline.kick();
         break;
       }
       case 'villagers':
+        monsterCards = m.monsters;
         ui.setVillagers(m.villagers, m.monsters);
         break;
       case 'events':
@@ -309,11 +501,13 @@ async function boot() {
         if (!firstVisible.has(m.id)) firstVisible.set(m.id, { x: m.x, z: m.z });
         break;
       case 'away':
-        if (m.summary.hours >= 0.25) ui.away(m.summary);
+        if (m.summary.hours >= 0.25) {
+          controls.exitLock();
+          ui.away(m.summary);
+        }
         break;
       case 'inspect':
         ui.setInspector(m.info);
-        if (!m.info) renderer.selectedId = null;
         break;
       case 'actionResult':
         if (m.error) ui.toast(m.error, 'info', 4);
@@ -377,116 +571,238 @@ async function boot() {
   await pipeline.load();
   setInterval(() => ui.setGodStatus(pipeline.status, pipeline.trace, pipeline.live, pipeline.traceVersion), 500);
 
-  // ---------- input: tap to move, tap to attack, long-press to inspect, pinch/wheel to zoom ----------
-  const pointers = new Map<number, { x: number; y: number; sx: number; sy: number; t: number }>();
-  let pinch: { d: number; dist: number } | null = null;
-  let longTimer = 0;
-  let longFired = false;
-  const SKIP = new Set(['blood', 'part-limb', 'part-head', 'part-horn', 'part-wing', 'corpse-lower']);
-  const shapeName = (idx: number) => renderer.shapes.shapeIds[idx] ?? '';
-  const anyPick = (v: { shapeIdx: number; flags: number }) => !SKIP.has(shapeName(v.shapeIdx)) && !(v.flags & F_CHAMPION);
-
-  function inspectAt(x: number, y: number) {
-    const id = renderer.pickAt(x, y, anyPick, 1.1);
-    renderer.selectedId = id;
-    sim.post({ type: 'inspect', id });
-    if (id === null) ui.setInspector(null);
+  // ---------- the look target, interact, swings ----------
+  const ALTAR_R = 4.5 / M + 0.15; // tiles from the altar's center (§2)
+  function nearAltar(): boolean {
+    const L = renderer.layout;
+    if (!L) return false;
+    return Math.hypot(L.villageAltar.x + 0.5 - controller.x, L.villageAltar.z + 0.5 - controller.z) < ALTAR_R;
+  }
+  function lookingAtAltar(): boolean {
+    const L = renderer.layout;
+    if (!L || !nearAltar()) return false;
+    const b = Math.atan2(L.villageAltar.x + 0.5 - controller.x, L.villageAltar.z + 0.5 - controller.z);
+    let d = b - controller.yaw;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return Math.abs(d) < 0.7 && controller.pitch < 0.3;
   }
 
-  function tapAt(x: number, y: number) {
-    if (renderer.mapMode) {
-      renderer.mapMode = false;
-      const g = renderer.groundAt(x, y);
-      if (g) renderer.flyTo(g.x, g.z, renderer.dist, 0.6);
+  let look: { id: number; t: number; h: number; s: number; f: number } | null = null;
+  const champId = () => hud?.champion?.id ?? null;
+  const targetReach = (id: number) => {
+    const v = renderer.ents.views.get(id);
+    if (!v) return Infinity;
+    const box = renderer.ents.boxOf(v, true);
+    return Math.hypot(v.pos.x - controller.x * M, v.pos.z - controller.z * M) - Math.max(box.len, box.wid);
+  };
+
+  function doSwingContact() {
+    const { eye, dir } = renderer.lookRay();
+    const hit = renderer.ents.pick(eye, dir, 2.4 + 2.5, champId());
+    let targetId: number | null = null, zone: Zone | null = null;
+    if (hit) {
+      const v = renderer.ents.views.get(hit.id);
+      if (v && (v.flags & (F_MONSTER | F_HITTABLE)) && !(v.flags & (F_DOWNED | F_BOUND))) {
+        targetId = hit.id;
+        const arch = renderer.ents.arch(hit.id);
+        zone = arch ? zoneFor(arch, hit.h, hit.s, hit.f) : null;
+        // immediate local feedback (F7)
+        const p = eye.clone().addScaledVector(dir, hit.t);
+        renderer.particles.burst('blood', p.x, p.y, p.z);
+        audio.play('hit', { x: p.x, y: p.y, z: p.z });
+      }
+    }
+    if (targetId === null) audio.play('whiff');
+    input({ type: 'swing', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
+  }
+
+  function interact() {
+    const dragging = !!hud?.champion?.dragging;
+    if (lookingAtAltar() || (dragging && nearAltar())) {
+      controls.exitLock();
+      ui.openAltar();
       return;
     }
-    if (!hud?.champion) return inspectAt(x, y);
-    const id = renderer.pickAt(x, y, anyPick, 0.9);
-    const v = id !== null ? renderer.shapes.ents.get(id) : undefined;
-    if (v) {
-      const shape = shapeName(v.shapeIdx);
-      if (v.flags & F_MONSTER) {
-        if (v.flags & F_BOUND) order({ type: 'drag', id: v.id });
-        else if (v.flags & F_DOWNED) order({ type: 'bind', id: v.id });
-        else {
-          order({ type: 'attack', id: v.id });
-          lastOrderTarget = v.id;
-          renderer.targetId = v.id;
-        }
-        return;
-      }
-      if (shape === 'village-altar') return ui.cb.goAltar();
-      if (v.flags & F_INHABITANT || shape.startsWith('lair-') || shape === 'high-altar' || shape === 'house' || shape === 'house-lit' || shape === 'goat' || shape === 'ox' || shape === 'fold' || shape === 'granary') return inspectAt(x, y);
-      // a body (corpse/bones of anything): pick it up and drag it
-      const isCreatureShape = !!shape && !shape.startsWith('lair') && renderer.shapes.ents.get(v.id) && !(v.flags & F_INHABITANT);
-      if (isCreatureShape && (shape === 'bones' || shape === 'corpse-upper' || ['human', 'champion', 'guard', 'shepherd', 'nephil', 'saraph', 'seir', 'lilit', 'rahab', 'anak', 'reem', 'tannin'].includes(shape))) {
-        order({ type: 'drag', id: v.id });
-        return;
-      }
-      return inspectAt(x, y);
-    }
-    const g = renderer.groundAt(x, y);
-    if (!g) return;
-    renderer.targetId = null;
-    lastOrderTarget = null;
-    renderer.markTap(g.x, g.z);
-    order({ type: 'move', x: g.x, z: g.z });
-    ui.cb.closeInspector();
+    if (dragging) return input({ type: 'interact', id: null });
+    if (look) input({ type: 'interact', id: look.id });
   }
 
-  canvas.addEventListener('pointerdown', (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now() });
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), dist: renderer.dist };
-      clearTimeout(longTimer);
-    } else if (pointers.size === 1) {
-      longFired = false;
-      longTimer = window.setTimeout(() => {
-        const p = pointers.get(e.pointerId);
-        if (p && Math.hypot(p.x - p.sx, p.y - p.sy) < 10) {
-          longFired = true;
-          inspectAt(p.x, p.y);
+  function targetInfo(id: number): TargetInfo | null {
+    const v = renderer.ents.views.get(id);
+    if (!v) return null;
+    const n = names.get(id);
+    const monster = (v.flags & F_MONSTER) !== 0;
+    const state = v.flags & F_DOWNED ? 'downed' : v.flags & F_BOUND ? 'bound' : v.flags & F_TELEGRAPH ? 'winding up!' : '';
+    return {
+      name: n?.name ?? (monster ? 'Something' : '…'),
+      title: n?.title ?? '',
+      hp: monster && v.seen ? v.hp : (v.flags & F_HUMAN) ? v.hp : null,
+      state,
+      hostile: monster && !(v.flags & (F_DOWNED | F_BOUND)),
+      downed: (v.flags & F_DOWNED) !== 0,
+    };
+  }
+
+  function promptFor(): string {
+    const b = settings.bindings;
+    const E = `[${keyLabel(b.interact)}]`, F = `[${keyLabel(b.finish)}]`;
+    if (ctrlReason === 'downed') return '';
+    const c = hud?.champion;
+    if (c?.dragging) return nearAltar() ? `${E} Offer ${c.dragging.name.split(' ')[0]} on the altar (+${c.dragging.value})` : `${E} Let go of ${c.dragging.name.split(' ')[0]}`;
+    if (lookingAtAltar()) return `${E} Altar of the Most High`;
+    if (!look) return '';
+    const v = renderer.ents.views.get(look.id);
+    if (!v) return '';
+    const n = names.get(look.id)?.name ?? 'it';
+    const close = targetReach(look.id) <= 3.2;
+    if (v.flags & F_DOWNED && v.flags & F_MONSTER) return close ? `${E} Bind ${n} · ${F} Finish it` : `${n} is down: get closer`;
+    if ((v.flags & F_BOUND) || (v.flags & F_CORPSE)) return close ? `${E} Drag ${n}` : '';
+    if (v.flags & F_HUMAN && look.t < 6) return `${E} Talk to ${n.split(' ')[0]}`;
+    return '';
+  }
+
+  // ---------- the frame loop ----------
+  let lastHud = 0;
+  let lastNow = performance.now() / 1000;
+  function frame() {
+    const now = performance.now() / 1000;
+    const fdt = Math.min(0.05, Math.max(0.001, now - lastNow));
+    lastNow = now;
+    const busy = screenOpen();
+    // one-shot actions
+    if (controls.active && !busy) {
+      if (controls.take('dodge') && controller.tryDodge(now)) {
+        renderer.view.dodge();
+        renderer.particles.burst('dust', controller.x * M, controller.eyeY - EYE_H + 0.2, controller.z * M);
+      }
+      if (controls.mouseL) {
+        if (hud?.champion?.dragging) {
+          if (controls.takeClick()) ui.toast(`${keyLabel(settings.bindings.interact)} to let go`, 'info', 2);
+        } else if (!pendingSwing && controller.trySwing(now)) {
+          renderer.view.swing();
+          audio.play('swing');
+          pendingSwing = { at: now + 0.12 };
         }
-      }, 500);
+      }
+      controls.takeClick();
+      controller.setBlocking(controls.mouseR);
+      if (controls.take('interact')) interact();
+      if (controls.take('finish') && look) {
+        const v = renderer.ents.views.get(look.id);
+        if (v && v.flags & F_DOWNED) input({ type: 'finish', id: look.id });
+      }
+      if (controls.take('torch')) input({ type: 'torch', on: !hud?.champion?.torch });
+      if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
+    } else if (controller.blocking) controller.setBlocking(false);
+    controls.clearFrame();
+    if (pendingSwing && now >= pendingSwing.at) {
+      pendingSwing = null;
+      doSwingContact();
     }
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    const p = pointers.get(e.pointerId);
-    if (!p) return;
-    const dx = e.clientX - p.x, dy = e.clientY - p.y;
-    p.x = e.clientX;
-    p.y = e.clientY;
-    if (pinch && pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      renderer.dist = Math.min(64, Math.max(12, pinch.dist * (pinch.d / Math.max(20, d))));
-    } else if (pointers.size === 1 && (renderer.followId === null || renderer.mapMode) && Math.hypot(p.x - p.sx, p.y - p.sy) > 10) {
-      // free camera only during the interregnum, in map mode or with ?cam
-      const k = (renderer.mapMode ? 150 : renderer.dist) / innerHeight;
-      renderer.target.x -= dx * k;
-      renderer.target.z -= dy * k;
+
+    // camera
+    let cam: { x: number; y: number; z: number; yaw: number; pitch: number };
+    let roll = 0;
+    if (ctrlReason === 'dead') {
+      // spectator fly-cam (F31)
+      const [dy, dp] = controls.readLook();
+      spectator.yaw += dy;
+      spectator.pitch = Math.max(-1.4, Math.min(1.4, spectator.pitch + dp));
+      const sp = (controls.down('sprint') ? 40 : 15) * fdt;
+      const fz = (controls.down('forward') ? 1 : 0) - (controls.down('back') ? 1 : 0), fx = (controls.down('left') ? 1 : 0) - (controls.down('right') ? 1 : 0);
+      const s = Math.sin(spectator.yaw), co = Math.cos(spectator.yaw);
+      spectator.x += (fz * s + fx * co) * sp;
+      spectator.z += (fz * co - fx * s) * sp;
+      spectator.y += fz * Math.sin(spectator.pitch) * sp;
+      spectator.y = Math.max(renderer.terrain.y(spectator.x / M, spectator.z / M) + 2, spectator.y);
+      cam = { ...spectator };
+    } else {
+      controller.solids = [];
+      const L = renderer.layout;
+      if (L) controller.solids.push({ x: L.villageAltar.x + 0.5, z: L.villageAltar.z + 0.5, r: 1.3 / M }, { x: L.highAltar.x + 0.5, z: L.highAltar.z + 0.5, r: 1.9 / M });
+      renderer.ents.each((v) => {
+        if (!(v.flags & F_MONSTER) || v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) return;
+        const box = renderer.ents.boxOf(v);
+        const r = box.wid / M;
+        const half = Math.max(0, box.len - box.wid) / M;
+        // two circles along a long body (F12)
+        for (const k of half > 0 ? [-half, half] : [0]) controller.solids.push({ x: v.pos.x / M + Math.sin(v.yaw) * k, z: v.pos.z / M + Math.cos(v.yaw) * k, r });
+      });
+      controller.update(fdt, now);
+      if (controller.ctrl === 'sim' && hud?.champion) {
+        const cv = renderer.ents.views.get(hud.champion.id);
+        if (cv) {
+          controller.x = cv.pos.x / M;
+          controller.z = cv.pos.z / M;
+        }
+      }
+      cam = { x: controller.x * M, y: controller.eyeY, z: controller.z * M, yaw: controller.yaw, pitch: controller.pitch };
+      if (ctrlReason === 'downed') roll = 0.35;
     }
-  });
-  const up = (e: PointerEvent) => {
-    const p = pointers.get(e.pointerId);
-    pointers.delete(e.pointerId);
-    clearTimeout(longTimer);
-    if (pointers.size < 2) pinch = null;
-    if (!p || longFired) return;
-    if (Math.hypot(e.clientX - p.sx, e.clientY - p.sy) < 10 && performance.now() - p.t < 500 && pointers.size === 0) tapAt(e.clientX, e.clientY);
-  };
-  canvas.addEventListener('pointerup', up);
-  canvas.addEventListener('pointercancel', (e) => {
-    pointers.delete(e.pointerId);
-    pinch = null;
-  });
-  canvas.addEventListener('wheel', (e) => {
-    renderer.zoom(e.deltaY > 0 ? 1.1 : 0.9);
-    e.preventDefault();
-  }, { passive: false });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    renderer.render(cam, {
+      champId: champId(), sightTiles: hud?.champion?.sight ?? 12, torch: !!hud?.champion?.torch, fold: hud?.fold ?? 0,
+      lairsHome: new Set(hud?.lairsHome ?? []), viewModel: ctrlReason === 'player' || ctrlReason === 'hold' || ctrlReason === 'autopilot',
+      moveSpeed: controller.moveSpeed, sprinting: controller.sprinting, blocking: controller.blocking, dragging: !!hud?.champion?.dragging, roll,
+    });
+
+    // look target and HUD
+    const { eye, dir } = renderer.lookRay();
+    look = ctrlReason === 'dead' ? null : renderer.ents.pick(eye, dir, 40, champId());
+    const info = look ? targetInfo(look.id) : null;
+    hudView.setTarget(info, promptFor());
+    if (look && info?.downed) hudView.hintOnce('downed');
+    audio.listener({ x: eye.x, y: eye.y, z: eye.z }, dir.x, dir.y, dir.z);
+    const shore = renderer.terrain.tileAt(controller.x, controller.z) === 'sand' ? 1 : 0;
+    audio.ambience(renderer.sky.night, shore, renderer.structures.fires[0]?.pos ?? null);
+
+    // wind-up arcs toward anything winding up near you (F20)
+    const arcs: { rel: number; prog: number }[] = [];
+    renderer.ents.each((v) => {
+      if (!(v.flags & F_TELEGRAPH)) return;
+      const d = Math.hypot(v.pos.x - cam.x, v.pos.z - cam.z);
+      if (d > 14) return;
+      let rel = Math.atan2(v.pos.x - cam.x, v.pos.z - cam.z) - cam.yaw;
+      while (rel > Math.PI) rel -= Math.PI * 2;
+      while (rel < -Math.PI) rel += Math.PI * 2;
+      arcs.push({ rel, prog: Math.min(1, Math.max(0, v.windup) + (performance.now() - v.windupAt) / 800 + 0.25) });
+    });
+    if (arcs.length) hudView.hintOnce('windup');
+    hudView.drawFx(arcs, hud?.champion ? hud.champion.hp / hud.champion.maxHp : 1);
+
+    if (performance.now() - lastHud > 100) {
+      lastHud = performance.now();
+      if (hud) hudView.setHud(hud, controller.stamina, controller.winded);
+      hudView.setDowned(ctrlReason === 'downed' ? 'You are beaten down. Crawl away (WASD) — you will rise in a few seconds.' : ctrlReason === 'captive' ? 'You are being carried to the High Place!' : null);
+      const L = renderer.layout;
+      const marks: CompassMarker[] = [];
+      if (L) {
+        marks.push({ x: L.gates[0].x + 0.5, z: L.gates[0].z + 0.5, icon: '⌂', label: 'Village gate' });
+        marks.push({ x: L.villageAltar.x + 0.5, z: L.villageAltar.z + 0.5, icon: '🔥', cls: hud?.champion?.dragging ? 'altar-hot' : '', label: 'Altar of the Most High' });
+        marks.push({ x: L.highAltar.x + 0.5, z: L.highAltar.z + 0.5, icon: '▲', label: 'The High Place' });
+        for (const mc of monsterCards) {
+          if (!mc.lairFound) continue;
+          const p = L.lairs[REGION_NAMES.indexOf(mc.region)];
+          if (p) marks.push({ x: p.x + 0.5, z: p.z + 0.5, icon: mc.dead ? '✝' : '☠', cls: mc.dead ? 'dead' : '', label: `${mc.name}'s lair` });
+        }
+      }
+      for (const s of screams) marks.push({ x: s.x, z: s.z, icon: '!', cls: 'scream', label: 'A scream' });
+      if (creationMarker && performance.now() < creationMarker.until) marks.push({ x: creationMarker.x, z: creationMarker.z, icon: '✦', label: creationMarker.label });
+      const dead = ctrlReason === 'dead';
+      hudView.setCompass(dead ? spectator.yaw : controller.yaw, dead ? spectator.x / M : controller.x, dead ? spectator.z / M : controller.z, marks);
+      if (map.open) {
+        const kindOf = (icon: string): MapMarker['kind'] => (icon === '⌂' ? 'village' : icon === '🔥' ? 'altar' : icon === '▲' ? 'high' : icon === '☠' ? 'lair' : icon === '✝' ? 'lair-dead' : icon === '!' ? 'scream' : 'creation');
+        const mm: MapMarker[] = marks.map((m) => ({ x: m.x, z: m.z, kind: kindOf(m.icon), label: m.icon === '☠' || m.icon === '✝' ? m.label : undefined }));
+        renderer.ents.each((v) => {
+          if (v.id === champId()) return;
+          if (v.flags & F_MONSTER && !(v.flags & F_CORPSE)) mm.push({ x: v.pos.x / M, z: v.pos.z / M, kind: 'monster' });
+          else if (v.flags & F_HUMAN) mm.push({ x: v.pos.x / M, z: v.pos.z / M, kind: 'villager' });
+        });
+        mm.push({ x: controller.x, z: controller.z, kind: 'champion', yaw: controller.yaw });
+        map.draw(mm, now);
+      }
+    }
+  }
 
   // ---------- lifecycle ----------
   document.addEventListener('visibilitychange', () => {
@@ -497,54 +813,29 @@ async function boot() {
       pipeline.kick();
     }
   });
-  addEventListener('pagehide', () => sim.post({ type: 'requestSave' }));
+  window.addEventListener('pagehide', () => sim.post({ type: 'requestSave' }));
   setInterval(() => sim.post({ type: 'requestSave' }), 30_000);
-
-  // arrow toward a screaming captive (or the monster carrying the champion)
-  const v3 = new THREE.Vector3();
-  setInterval(() => {
-    if (!scream || performance.now() > scream.until) {
-      scream = null;
-      ui.setArrow(0, 0, 0, false);
-      return;
-    }
-    const p = renderer.shapes.positionOf(scream.ent);
-    if (!p) {
-      ui.setArrow(0, 0, 0, false);
-      return;
-    }
-    v3.copy(p).project(renderer.camera);
-    const W = innerWidth, H = innerHeight;
-    let sx = (v3.x * 0.5 + 0.5) * W, sy = (-v3.y * 0.5 + 0.5) * H;
-    if (v3.z > 1) { sx = W - sx; sy = H - sy; }
-    const on = sx > 30 && sx < W - 30 && sy > 90 && sy < H - 120 && v3.z <= 1;
-    const cx = W / 2, cy = H / 2;
-    const ang = Math.atan2(sy - cy, sx - cx);
-    if (on) ui.setArrow(sx, sy - 40, Math.PI / 2, true, scream.text);
-    else {
-      const k = Math.min((W / 2 - 30) / Math.abs(Math.cos(ang) || 1e-6), (H / 2 - 110) / Math.abs(Math.sin(ang) || 1e-6));
-      ui.setArrow(cx + Math.cos(ang) * k, cy + Math.sin(ang) * k, ang, true, scream.text);
-    }
-  }, 100);
 
   // ---------- go ----------
   startSim();
   if (params.has('nogod')) pipeline.stop();
   pipeline.kick();
+  updateLockUi();
   if (devMode && params.get('devinstall')) setTimeout(() => devInstall(params.get('devinstall')!), 1500);
   const panel = devMode ? params.get('panel') : null;
-  if (panel) setTimeout(() => (panel === 'altar' ? ui.openAltar() : ui.openSheet(panel)), 2500);
+  if (panel) setTimeout(() => (panel === 'altar' ? ui.openAltar() : panel === 'map' ? map.toggle(true, { x: controller.x, z: controller.z }) : ui.openSheet(panel)), 2500);
   const scenario = devMode ? params.get('script') : null;
   if (scenario) setTimeout(() => sim.post({ type: 'devScenario', name: scenario }), 1200);
+  if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
+  if (devMode && params.has('yaw')) setInterval(() => (controller.yaw = (Number(params.get('yaw')) * Math.PI) / 180), 200);
+  if (devMode && params.has('hideplay')) hudView.play.style.display = 'none';
   const judge = devMode ? params.get('judge') : null;
   if (judge) setTimeout(() => {
     const [g, n] = judge.split(':');
     sim.post({ type: 'devJudge', human: g === 'human' ? Number(n) || 300 : 0, monster: g === 'monster' ? Number(n) || 300 : 0 });
   }, 1500);
-  renderer.renderer.setAnimationLoop(() => renderer.render());
-  (window as any).__hm = { sim, pipeline, renderer, store, hud: () => hud, chronicle: () => chronicle };
-  void lastOrderTarget;
-  void HOUR_MS;
+  renderer.renderer.setAnimationLoop(frame);
+  (window as any).__hm = { sim, pipeline, renderer, store, controller, audio, hud: () => hud, chronicle: () => chronicle };
 }
 
 boot().catch((err) => {

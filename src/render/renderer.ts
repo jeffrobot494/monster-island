@@ -1,30 +1,34 @@
+// First-person renderer (spec §7): camera at the champion's eye, terrain, static structures, creature rigs,
+// particles, telegraph rings, the drag rope, a fixed set of 4 point lights (F33), and the view model on top.
 import * as THREE from 'three';
 import { Terrain } from './terrain';
-import { ShapeRenderer, type EntityVis } from './shapes';
-import { Particles } from './particles';
+import { Structures } from './structures';
+import { Entities } from './entities';
+import { Particles, particleUniforms } from './particles';
 import { Sprites } from './sprites';
 import { Sky } from './sky';
-import { ENT_STRIDE, F_BOUND, F_CHAMPION, F_DOWNED, F_DRAGGED, F_TELEGRAPH, type FramePayload, type SimToMain } from '../protocol';
+import { ViewModel } from './viewmodel';
+import { F_DOWNED, F_TELEGRAPH, F_DRAGGED, type FramePayload, type SimToMain } from '../protocol';
 import type { ShapeDef } from '../sim/types';
-import { TICKS_PER_SECOND } from '../sim/clock';
+import type { IslandLayout } from '../sim/island-gen';
+import { M } from '../sim/ground';
+import { BODY, SHAPE_M } from '../sim/body';
 
 type FullState = Extract<SimToMain, { type: 'fullState' }>;
 type Defs = Extract<SimToMain, { type: 'defs' }>;
 
-const POLAR = (25 * Math.PI) / 180;
+export interface CamPose { x: number; y: number; z: number; yaw: number; pitch: number }
 
 class RingPool {
   group = new THREE.Group();
   private pool: THREE.Mesh[] = [];
   private used = 0;
   constructor(private color: string, private inner: number, private opacity: number) {}
-  begin() {
-    this.used = 0;
-  }
+  begin() { this.used = 0; }
   place(x: number, y: number, z: number, r: number, alpha = 1) {
     let m = this.pool[this.used];
     if (!m) {
-      m = new THREE.Mesh(new THREE.RingGeometry(this.inner, 1, 40), new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: this.opacity, depthWrite: false, side: THREE.DoubleSide }));
+      m = new THREE.Mesh(new THREE.RingGeometry(this.inner, 1, 48), new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: this.opacity, depthWrite: false, side: THREE.DoubleSide, fog: false }));
       m.rotation.x = -Math.PI / 2;
       m.renderOrder = 2;
       this.pool.push(m);
@@ -32,60 +36,59 @@ class RingPool {
     }
     this.used++;
     m.visible = true;
-    m.position.set(x, y + 0.04, z);
-    m.scale.setScalar(r);
+    m.position.set(x, y + 0.06, z);
+    m.scale.setScalar(Math.max(0.01, r));
     (m.material as THREE.MeshBasicMaterial).opacity = this.opacity * alpha;
   }
-  end() {
-    for (let i = this.used; i < this.pool.length; i++) this.pool[i].visible = false;
-  }
+  end() { for (let i = this.used; i < this.pool.length; i++) this.pool[i].visible = false; }
 }
 
 export class Renderer {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
-  camera: THREE.PerspectiveCamera;
+  camera = new THREE.PerspectiveCamera(75, 1, 0.2, 1500);
   terrain = new Terrain();
-  shapes = new ShapeRenderer();
+  structures = new Structures();
+  ents = new Entities();
   particles = new Particles();
   sprites = new Sprites();
   sky: Sky;
-  target = new THREE.Vector3(64, 0, 64);
-  dist = 26;
-  mapMode = false;
-  /** camera follows this entity (the champion) unless panning is allowed and the user dragged */
-  followId: number | null = null;
-  panOffset = new THREE.Vector3();
+  view = new ViewModel();
+  layout: IslandLayout | null = null;
   hour = 12;
   light = 1;
-  /** entity the champion is attacking (marker) */
-  targetId: number | null = null;
-  selectedId: number | null = null;
-  private tap: { x: number; z: number; t: number } | null = null;
-
-  private lastFrameAt = 0;
-  private frameInterval = 100;
   private clock = new THREE.Clock();
-  private raycaster = new THREE.Raycaster();
-  private telegraphs = new RingPool('#ff2a1a', 0.8, 0.9);
-  private telegraphFill = new RingPool('#ff2a1a', 0.0, 0.22);
-  private markers = new RingPool('#ffd84a', 0.8, 0.9);
-  private champRing = new RingPool('#fff0a0', 0.78, 0.7);
-  private ropes = new RingPool('#c8a060', 0.55, 0.95);
-  private rope = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: '#d8b070' }));
-  private fly: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; t: number; dur: number } | null = null;
-  paused = false;
+  private rings = new RingPool('#ff2a1a', 0.86, 0.95);
+  private ringFill = new RingPool('#ff2a1a', 0.0, 0.28);
+  private downedRings = new RingPool('#ffd84a', 0.82, 0.7);
+  private rope: THREE.Line;
+  private torch = new THREE.PointLight('#ffb060', 0, 22, 1.6);
+  private fires: THREE.PointLight[] = [];
+  private dir = new THREE.Vector3();
+  eye = new THREE.Vector3();
+  t = 0;
+  private fireAcc = 0;
+  viewAllowed = true;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: devicePixelRatio < 2 });
-    this.renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(1.5, devicePixelRatio));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.camera = new THREE.PerspectiveCamera(40, 1, 0.5, 700);
+    this.camera.rotation.order = 'YXZ';
     this.sky = new Sky(this.scene);
-    this.scene.add(this.terrain.group, this.shapes.group, this.particles.group, this.sprites.group, this.telegraphs.group, this.telegraphFill.group, this.markers.group, this.champRing.group, this.ropes.group, this.rope);
-    addEventListener('resize', () => this.resize());
+    const ropeGeo = new THREE.BufferGeometry().setFromPoints(new Array(12).fill(0).map(() => new THREE.Vector3()));
+    this.rope = new THREE.Line(ropeGeo, new THREE.LineBasicMaterial({ color: '#c8a060' }));
+    this.rope.frustumCulled = false;
+    this.scene.add(this.terrain.group, this.structures.group, this.ents.group, this.particles.group, this.sprites.group, this.rings.group, this.ringFill.group, this.downedRings.group, this.rope, this.torch);
+    // exactly four point lights, always present (F33): torch + three fires
+    for (let i = 0; i < 3; i++) {
+      const l = new THREE.PointLight('#ff9040', 0, 26, 1.8);
+      this.fires.push(l);
+      this.scene.add(l);
+    }
+    window.addEventListener('resize', () => this.resize());
     this.resize();
   }
 
@@ -94,172 +97,149 @@ export class Renderer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.view.setAspect(w / h);
+    this.updateParticleScale();
+  }
+
+  setFov(fov: number) {
+    this.camera.fov = fov;
+    this.camera.updateProjectionMatrix();
+    this.updateParticleScale();
+  }
+
+  private updateParticleScale() {
+    const h = this.renderer.domElement.height || innerHeight;
+    particleUniforms.uScale.value = h / (2 * Math.tan((this.camera.fov * Math.PI) / 360));
   }
 
   onDefs(d: Defs) {
     this.terrain.setDefs(d.tiles);
-    this.shapes.setDefs(d.shapeIndex, new Map<string, ShapeDef>(d.shapes));
+    this.ents.setDefs(d.shapeIndex, new Map<string, ShapeDef>(d.shapes));
     this.particles.defs = new Map(d.emitters);
   }
 
   onFullState(s: FullState) {
-    this.terrain.load(s.tiles, s.elev, s.explored);
-    this.shapes.applyFrame(s.ents, ENT_STRIDE, true);
+    this.layout = s.layout;
+    this.terrain.load(s.tiles, s.elev);
+    this.structures.build(this.terrain, s.layout);
+    this.ents.apply(s.ents, s.tick, true);
     this.particles.setAttached(s.attached);
     this.sky.atmosphere = { ...s.atmosphere };
     this.particles.weather = s.atmosphere.weather ?? 'none';
-    this.lastFrameAt = performance.now();
+    const fires = this.structures.fires;
+    for (let i = 0; i < this.fires.length; i++) {
+      const f = fires[i];
+      if (f) this.fires[i].position.copy(f.pos).add(new THREE.Vector3(0, 0.8, 0));
+    }
   }
 
   onFrame(f: FramePayload) {
-    this.frameInterval = 1000 / TICKS_PER_SECOND;
-    this.lastFrameAt = performance.now();
-    if (f.tiles.length) this.terrain.applyChanges(f.tiles);
-    if (f.explored.length) this.terrain.fog.mark(f.explored);
-    this.shapes.applyFrame(f.ents, ENT_STRIDE, false);
+    if (f.tiles.length) {
+      this.terrain.updateTiles(f.tiles);
+      if (f.tiles.some(([, t]) => t === 'wall' || t === 'house' || t === 'gate') && this.layout) this.structures.build(this.terrain, this.layout);
+    }
+    this.ents.apply(f.ents, f.tick, false);
     for (const op of f.emitterOps) {
       if (op.op === 'attach') this.particles.attach(op.ent, op.emitter);
       else if (op.op === 'detach') this.particles.detach(op.ent, op.emitter);
-      else this.particles.burst(op.emitter, op.x, op.y, op.z);
+      else this.particles.burst(op.emitter, op.x * M, op.y, op.z * M);
     }
-    const t = this.clock.elapsedTime;
-    for (const e of f.emotes) this.sprites.add(e.ent, e.text, e.seconds, e.speech, t);
+    for (const e of f.emotes) {
+      const p = this.ents.positionOf(e.ent);
+      if (p && p.distanceTo(this.eye) < 40) this.sprites.add(e.ent, e.text, e.seconds, e.speech, this.t);
+    }
     if (f.atmosphere) {
       this.sky.atmosphere = { ...f.atmosphere };
       this.particles.weather = f.atmosphere.weather ?? 'none';
     }
   }
 
-  setReveal(on: boolean) {
-    this.terrain.fog.reveal.value = on ? 1 : 0;
+  /** The look ray from the camera center. */
+  lookRay(): { eye: THREE.Vector3; dir: THREE.Vector3 } {
+    this.camera.getWorldDirection(this.dir);
+    return { eye: this.camera.position, dir: this.dir };
   }
 
-  zoom(factor: number) {
-    if (this.mapMode) return;
-    this.dist = Math.min(64, Math.max(12, this.dist * factor));
-  }
-
-  flyTo(x: number, z: number, dist = 26, dur = 2.2) {
-    this.fly = { from: this.target.clone(), to: new THREE.Vector3(x, 0, z), fromDist: this.dist, toDist: dist, t: 0, dur };
-  }
-
-  markTap(x: number, z: number) {
-    this.tap = { x, z, t: this.clock.elapsedTime };
-  }
-
-  /** World point on the terrain under a screen point. */
-  groundAt(clientX: number, clientY: number): { x: number; z: number } | null {
-    this.setRay(clientX, clientY);
-    const hits = this.raycaster.intersectObjects(this.terrain.group.children.filter((c) => !(c instanceof THREE.InstancedMesh)), false);
-    const p = hits[0]?.point;
-    if (p) return { x: p.x, z: p.z };
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
-    const out = new THREE.Vector3();
-    return this.raycaster.ray.intersectPlane(plane, out) ? { x: out.x, z: out.z } : null;
-  }
-
-  private setRay(clientX: number, clientY: number) {
-    const r = this.renderer.domElement.getBoundingClientRect();
-    const p = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    this.raycaster.setFromCamera(p, this.camera);
-  }
-
-  /** Entity under a tap, generously: direct mesh hit, else the nearest entity within `radius` tiles of the ground point. */
-  pickAt(clientX: number, clientY: number, accept: (v: EntityVis) => boolean, radius = 0.9): number | null {
-    this.setRay(clientX, clientY);
-    const direct = this.shapes.pick(this.raycaster);
-    if (direct !== null) {
-      const v = this.shapes.ents.get(direct);
-      if (v && accept(v)) return direct;
-    }
-    const g = this.groundAt(clientX, clientY);
-    if (!g) return null;
-    let best: number | null = null, bd = radius;
-    for (const v of this.shapes.ents.values()) {
-      if (!accept(v)) continue;
-      const d = Math.hypot(v.x - g.x, v.z - g.z) - 0.25 * v.scale;
-      if (d < bd) { bd = d; best = v.id; }
-    }
-    return best;
-  }
-
-  render() {
+  render(cam: CamPose, o: { champId: number | null; sightTiles: number; torch: boolean; fold: number; lairsHome: Set<number>; viewModel: boolean; moveSpeed: number; sprinting: boolean; blocking: boolean; dragging: boolean; roll?: number }) {
     const dt = Math.min(0.1, this.clock.getDelta());
-    const t = this.clock.elapsedTime;
-    const alpha = this.paused ? 1 : Math.min(1, (performance.now() - this.lastFrameAt) / this.frameInterval);
-    // camera
-    if (this.fly) {
-      const f = this.fly;
-      f.t = Math.min(1, f.t + dt / f.dur);
-      const e = f.t < 0.5 ? 2 * f.t * f.t : 1 - (-2 * f.t + 2) ** 2 / 2;
-      this.target.lerpVectors(f.from, f.to, e);
-      this.dist = f.fromDist + (f.toDist - f.fromDist) * e;
-      if (f.t >= 1) {
-        this.fly = null;
-        this.panOffset.set(0, 0, 0);
-        this.followHold = t + 3;
-      }
-    } else if (this.mapMode) {
-      this.target.lerp(new THREE.Vector3(64, 0, 66), Math.min(1, dt * 4));
-    } else if (this.followId !== null && t > this.followHold) {
-      const p = this.shapes.positionOf(this.followId);
-      if (p) {
-        const goal = new THREE.Vector3(p.x, 0, p.z).add(this.panOffset);
-        if (goal.distanceTo(this.target) > 25) this.target.copy(goal);
-        else this.target.lerp(goal, Math.min(1, dt * 5));
-      }
-    }
-    const d = this.mapMode ? 150 : this.dist;
-    this.camera.position.set(this.target.x, this.target.y + d * Math.cos(POLAR), this.target.z + d * Math.sin(POLAR));
-    this.camera.lookAt(this.target);
+    const t = (this.t = this.clock.elapsedTime);
+    this.camera.position.set(cam.x, cam.y, cam.z);
+    this.camera.rotation.set(cam.pitch, cam.yaw + Math.PI, o.roll ?? 0);
+    this.camera.updateMatrixWorld();
+    this.eye.copy(this.camera.position);
 
-    this.sky.update(this.hour, this.light, this.target);
-    this.terrain.update(t);
-    this.shapes.update(alpha, t, this.sky.night);
-    const pos = (id: number) => this.shapes.positionOf(id);
-    const h = (id: number) => this.shapes.heightOf(id);
-    this.particles.update(this.paused ? 0 : dt, pos, h, this.target);
+    this.sky.sightM = o.sightTiles * M;
+    this.sky.update(this.hour, this.light, this.eye);
+    const fog = this.scene.fog as THREE.Fog;
+    particleUniforms.fogColor.value.copy(fog.color);
+    particleUniforms.fogNear.value = fog.near;
+    particleUniforms.fogFar.value = fog.far;
+    this.terrain.update(dt, t);
+    this.structures.update(t, this.sky.night, o.fold, o.lairsHome);
+    this.ents.update(dt, t, this.eye, this.sky.night, o.champId);
+    const pos = (id: number) => this.ents.positionOf(id);
+    const h = (id: number) => this.ents.heightOf(id);
+    this.particles.update(dt, pos, h, this.eye);
     this.sprites.update(t, pos, h);
 
-    // rings: telegraphs (the real hit radius), downed markers, target marker, champion, tap
-    this.telegraphs.begin();
-    this.telegraphFill.begin();
-    this.markers.begin();
-    this.champRing.begin();
-    this.ropes.begin();
-    let champPos: THREE.Vector3 | null = null, dragPos: THREE.Vector3 | null = null;
-    for (const v of this.shapes.ents.values()) {
-      const gy = v.py + (v.y - v.py) * alpha;
-      const gx = v.px + (v.x - v.px) * alpha, gz = v.pz + (v.z - v.pz) * alpha;
-      if (v.flags & F_TELEGRAPH && v.ring > 0) {
-        this.telegraphs.place(gx, gy, gz, v.ring, 0.7 + 0.3 * Math.sin(t * 30));
-        this.telegraphFill.place(gx, gy, gz, v.ring, 1);
+    // lights: torch on the camera; fires flicker, brighter at night
+    const night = this.sky.night;
+    this.torch.position.copy(this.eye).add(new THREE.Vector3(Math.sin(cam.yaw) * 0.5 - Math.cos(cam.yaw) * 0.3, -0.25, Math.cos(cam.yaw) * 0.5 + Math.sin(cam.yaw) * 0.3));
+    this.torch.intensity = o.torch ? (14 + Math.sin(t * 23) * 1.2 + Math.sin(t * 37) * 0.8) * (0.4 + 0.6 * night) : 0;
+    this.fireAcc += dt;
+    if (this.fireAcc > 0.12) {
+      this.fireAcc = 0;
+      for (const f of this.structures.fires) {
+        if (f.pos.distanceTo(this.eye) < 120) {
+          this.particles.burstN('fire', f.pos.x, f.pos.y - 0.4, f.pos.z, 3);
+          if (Math.random() < 0.3) this.particles.burstN('smoke', f.pos.x, f.pos.y + 0.6, f.pos.z, 1);
+        }
       }
-      if (v.flags & F_DOWNED && !(v.flags & F_CHAMPION)) this.markers.place(gx, gy, gz, 0.5 + 0.2 * v.scale + Math.sin(t * 5) * 0.08, 0.8);
-      if (v.flags & F_CHAMPION) {
-        this.champRing.place(gx, gy, gz, 0.42, 0.8);
-        champPos = new THREE.Vector3(gx, gy + 0.4, gz);
-      }
-      if (v.flags & F_BOUND) this.ropes.place(gx, gy, gz, 0.3 + 0.25 * v.scale, 1);
-      if (v.flags & F_DRAGGED) dragPos = new THREE.Vector3(gx, gy + 0.25, gz);
-      if (v.id === this.targetId || v.id === this.selectedId) this.markers.place(gx, gy, gz, 0.35 + 0.3 * v.scale, 1);
     }
-    if (this.tap && t - this.tap.t < 0.6) {
-      const k = (t - this.tap.t) / 0.6;
-      const tx = Math.floor(this.tap.x), tz = Math.floor(this.tap.z);
-      this.champRing.place(this.tap.x, this.terrain.height(tx, tz), this.tap.z, 0.2 + k * 0.4, 1 - k);
+    for (const [i, l] of this.fires.entries()) {
+      l.intensity = this.structures.fires[i] ? (10 + Math.sin(t * 13 + i) * 1.5) * (0.25 + 0.75 * night) : 0;
     }
-    this.telegraphs.end();
-    this.telegraphFill.end();
-    this.markers.end();
-    this.champRing.end();
-    this.ropes.end();
-    this.rope.visible = !!(champPos && dragPos);
-    if (champPos && dragPos) {
-      this.rope.geometry.setFromPoints([champPos, dragPos]);
-    }
-    this.renderer.render(this.scene, this.camera);
-  }
 
-  private followHold = 0;
+    // telegraph rings at the hit radius around the front point; the fill completes 0.2 s early (F7)
+    this.rings.begin();
+    this.ringFill.begin();
+    this.downedRings.begin();
+    let dragPos: THREE.Vector3 | null = null;
+    this.ents.each((v) => {
+      if (!v.root.visible) return;
+      if (v.flags & F_TELEGRAPH && v.ring > 0) {
+        const b = BODY[v.shape];
+        const half = b ? b.half * SHAPE_M * v.scale : 0;
+        const fx = v.pos.x + Math.sin(v.yaw) * half, fz = v.pos.z + Math.cos(v.yaw) * half;
+        const gy = this.terrain.y(fx / M, fz / M);
+        const prog = Math.min(1, Math.max(0, v.windup) + (performance.now() - v.windupAt) / 800 + 0.25);
+        this.rings.place(fx, gy, fz, v.ring, 0.75 + 0.25 * Math.sin(t * 30));
+        this.ringFill.place(fx, gy, fz, v.ring * prog, 0.5 + 0.5 * prog);
+      }
+      if (v.flags & F_DOWNED) this.downedRings.place(v.pos.x, v.pos.y, v.pos.z, 1 + 0.4 * v.scale + Math.sin(t * 5) * 0.12, 0.8);
+      if (v.flags & F_DRAGGED) dragPos = v.pos.clone().add(new THREE.Vector3(0, 0.4, 0));
+    });
+    this.rings.end();
+    this.ringFill.end();
+    this.downedRings.end();
+    this.rope.visible = !!dragPos && o.dragging;
+    if (dragPos) {
+      const a = this.eye.clone().add(new THREE.Vector3(-Math.cos(cam.yaw) * 0.25, -0.5, Math.sin(cam.yaw) * 0.25));
+      const b = dragPos as THREE.Vector3;
+      const pts = this.rope.geometry.attributes.position as THREE.BufferAttribute;
+      const sag = Math.min(0.6, a.distanceTo(b) * 0.08);
+      for (let i = 0; i < 12; i++) {
+        const k = i / 11;
+        pts.setXYZ(i, a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k - Math.sin(k * Math.PI) * sag, a.z + (b.z - a.z) * k);
+      }
+      pts.needsUpdate = true;
+    }
+
+    this.view.visible = o.viewModel && this.viewAllowed;
+    this.view.update(dt, t, o.moveSpeed, o.sprinting, o.blocking, this.light);
+    this.renderer.autoClear = true;
+    this.renderer.render(this.scene, this.camera);
+    this.view.render(this.renderer);
+    return dt;
+  }
 }

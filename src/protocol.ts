@@ -1,11 +1,14 @@
 // Messages between the main thread and the sim worker.
 import type { EmitterOp, Emote, Alert } from './sim/sim';
-import type { Order } from './sim/champion';
+import type { ChampInput, CombatEvent, CtrlReason } from './sim/champion';
+import type { IslandLayout } from './sim/island-gen';
+import type { SoundEvent } from './sim/sim';
 import type { AwaySummary } from './sim/offline';
 import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Job, ShapeDef, TileTypeDef } from './sim/types';
 
-// id, shapeIdx, x, y, z, yaw, tint, scale, flags, lift, roll, squash, ring
-export const ENT_STRIDE = 13;
+// id, shapeIdx, x, y(m), z, yaw, tint, scale, flags, lift(m), roll, squash, ring(m), anim, zoneMask, hpFrac, seen, windup
+export const ENT_STRIDE = 18;
+export const O = { id: 0, shape: 1, x: 2, y: 3, z: 4, yaw: 5, tint: 6, scale: 7, flags: 8, lift: 9, roll: 10, squash: 11, ring: 12, anim: 13, mask: 14, hp: 15, seen: 16, windup: 17 } as const;
 export const F_INHABITANT = 1;
 export const F_TELEGRAPH = 2;
 export const F_DOWNED = 4;
@@ -14,6 +17,11 @@ export const F_TARGET = 16;
 export const F_BOUND = 32;
 export const F_MONSTER = 64;
 export const F_DRAGGED = 128;
+export const F_HITTABLE = 256;
+export const F_CORE_SHAPE = 512; // an inhabitant still wearing its core shape (draw the rig, F15)
+export const F_ANIMAL = 1024;
+export const F_CORPSE = 2048;
+export const F_HUMAN = 4096;
 
 export interface ModuleSource {
   id: string;
@@ -32,7 +40,7 @@ export type MainToSim =
   | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; clockMs: number; realMs: number; timescale: number; quarantine?: string[]; reveal?: boolean; invincible?: boolean; skip?: number }
   | { type: 'control'; paused: boolean }
   | { type: 'catchUp'; clockMs: number; realMs: number }
-  | { type: 'order'; order: Order }
+  | { type: 'input'; input: ChampInput }
   | { type: 'action'; action: Action }
   | { type: 'install'; id: string; source: string; record: CreationRecord; night: number }
   | { type: 'creationFailed'; night: number }
@@ -98,6 +106,10 @@ export interface Hud {
     nearAltar: boolean;
     downedTarget: null | { id: number; name: string };
     weaponMul: number;
+    speedMul: number;
+    blocking: boolean;
+    torch: boolean;
+    sight: number;
   };
   championPendingDawn: boolean;
   favor: { human: number; monster: number };
@@ -116,6 +128,9 @@ export interface Hud {
   stats: { monsterKills: number; villagerDeaths: number; humanSacrifices: number; monsterSacrifices: number };
   /** monsters near the champion (for the danger check before showing a creation card) */
   dangerNear: boolean;
+  /** real ms until the next Judgment */
+  judgmentInMs: number;
+  lairsHome: number[];
 }
 
 export interface FramePayload {
@@ -128,6 +143,22 @@ export interface FramePayload {
   emitterOps: EmitterOp[];
   emotes: Emote[];
   atmosphere?: Atmosphere;
+  ctrl: 'player' | 'sim';
+  ctrlReason: CtrlReason;
+  epoch: number;
+  champ: { x: number; z: number; yaw: number } | null;
+  correction?: { x: number; z: number; epoch: number };
+  screams: { id: number; x: number; z: number }[];
+  sounds: SoundEvent[];
+  combat: CombatEvent[];
+  toasts: string[];
+  hurt: number;
+  actionError?: string | null;
+}
+
+export interface NameInfo {
+  name: string;
+  title: string;
 }
 
 export interface InspectInfo {
@@ -149,7 +180,9 @@ export interface ModuleStat {
 
 export type SimToMain =
   | FramePayload
-  | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; explored: Uint8Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere }
+  | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; explored: Uint8Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere; layout: IslandLayout; epoch: number; walkCost: Uint8Array }
+  | { type: 'walkCost'; cost: Uint8Array }
+  | { type: 'names'; names: [number, NameInfo][] }
   | { type: 'defs'; shapes: [string, ShapeDef][]; emitters: [string, EmitterDef][]; tiles: TileTypeDef[]; shapeIndex: string[] }
   | { type: 'events'; events: ChronicleEvent[] }
   | { type: 'alerts'; alerts: Alert[] }

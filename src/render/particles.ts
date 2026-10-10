@@ -1,7 +1,16 @@
 import * as THREE from 'three';
 import type { EmitterDef } from '../sim/types';
 
-const POOL = 1000; // per blend mode (2,000 total)
+/** Emitter values are in shape units; the world is in meters (F16). */
+const U = 2.25;
+export const particleUniforms = {
+  uScale: { value: 600 },
+  fogColor: { value: new THREE.Color() },
+  fogNear: { value: 50 },
+  fogFar: { value: 900 },
+};
+
+const POOL = 2000; // per blend mode
 
 class Pool {
   geo = new THREE.BufferGeometry();
@@ -24,11 +33,12 @@ class Pool {
     const mat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
+      uniforms: particleUniforms,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
-      vertexShader: `attribute float size; attribute float alpha; attribute vec3 color; varying vec3 vC; varying float vA;
-        void main(){ vC=color; vA=alpha; vec4 mv=modelViewMatrix*vec4(position,1.0); gl_PointSize=size*(900.0/-mv.z); gl_Position=projectionMatrix*mv; }`,
-      fragmentShader: `varying vec3 vC; varying float vA;
-        void main(){ vec2 d=gl_PointCoord-0.5; float r=dot(d,d); if(r>0.25) discard; gl_FragColor=vec4(vC, vA*(1.0-r*3.0)); }`,
+      vertexShader: `uniform float uScale; attribute float size; attribute float alpha; attribute vec3 color; varying vec3 vC; varying float vA; varying float vD;
+        void main(){ vC=color; vA=alpha; vec4 mv=modelViewMatrix*vec4(position,1.0); vD=-mv.z; gl_PointSize=min(256.0, size*uScale/max(0.1,-mv.z)); gl_Position=projectionMatrix*mv; }`,
+      fragmentShader: `uniform vec3 fogColor; uniform float fogNear; uniform float fogFar; varying vec3 vC; varying float vA; varying float vD;
+        void main(){ vec2 d=gl_PointCoord-0.5; float r=dot(d,d); if(r>0.25) discard; float f=smoothstep(fogNear,fogFar,vD); gl_FragColor=vec4(mix(vC,fogColor,f), vA*(1.0-r*3.0)*(1.0-f*0.85)*smoothstep(0.9,2.2,vD)); }`,
     });
     this.points = new THREE.Points(this.geo, mat);
     this.points.frustumCulled = false;
@@ -41,12 +51,12 @@ class Pool {
     const th = rand() * Math.PI * 2;
     const up = 1 - s * rand();
     const horiz = Math.sqrt(Math.max(0, 1 - up * up));
-    const sp = d.speed * (0.6 + 0.4 * rand());
+    const sp = d.speed * U * (0.6 + 0.4 * rand());
     this.vel.set([Math.cos(th) * horiz * sp, up * sp, Math.sin(th) * horiz * sp], i * 3);
     this.col.set([c.r, c.g, c.b], i * 3);
     this.life[i] = this.maxLife[i] = d.life * (0.7 + 0.3 * rand());
-    this.grav[i] = d.gravity;
-    this.baseSize[i] = d.size;
+    this.grav[i] = d.gravity * U;
+    this.baseSize[i] = Math.min(2, Math.max(0.05, d.size * U));
   }
   update(dt: number) {
     for (let i = 0; i < POOL; i++) {
@@ -97,6 +107,12 @@ export class Particles {
     (d.glow ? this.glow : this.normal).spawn(x, y, z, d, this.c1, this.rand);
   }
 
+  burstN(id: string, x: number, y: number, z: number, n: number) {
+    const d = this.defs.get(id);
+    if (!d) return;
+    for (let i = 0; i < n; i++) this.emit(d, x, y, z);
+  }
+
   burst(id: string, x: number, y: number, z: number) {
     const d = this.defs.get(id);
     if (!d) return;
@@ -130,23 +146,24 @@ export class Particles {
         let a = (this.acc.get(key) ?? this.rand()) + d.rate * dt;
         while (a >= 1) {
           a -= 1;
-          this.emit(d, p.x + (this.rand() - 0.5) * 0.3, p.y + h * 0.8, p.z + (this.rand() - 0.5) * 0.3);
+          this.emit(d, p.x + (this.rand() - 0.5) * 0.6, p.y + h * 0.8, p.z + (this.rand() - 0.5) * 0.6);
         }
         this.acc.set(key, a);
       }
     }
     if (this.weather !== 'none') {
       const w = this.weather;
+      // a 40 m box around the camera (values in shape units; × U = meters)
       const d: EmitterDef = w === 'rain'
-        ? { color: '#a8c4e8', size: 0.07, rate: 0, life: 1.1, speed: 0, spread: 0, gravity: 18 }
+        ? { color: '#a8c4e8', size: 0.02, rate: 0, life: 1.0, speed: 0, spread: 0, gravity: 8 }
         : w === 'ash'
-          ? { color: '#5a5450', color2: '#8a8078', size: 0.1, rate: 0, life: 5, speed: 0.2, spread: 1, gravity: 0.3 }
-          : { color: '#b8c8a8', color2: '#d8e0d0', size: 1.2, rate: 0, life: 6, speed: 0.15, spread: 1, gravity: 0 };
-      const n = (w === 'rain' ? 160 : w === 'ash' ? 50 : 12) * dt;
+          ? { color: '#5a5450', color2: '#8a8078', size: 0.03, rate: 0, life: 5, speed: 0.1, spread: 1, gravity: 0.1 }
+          : { color: '#b8c8a8', color2: '#d8e0d0', size: 0.8, rate: 0, life: 6, speed: 0.07, spread: 1, gravity: 0 };
+      const n = (w === 'rain' ? 400 : w === 'ash' ? 80 : 14) * dt;
       let k = Math.floor(n) + (this.rand() < n % 1 ? 1 : 0);
       while (k-- > 0) {
-        const y = w === 'fog' ? 0.5 + this.rand() * 1.5 : 14 + this.rand() * 4;
-        this.emit(d, focus.x + (this.rand() - 0.5) * 50, y, focus.z + (this.rand() - 0.5) * 50);
+        const y = w === 'fog' ? focus.y - 1 + this.rand() * 3 : focus.y + 6 + this.rand() * 10;
+        this.emit(d, focus.x + (this.rand() - 0.5) * 40, y, focus.z + (this.rand() - 0.5) * 40);
       }
     }
     this.normal.update(dt);

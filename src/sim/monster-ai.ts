@@ -392,10 +392,20 @@ function hunt(sim: Sim, m: Entity) {
   }
   if (m.state !== 'grab' && d > reach) {
     m.state = 'stalk';
-    if (Math.hypot(prey.x - m.x, prey.z - m.z) < 2 && sim.lineOk(m.x, m.z, prey.x, prey.z, sim.costsFor(sim.moveKey(m)), 99)) {
+    const near = Math.hypot(prey.x - m.x, prey.z - m.z);
+    if (near < 2 && sim.lineOk(m.x, m.z, prey.x, prey.z, sim.costsFor(sim.moveKey(m)), 99)) {
+      // the pounce: the last dozen meters come fast (grabs are measured in meters now)
       sim.stop(m);
-      sim.moveToward(m, prey.x, prey.z, monsterSpeed(sim, m));
-    } else go(sim, m, prey.x, prey.z, 10);
+      const k = near < 1.5 ? 1.6 : 1;
+      if (k > 1 && !M.pounced) {
+        M.pounced = true;
+        sim.sound('growl', m.x, m.z, m.scale);
+      }
+      sim.moveToward(m, prey.x, prey.z, Math.min(monsterSpeed(sim, m) * k, Math.max(0.05, (d - reach * 0.6) * 10)));
+    } else {
+      M.pounced = false;
+      go(sim, m, prey.x, prey.z, 10);
+    }
     return;
   }
   sim.stop(m);

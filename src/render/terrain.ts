@@ -35,6 +35,8 @@ interface DecorKind {
   size: [number, number];
   parts: DecorPart[];
   tint?: number; // ± brightness jitter
+  /** client-only collision radius (m) for an instance of this size, F32 */
+  collide?: (size: number) => number;
 }
 
 const cone = new THREE.ConeGeometry(0.5, 1, 7);
@@ -44,29 +46,29 @@ const box = new THREE.BoxGeometry(1, 1, 1);
 const blade = new THREE.ConeGeometry(0.5, 1, 3);
 
 const DECOR: DecorKind[] = [
-  { tiles: ['cedar'], perTile: 2.4, size: [12, 18], parts: [
+  { tiles: ['cedar'], perTile: 2.4, size: [12, 18], collide: (z) => z * 0.025, parts: [
     { geo: cyl, color: '#4a3424', y: 0.12, sx: 0.04, sy: 0.25, shadow: true },
     { geo: cone, color: '#1f4a2a', y: 0.38, sx: 0.42, sy: 0.38, shadow: true },
     { geo: cone, color: '#24502e', y: 0.62, sx: 0.32, sy: 0.32, shadow: true },
     { geo: cone, color: '#2a5a34', y: 0.84, sx: 0.2, sy: 0.3, shadow: true },
   ] },
-  { tiles: ['olive'], perTile: 3.5, size: [4, 5.5], parts: [
+  { tiles: ['olive'], perTile: 3.5, size: [4, 5.5], collide: (z) => z * 0.05, parts: [
     { geo: cyl, color: '#5a4a3a', y: 0.18, sx: 0.08, sy: 0.36, shadow: true },
     { geo: ico, color: '#7a8a5a', y: 0.6, sx: 0.8, sy: 0.55, shadow: true },
     { geo: ico, color: '#6e8050', y: 0.75, sx: 0.55, sy: 0.4, shadow: true },
   ] },
-  { tiles: ['vineyard'], perTile: 8, size: [1.2, 1.6], parts: [
+  { tiles: ['vineyard'], perTile: 8, size: [1.0, 1.3], parts: [
     { geo: cyl, color: '#5a4030', y: 0.5, sx: 0.05, sy: 1 },
-    { geo: ico, color: '#5e7a2e', y: 0.75, sx: 0.8, sy: 0.6 },
+    { geo: ico, color: '#5e7a2e', y: 0.7, sx: 0.8, sy: 0.5 },
   ] },
   { tiles: ['wheat'], perTile: 14, size: [0.8, 1.15], tint: 0.12, parts: [{ geo: blade, color: '#d8b850', y: 0.5, sx: 0.5, sy: 1 }] },
-  { tiles: ['grass'], perTile: 2.5, size: [0.4, 0.8], tint: 0.15, parts: [{ geo: blade, color: '#7a9a40', y: 0.5, sx: 0.6, sy: 1 }] },
+  { tiles: ['grass'], perTile: 3, size: [0.25, 0.5], tint: 0.15, parts: [{ geo: blade, color: '#9ab858', y: 0.5, sx: 1.2, sy: 1 }] },
   { tiles: ['scrub', 'wadi'], perTile: 1.6, size: [0.6, 1.4], tint: 0.12, parts: [{ geo: ico, color: '#8a8a52', y: 0.4, sx: 1.2, sy: 0.8 }] },
-  { tiles: ['rock', 'scrub'], perTile: 0.7, size: [1, 3.5], tint: 0.1, parts: [{ geo: ico, color: '#8e877c', y: 0.3, sx: 1.3, sy: 0.9, shadow: true }] },
-  { tiles: ['salt'], perTile: 0.16, size: [2, 5], parts: [{ geo: cyl, color: '#f4f0e6', y: 0.5, sx: 0.35, sy: 1, shadow: true }] },
+  { tiles: ['rock', 'scrub'], perTile: 0.7, size: [1, 3.5], tint: 0.1, collide: (z) => (z > 1.6 ? z * 0.55 : 0), parts: [{ geo: ico, color: '#8e877c', y: 0.3, sx: 1.3, sy: 0.9, shadow: true }] },
+  { tiles: ['salt'], perTile: 0.16, size: [2, 5], collide: (z) => z * 0.17, parts: [{ geo: cyl, color: '#f4f0e6', y: 0.5, sx: 0.35, sy: 1, shadow: true }] },
   { tiles: ['marsh'], perTile: 4, size: [1.2, 1.9], tint: 0.1, parts: [{ geo: blade, color: '#6a7a40', y: 0.5, sx: 0.25, sy: 1 }] },
   { tiles: ['ruin-floor'], perTile: 1.2, size: [0.8, 2], tint: 0.06, parts: [{ geo: box, color: '#b0a288', y: 0.35, sx: 1.4, sy: 0.7, shadow: true }] },
-  { tiles: ['ruin-floor'], perTile: 0.2, size: [5, 9], parts: [{ geo: cyl, color: '#c0b498', y: 0.5, sx: 0.18, sy: 1, shadow: true }] },
+  { tiles: ['ruin-floor'], perTile: 0.2, size: [5, 9], collide: (z) => z * 0.09, parts: [{ geo: cyl, color: '#c0b498', y: 0.5, sx: 0.18, sy: 1, shadow: true }] },
   { tiles: ['shrine-floor'], perTile: 0.15, size: [2.5, 3.5], parts: [{ geo: box, color: '#9a9284', y: 0.5, sx: 0.4, sy: 1, shadow: true }] },
 ];
 
@@ -85,6 +87,9 @@ export class Terrain {
   private decorTimer = 0;
   private uTime = { value: 0 };
   ready = false;
+  /** tile index → collision circles (tiles), for the controller */
+  colliders = new Map<number, { x: number; z: number; r: number }[]>();
+  onColliders: () => void = () => {};
 
   constructor() {
     for (const d of CORE_TILES) this.defs.set(d.id, d);
@@ -212,6 +217,7 @@ export class Terrain {
     }
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
     const col = new THREE.Color();
+    this.colliders.clear();
     for (const [ki, kind] of DECOR.entries()) {
       const tiles = new Set(kind.tiles);
       const inst: { x: number; z: number; y: number; size: number; rot: number; tint: number }[] = [];
@@ -226,6 +232,19 @@ export class Terrain {
         }
       }
       if (!inst.length) continue;
+      if (kind.collide) {
+        for (const it of inst) {
+          const r = kind.collide(it.size) / M;
+          if (r <= 0) continue;
+          // register in every tile the circle touches
+          for (let tz = Math.floor(it.z - r - 0.05); tz <= Math.floor(it.z + r + 0.05); tz++) for (let tx = Math.floor(it.x - r - 0.05); tx <= Math.floor(it.x + r + 0.05); tx++) {
+            const k = tz * SIZE + tx;
+            let l = this.colliders.get(k);
+            if (!l) this.colliders.set(k, (l = []));
+            l.push({ x: it.x, z: it.z, r });
+          }
+        }
+      }
       for (const part of kind.parts) {
         const im = new THREE.InstancedMesh(part.geo, new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true }), inst.length);
         im.castShadow = !!part.shadow;
@@ -244,6 +263,7 @@ export class Terrain {
         this.decor.add(im);
       }
     }
+    this.onColliders();
   }
 
   update(dt: number, t: number) {

@@ -1,12 +1,16 @@
 import { harden, hostCreateBlobUrl, hostNow, hostPost, hostRevokeUrl, hostSetTimeout } from './harden';
 import { Island, importDefault, type SavedWorld } from '../sim/island';
-import { ENT_STRIDE, F_BOUND, F_CHAMPION, F_DOWNED, F_DRAGGED, F_INHABITANT, F_MONSTER, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type SimToMain, type VillagerInfo } from '../protocol';
+import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_MONSTER, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
 import type { FaultInfo, VisibleEffect } from '../sim/module-runtime';
 import { TICKS_PER_SECOND, HOUR_MS, fmtClock } from '../sim/clock';
 import type { Entity } from '../sim/types';
-import { visibleMonsters } from '../sim/vision';
-import { telegraphRadius, monsterActive } from '../sim/monster-ai';
-import { issueOrder, cs } from '../sim/champion';
+import { visibleMonsters, championSight } from '../sim/vision';
+import { telegraphRadius, monsterActive, windupProgress } from '../sim/monster-ai';
+import { issueOrder, cs, ctrlReason, isPlayerCtrl, champSpeedMul } from '../sim/champion';
+import { M as MPT } from '../sim/ground';
+import { frontPoint } from '../sim/body';
+import { shapeForJob } from '../sim/populate';
+import { DAY_MS } from '../sim/clock';
 import { offerDragged, offerLamb, offerVillager, offeringValue, setPrayer, nearAltar, judgment } from '../sim/favor';
 import { xpToNext, firstName } from '../sim/combat';
 import { resolveAway } from '../sim/offline';
@@ -62,37 +66,123 @@ function sendDefs(force = false) {
   post({ type: 'defs', shapes: [...sim.shapes], emitters: [...sim.emitters], tiles: [...sim.grid.defs.values()], shapeIndex });
 }
 
-function rendered(e: Entity, vis: Set<number>): boolean {
+const RANGE = 80; // tiles (640 m)
+const CORE_ROLES = /^(house|village-altar|high-altar|fold|granary|lair:)/;
+const prevPos = new Map<number, { x: number; z: number; v: number }>();
+const sentNames = new Map<number, string>();
+
+/** Where the viewer is: the champion, or the village while there is none. */
+function eye(): { x: number; z: number } {
+  const sim = island!.sim;
+  const c = sim.champion();
+  return c ? { x: c.x, z: c.z } : { x: sim.layout.village.x + 0.5, z: sim.layout.village.z + 0.5 };
+}
+
+function rendered(e: Entity, vis: Set<number>, ex: number, ez: number, sight: number): boolean {
   const sim = island!.sim;
   if (e.hidden) return false;
-  if (e.kind === 'human') return true;
-  if (e.kind === 'monster') return vis.has(e.id) || e.state === 'bound' || sim.revealAll;
-  const i = Math.floor(e.z) * SIZE + Math.floor(e.x);
-  if (!sim.explored[i] && !sim.revealAll) return false;
-  if (e.role?.startsWith('lair:') && !e.tags.includes('found') && !sim.revealAll) return false;
-  return true;
+  if (e.kind === 'structure' && e.role && CORE_ROLES.test(e.role)) return false; // drawn as static geometry
+  const d = Math.hypot(e.x - ex, e.z - ez);
+  if (e.kind === 'monster') {
+    if (sim.revealAll) return true;
+    if (e.state === 'bound' || e.id === sim.dragging) return true;
+    // a resting monster is inside its lair unless you're at the mouth (F11)
+    if (e.state === 'rest' && d > 5) return false;
+    return d <= sight * 1.25 || (sim.light > 0.5 && d <= RANGE) || (vis.has(e.id) && d <= RANGE && sim.light > 0.3);
+  }
+  return d <= RANGE;
+}
+
+function animOf(e: Entity, speed: number): number {
+  const sim = island!.sim;
+  if (e.kind === 'corpse') return 10;
+  if (e.carriedBy !== undefined || e.state === 'captive') return 9;
+  if (e.state === 'downed') return 7;
+  if (e.state === 'bound') return 8;
+  if (e.state === 'sleep') return 11;
+  if (e.monster) {
+    if (e.monster.windup >= 0) return 4;
+    if (e.monster.strikeAt !== undefined && sim.tick - e.monster.strikeAt <= 3) return 5;
+    if (e.state === 'feed') return 3;
+  }
+  if (e.state === 'flee' && speed > 0.05) return 6;
+  if (speed > 0.075) return 2; // > 6 m/s
+  if (speed > 0.012) return 1;
+  if (e.state === 'work' || e.state === 'fight') return 3;
+  return 0;
+}
+
+function zoneMask(e: Entity): number {
+  if (!e.zones) return 0;
+  const order = ['head', 'torso', 'armL', 'armR', 'legL', 'legR', 'sig'] as const;
+  let m = 0;
+  order.forEach((z, k) => {
+    const st = e.zones![z]?.state;
+    if (st === 'crippled') m |= 1 << k;
+    if (st === 'severed') m |= (1 << k) | (1 << (8 + k));
+  });
+  return m;
+}
+
+function titleOf(e: Entity): NameInfo | null {
+  if (e.kind === 'human') {
+    const job = e.human!.job;
+    return { name: e.name ?? 'Villager', title: e.tags.includes('elder') ? `the elder · ${job}` : job };
+  }
+  if (e.kind === 'monster') {
+    const M = e.monster!;
+    return M.seen ? { name: e.name!, title: `${ARCH[M.archetype].display} · level ${e.level}` } : { name: 'Something', title: '???' };
+  }
+  if (e.kind === 'corpse' && e.corpse) {
+    const sp = e.corpse.species;
+    return { name: e.corpse.name ? `Body of ${e.corpse.name.split(' ')[0]}` : `Carcass of a ${ARCH[sp]?.display ?? sp}`, title: e.corpse.bones ? 'bones' : 'carcass' };
+  }
+  if (e.kind === 'animal') return { name: `Wild ${e.animal!.species}`, title: 'beast' };
+  if (e.owner) {
+    const m = island!.manifest.find((x) => x.id === e.owner);
+    return { name: e.kind, title: m ? `a creation: ${m.title}` : 'a creation' };
+  }
+  return null;
 }
 
 function packEnts(): Float32Array {
   const sim = island!.sim;
   const vis = visibleMonsters(sim);
-  const list = [...sim.ents.values()].filter((e) => rendered(e, vis));
+  const { x: ex, z: ez } = eye();
+  const c = sim.champion();
+  const sight = c ? championSight(sim, c) : 10;
+  const list = [...sim.ents.values()].filter((e) => rendered(e, vis, ex, ez, sight));
   const arr = new Float32Array(list.length * ENT_STRIDE);
+  const names: [number, NameInfo][] = [];
   let o = 0;
   for (const e of list) {
-    const tx = Math.floor(e.x), tz = Math.floor(e.z);
     let flags = 0;
     if (e.inhabitant) flags |= F_INHABITANT;
     if (e.kind === 'monster') flags |= F_MONSTER;
+    if (e.kind === 'human') flags |= F_HUMAN;
+    if (e.kind === 'animal') flags |= F_ANIMAL;
+    if (e.kind === 'corpse') flags |= F_CORPSE;
     if (e.monster && e.monster.windup >= 0) flags |= F_TELEGRAPH;
     if (e.state === 'downed') flags |= F_DOWNED;
     if (e.state === 'bound') flags |= F_BOUND;
     if (e.id === sim.championId) flags |= F_CHAMPION;
     if (e.id === sim.dragging) flags |= F_DRAGGED;
+    if (e.tags.includes('hittable')) flags |= F_HITTABLE;
+    const core = e.kind === 'monster' ? e.monster!.archetype : e.kind === 'human' ? shapeForJob(e.human!.job) : e.kind === 'animal' ? e.animal!.species : e.kind === 'corpse' ? e.corpse?.species === 'human' ? null : e.corpse?.species : null;
+    if ((core && e.shape === core) || (e.kind === 'corpse' && ['human', 'shepherd', 'guard', 'champion'].includes(e.shape)) || (e.kind === 'corpse' && e.shape === e.corpse?.species)) flags |= F_CORE_SHAPE;
+    const pp = prevPos.get(e.id);
+    const moved = pp ? Math.hypot(e.x - pp.x, e.z - pp.z) : 0;
+    const v = pp ? pp.v * 0.5 + moved * 0.5 : 0;
+    prevPos.set(e.id, { x: e.x, z: e.z, v });
+    let y = sim.ground.y(e.x, e.z);
+    if (e.monster?.flies && e.zones?.sig?.state === 'ok') {
+      const t = sim.grid.get(Math.floor(e.x), Math.floor(e.z));
+      if (t === 'wall' || t === 'house') y += 5;
+    }
     arr[o++] = e.id;
     arr[o++] = shapeLookup.get(e.shape) ?? -1;
     arr[o++] = e.x;
-    arr[o++] = sim.grid.height(tx, tz);
+    arr[o++] = y;
     arr[o++] = e.z;
     arr[o++] = e.yaw;
     arr[o++] = parseInt(e.tint.slice(1), 16);
@@ -101,16 +191,43 @@ function packEnts(): Float32Array {
     arr[o++] = e.lift;
     arr[o++] = e.roll;
     arr[o++] = e.squash;
-    arr[o++] = e.monster && e.monster.windup >= 0 ? telegraphRadius(e) : 0;
+    arr[o++] = e.monster && e.monster.windup >= 0 ? telegraphRadius(e) * MPT : 0;
+    arr[o++] = animOf(e, v);
+    arr[o++] = zoneMask(e);
+    arr[o++] = e.inhabitant ? Math.max(0, Math.min(1, e.hp / sim.maxHp(e))) : 1;
+    arr[o++] = e.monster ? (e.monster.seen ? 1 : 0) : 1;
+    arr[o++] = e.monster ? windupProgress(sim, e) : -1;
+    const ni = titleOf(e);
+    if (ni) {
+      const key = ni.name + '|' + ni.title;
+      if (sentNames.get(e.id) !== key) {
+        sentNames.set(e.id, key);
+        names.push([e.id, ni]);
+      }
+    }
   }
+  if (sim.tick % 50 === 0) for (const id of prevPos.keys()) if (!sim.ents.has(id)) { prevPos.delete(id); sentNames.delete(id); }
+  if (names.length) post({ type: 'names', names });
   return arr;
+}
+
+let costKey = '';
+function sendWalkCost(force = false) {
+  const sim = island!.sim;
+  const c = sim.champion();
+  const key = `${sim.grid.defsVersion}:${sim.rulesVersion}:${sim.tileEpoch}:${c ? Math.floor(c.x) + ',' + Math.floor(c.z) : ''}`;
+  if (!force && key === costKey) return;
+  costKey = key;
+  post({ type: 'walkCost', cost: sim.champCost() });
 }
 
 function sendFullState() {
   const sim = island!.sim;
   sendDefs(true);
+  sentNames.clear();
+  prevPos.clear();
   const ents = packEnts();
-  post({ type: 'fullState', seq: ++seq, tick: sim.tick, tiles: [...sim.grid.types], elev: sim.grid.elev.slice(), explored: sim.explored.slice(), ents, attached: [...sim.attached].map(([id, s]) => [id, [...s]]), atmosphere: { ...sim.atmosphere } }, [ents.buffer]);
+  post({ type: 'fullState', seq: ++seq, tick: sim.tick, tiles: [...sim.grid.types], elev: sim.grid.elev.slice(), explored: sim.explored.slice(), ents, attached: [...sim.attached].map(([id, s]) => [id, [...s]]), atmosphere: { ...sim.atmosphere }, layout: sim.layout, epoch: cs(sim).epoch, walkCost: sim.champCost() }, [ents.buffer]);
   sim.grid.changed.clear();
   sim.exploredChanged.length = 0;
   flushOut();
@@ -146,6 +263,7 @@ function sendHud() {
     champion: c ? {
       id: c.id, name: c.name!, hp: c.hp, maxHp: sim.maxHp(c), level: c.level, xp: c.xp, xpNext: xpToNext(c), state: c.state, x: c.x, z: c.z,
       dragging, nearAltar: nearAltar(sim), downedTarget, weaponMul: cs(sim).weapon.mul,
+      speedMul: champSpeedMul(sim), blocking: cs(sim).blocking, torch: cs(sim).torch, sight: championSight(sim, c),
     } : null,
     championPendingDawn: sim.championPendingDawn,
     favor: { human: Math.round(sim.favor.human), monster: Math.round(sim.favor.monster) },
@@ -161,6 +279,8 @@ function sendHud() {
     gameOver: sim.gameOver,
     stats: sim.stats,
     dangerNear,
+    judgmentInMs: (DAY_MS - (((sim.clockMs % DAY_MS) + DAY_MS) % DAY_MS)) / sim.timescale,
+    lairsHome: sim.monsters().filter((m) => m.state === 'rest' && sim.byRole(`lair:${m.monster!.region}`)?.tags.includes('found')).map((m) => m.monster!.region),
   };
   post({ type: 'hud', hud });
 }
@@ -200,7 +320,33 @@ function tickOnce() {
   const tiles = sim.grid.drainChanged().map((i) => [i, sim.grid.types[i]] as [number, string]);
   const explored = sim.exploredChanged.splice(0);
   const ents = packEnts();
-  post({ type: 'frame', seq: ++seq, tick: sim.tick, ents, tiles, explored, emitterOps: out.emitterOps, emotes: out.emotes, atmosphere: out.atmosphereDirty ? { ...sim.atmosphere } : undefined }, [ents.buffer]);
+  const S = cs(sim);
+  const c = sim.champion();
+  const { x: ex, z: ez } = eye();
+  const screams: { id: number; x: number; z: number }[] = [];
+  for (const h of sim.ents.values()) {
+    if (h.kind !== 'human' || h.state !== 'captive' || h.id === sim.championId || h.carriedBy === undefined) continue;
+    if (Math.hypot(h.x - ex, h.z - ez) <= 19) screams.push({ id: h.carriedBy, x: h.x, z: h.z });
+  }
+  if (sim.tick % 6 === 0) {
+    // footfalls of monsters close to you (F20)
+    for (const m of sim.monsters()) {
+      const d = Math.hypot(m.x - ex, m.z - ez);
+      if (d < 30 / MPT && (prevPos.get(m.id)?.v ?? 0) > 0.01 && (m.id + sim.tick) % 12 === 0) out.sounds.push({ kind: 'thud', x: m.x, z: m.z, size: m.scale });
+    }
+  }
+  const hear = { roar: 50, scream: 19 } as Record<string, number>;
+  const sounds = out.sounds.filter((snd) => Math.hypot(snd.x - ex, snd.z - ez) <= (hear[snd.kind] ?? 15));
+  const reason = ctrlReason(sim);
+  const actionError = sim.actionError;
+  sim.actionError = null;
+  post({
+    type: 'frame', seq: ++seq, tick: sim.tick, ents, tiles, explored, emitterOps: out.emitterOps, emotes: out.emotes, atmosphere: out.atmosphereDirty ? { ...sim.atmosphere } : undefined,
+    ctrl: isPlayerCtrl(reason) ? 'player' : 'sim', ctrlReason: reason, epoch: S.epoch, champ: c ? { x: c.x, z: c.z, yaw: c.yaw } : null,
+    correction: S.correction ?? undefined, screams, sounds, combat: S.combat.splice(0), toasts: out.toasts, hurt: out.hurt ?? 0, actionError,
+  }, [ents.buffer]);
+  S.correction = null;
+  sendWalkCost();
   if (sim.tick % 5 === 0) sendHud();
   if (sim.tick % 5 === 0 && inspectId !== null) sendInspect();
   if (sim.tick % 30 === 0) sendStats();
@@ -234,7 +380,7 @@ function inspectLines(e: Entity): InspectInfo {
     if (M.seenHours.length) lines.push(`Seen active at: ${[...M.seenHours].sort((a, b) => a - b).map((h) => `${h}:00`).join(', ')}`);
     const hurt = Object.entries(e.zones ?? {}).filter(([, z]) => z && z.state !== 'ok').map(([k, z]) => `${k === 'sig' ? ARCH[M.archetype].sig : k} ${z!.state}`);
     if (hurt.length) lines.push(`Wounds: ${hurt.join(', ')}`);
-    if (e.state === 'downed') lines.push('Downed! Tap to bind it, or Finish it.');
+    if (e.state === 'downed') lines.push('Downed! E to bind it, F to finish it.');
     if (e.state === 'bound') lines.push(`Bound. Worth ${offeringValue(sim, e)} favor alive at the altar.`);
   } else if (e.kind === 'corpse' && e.corpse) {
     title = e.corpse.name ? `Body of ${e.corpse.name}` : `Carcass (${e.corpse.species})`;
@@ -247,7 +393,7 @@ function inspectLines(e: Entity): InspectInfo {
     lines.push(e.tags.includes('empty') ? 'Empty. Its master is dead.' : 'Something lives here.');
   } else if (e.role === 'village-altar') {
     title = 'Altar of the Most High';
-    lines.push('Bring offerings here. Tap again when close to open it.');
+    lines.push('Bring offerings here. Press E beside it.');
   } else if (e.role === 'high-altar') {
     title = 'The High Place';
     lines.push("Dagon's altar. The monsters bring their captives here.");
@@ -355,8 +501,8 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
       case 'catchUp':
         if (island && !busy) catchUp(msg.clockMs, msg.realMs);
         break;
-      case 'order':
-        if (island) issueOrder(island.sim, msg.order);
+      case 'input':
+        if (island) island.sim.inputs.push(msg.input);
         break;
       case 'action': {
         if (!island) break;
@@ -446,10 +592,23 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
           if (p) { e.x = p.x + 0.5; e.z = p.z + 0.5; }
           sim.stop(e);
         };
-        if (msg.name === 'fight' || msg.name === 'downed' || msg.name === 'drag') {
-          put(c, m.x + 2.5, m.z + 1);
-          if (msg.name === 'fight') issueOrder(sim, { type: 'attack', id: m.id });
-          else {
+        cs(sim).epoch++;
+        if (msg.name.startsWith('place:')) {
+          const [x, z] = msg.name.slice(6).split(',').map(Number);
+          if (Number.isFinite(x) && Number.isFinite(z)) {
+            const p = sim.nearestWalkable(c, x, z, 6);
+            if (p) { c.x = p.x + 0.5; c.z = p.z + 0.5; }
+            sim.stop(c);
+          }
+        } else if (msg.name === 'fight' || msg.name === 'downed' || msg.name === 'drag') {
+          put(c, m.x + 1.6, m.z + 0.6);
+          c.yaw = Math.atan2(m.x - c.x, m.z - c.z);
+          m.yaw = Math.atan2(c.x - m.x, c.z - m.z);
+          if (msg.name === 'fight') {
+            m.target = c.id;
+            m.state = 'fight';
+            m.monster!.seen = true;
+          } else {
             m.hp = sim.maxHp(m) * 0.15;
             m.state = 'downed';
             m.roll = 1;
@@ -457,14 +616,12 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
             if (msg.name === 'drag') {
               m.state = 'bound';
               sim.dragging = m.id;
-              const A = sim.layout.villageAltar;
-              issueOrder(sim, { type: 'move', x: A.x + 0.5, z: A.z + 1.5 });
             }
           }
         } else if (msg.name === 'carry') {
           const v = sim.humans().find((h) => h.id !== c.id && !h.hidden)!;
-          put(v, c.x + 6, c.z + 3);
-          put(m, v.x + 1, v.z);
+          put(v, c.x + 3, c.z + 1.5);
+          put(m, v.x + 0.5, v.z);
           m.monster!.prey = v.id;
           m.monster!.huntUntil = sim.clockMs + 3_600_000;
           m.state = 'stalk';

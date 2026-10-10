@@ -7,8 +7,8 @@ const KEYS: [number, string, string, string, number, number][] = [
   [0, '#05070f', '#141a2e', '#8090d0', 0.12, 0.16],
   [4.5, '#070a16', '#1a2038', '#8090d0', 0.12, 0.16],
   [6, '#3a4a78', '#f0a070', '#ffb07a', 0.7, 0.42],
-  [7.5, '#4a86c8', '#cfe2ee', '#fff1d6', 1.5, 0.62],
-  [16.5, '#4a84c4', '#cde0ec', '#fff1d6', 1.5, 0.62],
+  [7.5, '#5a92cc', '#d6e6ee', '#fff1d6', 1.6, 0.85],
+  [16.5, '#5a90c8', '#d4e4ec', '#fff1d6', 1.6, 0.85],
   [18, '#3a4a80', '#f08a50', '#ff8a4a', 0.8, 0.44],
   [19.5, '#12163a', '#3a2c50', '#8088d0', 0.25, 0.22],
   [21, '#070a18', '#161c34', '#8090d0', 0.12, 0.16],
@@ -130,7 +130,7 @@ export class Sky {
     this.sun.intensity = sunI;
     this.ambient.intensity = amb;
     this.ambient.color.copy(top).lerp(this.c2.set('#ffffff'), 0.6);
-    this.ambient.groundColor.set('#4a4a3a').multiplyScalar(0.4 + 0.6 * light);
+    this.ambient.groundColor.set('#8a8068').multiplyScalar(0.45 + 0.55 * light);
     // sun or moon direction; the shadow-casting light follows the eye
     const day = hour >= 6 && hour < 18;
     const phase = day ? (hour - 6) / 12 : ((hour + 6) % 24) / 12;

@@ -7,6 +7,7 @@ import { PRODUCTION, doorOf, onShift, pickSite, productionMul } from './village'
 import { boldness, isEnraged } from './monster-ai';
 import { applyDamage, firstName, gainXp, heal, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
+import { cs } from './champion';
 
 export interface AwaySummary {
   hours: number;
@@ -148,6 +149,8 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     if (e.kind === 'judgment') sum.judgments.push(e.text);
     else if (e.kind === 'growth' || e.kind === 'champion' || e.kind === 'gameover') sum.events.push(e.text);
   }
+  cs(sim).epoch++; // the resolver may have moved the champion: stale client poses are dropped (F6)
+  cs(sim).trail = [];
   return sum;
 }
 

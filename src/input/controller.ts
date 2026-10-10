@@ -35,7 +35,13 @@ export class ChampionController {
   speedMul = 1;
   /** sim-supplied: can't sprint or swing (dragging) */
   dragging = false;
+  /** champion move cost per tile × 20; 0 = blocked (F19) */
   walk: Uint8Array = new Uint8Array(SIZE * SIZE);
+  epoch = 0;
+  /** client-only colliders (tree trunks, boulders, columns; F32): tile index → circles (tiles) */
+  decorSolids: Map<number, Solid[]> = new Map();
+  /** set when real input happened since the last pose (F9) */
+  private inputSince = false;
   solids: Solid[] = [];
   eyeY = 0;
   private smoothEye = 0;
@@ -55,7 +61,14 @@ export class ChampionController {
   walkable(x: number, z: number): boolean {
     const ix = Math.floor(x), iz = Math.floor(z);
     if (ix < 0 || iz < 0 || ix >= SIZE || iz >= SIZE) return false;
-    return this.walk[iz * SIZE + ix] === 1;
+    return this.walk[iz * SIZE + ix] > 0;
+  }
+
+  /** The sim's terrain factor for paths: 1 / clamp(cost, 0.6, 3). */
+  terrainFactor(x: number, z: number): number {
+    const ix = Math.floor(x), iz = Math.floor(z);
+    const c = this.walk[iz * SIZE + ix] / 20;
+    return c > 0 ? 1 / Math.min(3, Math.max(0.6, c)) : 1;
   }
 
   /** Is a circle of radius R at (x, z) clear of unwalkable tiles? */
@@ -108,15 +121,15 @@ export class ChampionController {
     this.dodgeDx = fz * s + fx * co;
     this.dodgeDz = fz * co - fx * s;
     this.dodgeT = 0;
-    this.send({ type: 'dodge' });
+    this.send({ type: 'input', input: { type: 'dodge' } });
     return true;
   }
 
+  /** Start a swing (the target is picked at blade contact by the caller, F7). */
   trySwing(now: number): boolean {
-    if (this.ctrl !== 'player' || now < this.swingReady || this.blocking) return false;
+    if (this.ctrl !== 'player' || this.view === 'downed' || now < this.swingReady || this.blocking || this.dragging) return false;
     if (!this.spend(12)) return false;
     this.swingReady = now + 0.6;
-    this.send({ type: 'swing', yaw: this.yaw, pitch: this.pitch });
     return true;
   }
 
@@ -124,12 +137,13 @@ export class ChampionController {
     const want = on && !this.winded && !this.torch && !this.dragging && this.ctrl === 'player';
     if (want === this.blocking) return;
     this.blocking = want;
-    this.send({ type: 'block', on: want });
+    this.send({ type: 'input', input: { type: 'block', on: want } });
   }
 
   update(dt: number, now: number) {
     const c = this.controls;
     const [dy, dp] = c.readLook();
+    if (dy || dp || c.down('forward') || c.down('back') || c.down('left') || c.down('right')) this.inputSince = true;
     this.yaw += dy;
     this.pitch = Math.max(-1.48, Math.min(1.48, this.pitch + dp));
     if (this.yaw > Math.PI) this.yaw -= Math.PI * 2;
@@ -155,8 +169,9 @@ export class ChampionController {
         this.spentAt = now;
         if (this.stamina <= 0) this.winded = true;
       }
-      const tile = this.ground; void tile;
-      const top = (this.sprinting ? SPRINT : WALK) * this.speedMul / M; // tiles/s
+            const crawl = this.view === 'downed';
+      if (crawl) this.sprinting = false;
+      const top = crawl ? 0.75 / M : ((this.sprinting ? SPRINT : WALK) * this.speedMul * this.terrainFactor(this.x, this.z)) / M; // tiles/s
       const tx = wx * top, tz = wz * top;
       // accelerate toward the target velocity, with friction when idle
       const k = Math.min(1, (l > 0 ? ACCEL / Math.max(0.1, top * M) : FRICTION) * dt);
@@ -174,7 +189,8 @@ export class ChampionController {
       this.moveSpeed = (Math.hypot(mx, mz) / Math.max(1e-4, dt)) * M;
       if (now * 1000 - this.lastPose >= this.poseEvery) {
         this.lastPose = now * 1000;
-        this.send({ type: 'pose', x: this.x, z: this.z, yaw: this.yaw, pitch: this.pitch, sprinting: this.sprinting });
+        this.send({ type: 'input', input: { type: 'pose', x: this.x, z: this.z, yaw: this.yaw, pitch: this.pitch, epoch: this.epoch, input: this.inputSince } });
+        this.inputSince = false;
       }
       // footsteps
       this.stepAcc += this.moveSpeed * dt;
@@ -209,8 +225,9 @@ export class ChampionController {
       else this.vx = 0;
       if (this.clear(this.x, this.z + sz)) this.z += sz;
       else this.vz = 0;
-      // push out of solid circles (monsters, altars)
-      for (const s of this.solids) {
+      // push out of solid circles (monsters, altars, trunks)
+      const near = this.decorSolids.get(Math.floor(this.z) * SIZE + Math.floor(this.x));
+      for (const s of near ? [...this.solids, ...near] : this.solids) {
         const dx = this.x - s.x, dz = this.z - s.z, d = Math.hypot(dx, dz), min = s.r + R;
         if (d < min && d > 1e-6) {
           const nx = s.x + (dx / d) * min, nz = s.z + (dz / d) * min;

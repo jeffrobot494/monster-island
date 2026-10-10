@@ -97,6 +97,8 @@ export interface MonsterInfo {
   grabAt: number;
   /** where the prey is pinned during a grab (F4) */
   grabPos?: { x: number; z: number } | null;
+  /** the stalk's final rush has started (one growl) */
+  pounced?: boolean;
   /** tick of the last attack release (strike animation) */
   strikeAt?: number;
   feedAt: number;
