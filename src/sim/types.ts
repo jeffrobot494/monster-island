@@ -94,6 +94,7 @@ export interface MonsterInfo {
   prey: number;
   grabAt: number;
   feedAt: number;
+  satedUntil?: number; // clockMs: rests after a kill or sacrifice
   visit: { atHour: number; to: number; done: boolean } | null;
   lairFound: boolean;
   seen: boolean;

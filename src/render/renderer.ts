@@ -67,7 +67,8 @@ export class Renderer {
   private frameInterval = 100;
   private clock = new THREE.Clock();
   private raycaster = new THREE.Raycaster();
-  private telegraphs = new RingPool('#ff2a1a', 0.86, 0.75);
+  private telegraphs = new RingPool('#ff2a1a', 0.8, 0.9);
+  private telegraphFill = new RingPool('#ff2a1a', 0.0, 0.22);
   private markers = new RingPool('#ffd84a', 0.8, 0.9);
   private champRing = new RingPool('#fff0a0', 0.78, 0.7);
   private ropes = new RingPool('#c8a060', 0.55, 0.95);
@@ -83,7 +84,7 @@ export class Renderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.5, 700);
     this.sky = new Sky(this.scene);
-    this.scene.add(this.terrain.group, this.shapes.group, this.particles.group, this.sprites.group, this.telegraphs.group, this.markers.group, this.champRing.group, this.ropes.group, this.rope);
+    this.scene.add(this.terrain.group, this.shapes.group, this.particles.group, this.sprites.group, this.telegraphs.group, this.telegraphFill.group, this.markers.group, this.champRing.group, this.ropes.group, this.rope);
     addEventListener('resize', () => this.resize());
     this.resize();
   }
@@ -222,6 +223,7 @@ export class Renderer {
 
     // rings: telegraphs (the real hit radius), downed markers, target marker, champion, tap
     this.telegraphs.begin();
+    this.telegraphFill.begin();
     this.markers.begin();
     this.champRing.begin();
     this.ropes.begin();
@@ -229,7 +231,10 @@ export class Renderer {
     for (const v of this.shapes.ents.values()) {
       const gy = v.py + (v.y - v.py) * alpha;
       const gx = v.px + (v.x - v.px) * alpha, gz = v.pz + (v.z - v.pz) * alpha;
-      if (v.flags & F_TELEGRAPH && v.ring > 0) this.telegraphs.place(gx, gy, gz, v.ring, 0.6 + 0.4 * Math.sin(t * 30));
+      if (v.flags & F_TELEGRAPH && v.ring > 0) {
+        this.telegraphs.place(gx, gy, gz, v.ring, 0.7 + 0.3 * Math.sin(t * 30));
+        this.telegraphFill.place(gx, gy, gz, v.ring, 1);
+      }
       if (v.flags & F_DOWNED && !(v.flags & F_CHAMPION)) this.markers.place(gx, gy, gz, 0.5 + 0.2 * v.scale + Math.sin(t * 5) * 0.08, 0.8);
       if (v.flags & F_CHAMPION) {
         this.champRing.place(gx, gy, gz, 0.42, 0.8);
@@ -245,6 +250,7 @@ export class Renderer {
       this.champRing.place(this.tap.x, this.terrain.height(tx, tz), this.tap.z, 0.2 + k * 0.4, 1 - k);
     }
     this.telegraphs.end();
+    this.telegraphFill.end();
     this.markers.end();
     this.champRing.end();
     this.ropes.end();

@@ -4,7 +4,7 @@ import { TileGrid } from '../src/sim/world';
 import { generateIsland } from '../src/sim/island-gen';
 import { generateMonsters, neighborGraph } from '../src/sim/monsters-gen';
 import { issueOrder } from '../src/sim/champion';
-import { offerDragged, offerLamb, judgment, scaleFor } from '../src/sim/favor';
+import { offerDragged, offerLamb, offerVillager as offerVillagerFn, judgment, scaleFor } from '../src/sim/favor';
 import { applyDamage } from '../src/sim/combat';
 import { resolveAway } from '../src/sim/offline';
 import { reachabilityProblem } from '../src/sim/validator';
@@ -171,5 +171,42 @@ describe('away resolver', () => {
     const h = sim.humans().length;
     console.log('after a week away:', h, 'humans,', sim.monsters().length, 'monsters, food', Math.round(sim.food));
     expect(h).toBeLessThan(21);
+  });
+});
+
+describe('forbidden offering and win conditions', () => {
+  it('burning a villager feeds both gods and the elder condemns', () => {
+    const sim = make(9).sim;
+    const c = sim.champion()!;
+    c.x = sim.layout.villageAltar.x + 0.5;
+    c.z = sim.layout.villageAltar.z + 1.5;
+    const v = sim.humans().find((h) => h.id !== c.id)!;
+    const value = Math.round(sim.maxHp(v));
+    expect(offerVillagerFn(sim, v.id)).toBeNull();
+    expect(sim.favor.human).toBe(value);
+    expect(sim.favor.monster).toBe(value);
+    const out = sim.drainOut();
+    expect(out.alerts.some((a) => a.kind === 'forbidden')).toBe(true);
+  });
+  it('monsters win when only the champion is left', () => {
+    const sim = make(9).sim;
+    for (const h of sim.humans()) if (h.id !== sim.championId) sim.remove(h);
+    sim.checkGameOver();
+    expect(sim.gameOver?.winner).toBe('monster');
+  });
+  it('humans win when every monster is dead', () => {
+    const sim = make(9).sim;
+    for (const m of sim.monsters()) applyDamage(sim, m, 99999, { type: 'slash' });
+    expect(sim.gameOver?.winner).toBe('human');
+  });
+  it('a bound monster stays bound through a long absence', () => {
+    const sim = make(10).sim;
+    const m = sim.monsters()[0];
+    m.state = 'bound';
+    m.roll = 1;
+    sim.dragging = m.id;
+    resolveAway(sim, 10 * HOUR_MS, 10 * HOUR_MS);
+    expect(m.state).toBe('bound');
+    expect(Math.hypot(m.x - sim.layout.villageAltar.x, m.z - sim.layout.villageAltar.z)).toBeLessThan(5);
   });
 });

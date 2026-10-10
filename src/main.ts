@@ -532,6 +532,8 @@ async function boot() {
   if (params.has('nogod')) pipeline.stop();
   pipeline.kick();
   if (devMode && params.get('devinstall')) setTimeout(() => devInstall(params.get('devinstall')!), 1500);
+  const panel = devMode ? params.get('panel') : null;
+  if (panel) setTimeout(() => (panel === 'altar' ? ui.openAltar() : ui.openSheet(panel)), 2500);
   const scenario = devMode ? params.get('script') : null;
   if (scenario) setTimeout(() => sim.post({ type: 'devScenario', name: scenario }), 1200);
   const judge = devMode ? params.get('judge') : null;

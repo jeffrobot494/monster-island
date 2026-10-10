@@ -99,7 +99,7 @@ function condemn(sim: Sim, value: number) {
   sim.favor.monster += value;
   const elder = sim.humans().find((h) => h.tags.includes('elder'));
   const who = elder ? firstName(elder) + ' the elder' : 'The elder';
-  sim.log(`${who} tears his robe: "You have fed the Pit with our own blood. Dagon laughs tonight." (+${value} to Dagon as well)`, 3, 'core', 'forbidden');
+  sim.log(`${who} tears ${elder?.human?.male === false ? 'her' : 'his'} robe: "You have fed the Pit with our own blood. Dagon laughs tonight." (+${value} to Dagon as well)`, 3, 'core', 'forbidden');
   sim.alert({ kind: 'forbidden', text: `${who} condemns you. Dagon gains ${value} favor too.` });
   for (const h of sim.humans()) if (!h.hidden && h.id !== sim.championId) sim.emote(h, '😠', 3);
 }

@@ -82,6 +82,8 @@ export function monsterSpeed(sim: Sim, m: Entity): number {
   let s = sim.stat(m, 'speed') * legFactor(m);
   if (m.hp < sim.maxHp(m) * 0.3) s *= 0.8;
   if (m.state === 'carry') s *= 0.7;
+  if (m.state === 'stalk') s *= 0.85;
+  if (m.state === 'grab') s *= 1.2;
   if (m.state === 'respond') s *= 1.3;
   if (m.state === 'prowl' || m.state === 'rest') s *= 0.6;
   return s;
@@ -253,7 +255,7 @@ export function stepMonster(sim: Sim, m: Entity) {
     return;
   }
 
-  const active = monsterActive(sim, m);
+  const active = monsterActive(sim, m) && (M.satedUntil ?? 0) <= sim.clockMs;
   // wounded monsters heal at the lair
   if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && m.hp < max && sim.tick % 10 === 0) heal(sim, m, (max * 0.1 * sim.msPerTick * 10) / HOUR_MS);
 
@@ -311,8 +313,9 @@ export function stepMonster(sim: Sim, m: Entity) {
     sim.advancePath(m, monsterSpeed(sim, m));
     // opportunistic grab of anyone wandering close
     if (sim.tick % 15 === 0) {
-      const p = findPrey(sim, m);
+      const p = M.huntAt.length ? findPrey(sim, m) : null;
       if (p && Math.hypot(p.x - m.x, p.z - m.z) < 7) {
+        M.huntAt.shift(); // an opportunistic grab spends one of today's hunts
         M.prey = p.id;
         M.huntUntil = sim.clockMs + HOUR_MS;
         setState(sim, m, 'stalk');
@@ -468,6 +471,7 @@ function carry(sim: Sim, m: Entity) {
 
 function devour(sim: Sim, m: Entity, v: Entity) {
   dropCarried(sim, m);
+  m.monster!.satedUntil = sim.clockMs + 4 * HOUR_MS;
   if (v.kind === 'human' || v.kind === 'animal') {
     kill(sim, v, { amount: 999, type: 'bite', sourceId: m.id, sourceKind: 'monster', deathType: 'eaten' });
     const c = nearestCorpse(sim, m, 2);
@@ -491,6 +495,7 @@ function sacrifice(sim: Sim, m: Entity) {
   kill(sim, v, { amount: 999, type: 'pierce', sourceId: m.id, sourceKind: 'monster', deathType: M.archetype === 'nephil' ? 'torn' : 'impaled' });
   offerFavor(sim, 'monster', value, 'high', v.kind === 'human' ? 'human' : v.animal?.species ?? v.kind);
   gainXp(sim, m, 50);
+  M.satedUntil = sim.clockMs + 4 * HOUR_MS;
   sim.stats.monsterSacrifices++;
   if (v.kind === 'human') sim.log(`${name} was sacrificed to Dagon on the High Place by ${m.name}. (+${value} favor to Dagon)`, 3, 'core', 'sacrifice');
   else sim.log(`A ${v.animal?.species ?? 'beast'} was burned to Dagon on the High Place. (+${value} favor to Dagon)`, 1, 'core', 'sacrifice');

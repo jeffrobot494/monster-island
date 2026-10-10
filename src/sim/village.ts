@@ -12,7 +12,8 @@ const SITE_TILES: Partial<Record<Job, string[]>> = {
   shepherd: ['grass', 'scrub'], vinedresser: ['olive', 'vineyard'], woodcutter: ['cedar'], fisherman: ['sand'], farmer: ['wheat'],
 };
 export const POP_CAP = 40;
-const FLEE_R = 6;
+/** villagers notice and run from monsters within their (light-dependent) sight */
+const fleeR = (sim: Sim) => 5 + 3 * sim.light;
 
 /** transient site lists per job (rebuilt when tiles change) */
 const siteCache = new WeakMap<Sim, { key: number; lists: Map<Job, number[]> }>();
@@ -49,7 +50,7 @@ export function onShift(sim: Sim, e: Entity): boolean {
 
 export function humanSpeed(sim: Sim, e: Entity): number {
   let s = sim.stat(e, 'speed') * legFactor(e);
-  if (e.state === 'flee') s *= 1.25;
+  if (e.state === 'flee') s *= 1.4;
   return s;
 }
 
@@ -143,7 +144,7 @@ export function stepHuman(sim: Sim, e: Entity) {
     const post = H.site >= 0 ? { x: (H.site % SIZE) + 0.5, z: ((H.site / SIZE) | 0) + 0.5 } : e;
     const m = nearestThreat(sim, e, 9);
     if (m && Math.hypot(m.x - V.x, m.z - V.z) < 14 && sim.alarmCooldownUntil <= sim.tick) soundShofar(sim, e, m);
-    if (m && Math.hypot(m.x - post.x, m.z - post.z) < 9 && e.hp > sim.maxHp(e) * 0.3) {
+    if (m && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius + 3 && e.hp > sim.maxHp(e) * 0.3) {
       e.state = 'fight';
       guardFight(sim, e, m);
       return;
@@ -152,7 +153,7 @@ export function stepHuman(sim: Sim, e: Entity) {
 
   // flee from close monsters
   if (!e.hidden && H.job !== 'guard') {
-    const m = nearestThreat(sim, e, FLEE_R);
+    const m = nearestThreat(sim, e, fleeR(sim));
     if (m) {
       if (e.state !== 'flee') {
         e.state = 'flee';

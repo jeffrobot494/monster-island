@@ -131,7 +131,7 @@ export function stepChampion(sim: Sim, c: Entity) {
   if (!o && sim.tick - S.lastOrder > IDLE_TICKS) {
     const V = sim.layout.village;
     let threat: Entity | null = null;
-    for (const m of sim.ents.values()) if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius + 2) threat = m;
+    for (const m of sim.ents.values()) if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius - 1) threat = m;
     if (threat) o = { type: 'attack', id: threat.id, idle: true };
     else if (Math.hypot(c.x - V.x, c.z - V.z) > 4) o = { type: 'move', x: V.x + 0.5, z: V.z + 1.5 };
     if (o) sim.order = o;
