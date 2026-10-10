@@ -88,8 +88,12 @@ export interface MonsterInfo {
   flies: boolean;
   swims: boolean;
   enragedUntil: number; // clockMs, 0 = calm
-  huntsLeft: number;
-  huntStartClock: number;
+  huntAt: number[]; // clockMs of today's remaining hunts
+  huntUntil: number; // clockMs: give up searching for villagers
+  ground: { x: number; z: number } | null;
+  prey: number;
+  grabAt: number;
+  feedAt: number;
   visit: { atHour: number; to: number; done: boolean } | null;
   lairFound: boolean;
   seen: boolean;

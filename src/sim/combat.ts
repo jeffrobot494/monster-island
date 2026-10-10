@@ -3,6 +3,7 @@ import type { Sim, DeathInfo } from './sim';
 import type { DeathType, DmgType, Entity, Zone } from './types';
 import { ARCH } from './monsters-gen';
 import { calDay } from './clock';
+import { onChampionDied } from './champion';
 
 export const humanMaxHp = (level: number) => 60 + 20 * (level - 1);
 export function monsterMaxHp(m: Entity): number {
@@ -78,6 +79,9 @@ function pickZone(sim: Sim, e: Entity): Zone | undefined {
   return opts[0]?.[0];
 }
 
+const QUIET = new Set(['poison', 'hunger', 'fire-tick', 'cold', 'magic']);
+export const severThreshold = (max: number) => Math.max(max * 0.08, 12);
+
 export interface DamageOpts {
   type: DmgType | string;
   zone?: Zone;
@@ -117,10 +121,11 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
   const zone = o.zone ?? pickZone(sim, t);
   if (zone && t.zones?.[zone]) {
     const z = t.zones[zone]!;
-    if (z.state === 'crippled' && d >= max * 0.08) {
+    const vital = zone === 'head' || zone === 'torso';
+    if (z.state === 'crippled' && d >= severThreshold(max) && (!vital || before <= max * 0.2)) {
       z.state = 'severed';
       z.hp = 0;
-      if (zone === 'head' || zone === 'torso') t.hp = 0;
+      if (vital) t.hp = 0;
       else severed = zone;
     } else if (z.state === 'ok') {
       z.hp -= d;
@@ -137,11 +142,11 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
     t.burnUntil = sim.tick + 50;
     t.burnSource = o.sourceId;
     sim.attach(t, 'fire');
-  } else if (o.type !== 'poison' && t.kind !== 'structure') sim.burst(d >= max * 0.15 ? 'blood-big' : 'blood', t.x, t.z, sim.grid.height(Math.floor(t.x), Math.floor(t.z)) + 0.4 * t.scale);
+  } else if (!QUIET.has(String(o.type)) && t.kind !== 'structure') sim.burst(d >= max * 0.15 ? 'blood-big' : 'blood', t.x, t.z, sim.grid.height(Math.floor(t.x), Math.floor(t.z)) + 0.4 * t.scale);
 
   // xp for dealing damage across factions
   const dealt = Math.min(before, d);
-  if (src && src.faction && t.faction && src.faction !== t.faction && src.inhabitant) gainXp(sim, src, dealt);
+  if (src && src.faction && t.faction && src.faction !== t.faction && src.inhabitant) gainXp(sim, src, src.kind === 'human' ? dealt * 0.5 : dealt);
   if (src?.kind === 'monster' && t.kind === 'human' && t.harmedBy) t.harmedBy = undefined;
 
   const info: DeathInfo = { amount: d, type: String(o.type), zone, sourceId: o.sourceId ?? -1, sourceKind: src?.kind ?? 'none' };
@@ -184,7 +189,7 @@ function chooseDeath(t: Entity, o: DamageOpts, src: Entity | undefined, d: numbe
   if (o.type === 'bite') return 'bitten';
   if (o.type === 'pierce') return 'impaled';
   if (src?.kind === 'monster' && src.scale >= 1.8 && t.kind === 'human') return 'torn';
-  if (o.type === 'slash' && (o.zone === 'head' || d >= max * 0.15)) return 'dismembered';
+  if (o.type === 'slash' && d >= severThreshold(max)) return 'dismembered';
   return 'slain';
 }
 
@@ -260,6 +265,7 @@ export function kill(sim: Sim, e: Entity, info: DeathInfo) {
       sim.championId = -1;
       sim.championPendingDawn = true;
       sim.order = null;
+      onChampionDied(sim);
       sim.alert({ kind: 'champion', text: `${e.name} has fallen. A new champion will be chosen at dawn.` });
     }
   }
@@ -290,6 +296,7 @@ function bloodPool(sim: Sim, x: number, z: number, scale = 1) {
 function spawnCorpse(sim: Sim, e: Entity, maxHp: number, deathType: DeathType, info: DeathInfo) {
   const species = e.kind === 'human' ? 'human' : e.monster?.archetype ?? e.animal?.species ?? e.kind;
   const day = calDay(sim.clockMs);
+  let revivable = false;
   const make = (shape: string, scale: number) => {
     const c = sim.spawn({ kind: 'corpse', x: e.x, z: e.z, shape, tint: e.tint, scale });
     c.yaw = e.yaw;
@@ -297,6 +304,11 @@ function spawnCorpse(sim: Sim, e: Entity, maxHp: number, deathType: DeathType, i
     c.faction = e.faction;
     c.name = e.name;
     c.corpse = { species, name: e.name, maxHp, diedClock: sim.clockMs, diedCalDay: day, deathType, faction: e.faction, bones: false, bonesNights: 0 };
+    if (e.inhabitant && !revivable) {
+      revivable = true;
+      const snap = structuredClone({ ...e, path: null, want: null, data: {} });
+      c.data.__revive = snap as unknown as Record<string, unknown>;
+    }
     return c;
   };
   const away = sim.ents.get(info.sourceId);

@@ -8,6 +8,7 @@ import { humanMaxHp, monsterMaxHp } from './combat';
 import { initZones } from './combat';
 import { hourOf } from './clock';
 import { REGION_NAMES } from './island-gen';
+import { rollHunts } from './monster-ai';
 
 export const JOB_LABEL: Record<Job, string> = {
   champion: 'champion', shepherd: 'shepherd', vinedresser: 'vinedresser', woodcutter: 'woodcutter', fisherman: 'fisherman', farmer: 'farmer', guard: 'guard',
@@ -76,7 +77,7 @@ export function populate(sim: Sim) {
     m.monster = {
       archetype: a.id, epithet: g.epithet, region: g.region, lairX: lair.x + 0.5, lairZ: lair.z + 0.5,
       hours: g.hours, restless: [], neighbors: [], baseHp: g.hp, dmg: g.dmg, dmgType: a.dmgType, reach: a.reach,
-      flies: !!a.flies, swims: !!a.swims, enragedUntil: 0, huntsLeft: 1, huntStartClock: 0, visit: null,
+      flies: !!a.flies, swims: !!a.swims, enragedUntil: 0, huntAt: [], huntUntil: 0, ground: null, prey: -1, grabAt: 0, feedAt: 0, visit: null,
       lairFound: false, seen: false, seenHours: [], lastSeenClock: 0, roarAt: -9999, respondTo: null, downedAt: 0,
       windup: -1, attackReadyAt: 0, runFrom: null,
     };
@@ -91,6 +92,7 @@ export function populate(sim: Sim) {
     m.monster!.neighbors = graph[k].map((j) => ids[j]);
   }
   rollRestless(sim);
+  for (const m of sim.monsters()) rollHunts(sim, m);
 
   // wild animals
   for (const p of L.goats) spawnAnimal(sim, 'goat', p);

@@ -1,18 +1,25 @@
-// Candidate validation (§8, Phase 1): static → install → dawn clone → 2-day soak → tests → visibility → round-trip.
+// Candidate validation (§11.8 + R28): static → install → (A) 2-day fast-clock soak with scripted events →
+// reachability → (B) live-rate segment → (C) 24 h away resolver → visibility → save round-trip → module tests.
 import { checkSource } from './ast-check';
 import { Island, type ModuleLoader, type SavedWorld } from './island';
-import { MODULE_STATE_CAP, type FaultInfo, type ModuleDef, type ModuleRecord } from './module-runtime';
-import { DUSK_TICK, TICKS_PER_DAY } from './time';
-import { CORE_BEHAVIORS, ENTITY_CAP } from './sim';
+import { HOOKS, MODULE_ENTITY_BUDGET, MODULE_STATE_CAP, type FaultInfo, type ModuleDef, type ModuleRecord } from './module-runtime';
+import { DAY_MS, HOUR_MS, calDay, hourOf } from './clock';
 import { SIZE } from './world';
+import type { Sim } from './sim';
+import { kill, applyDamage } from './combat';
+import { offerFavor } from './favor';
+import { resolveAway } from './offline';
 
 export const MAX_SOURCE_BYTES = 30 * 1024;
-export const SOAK_TICKS = 2 * TICKS_PER_DAY;
-export type Suspendable = 'eat' | 'sleep' | 'faction-survival';
+export const FAST_MS_PER_TICK = 14_400; // a game day = 6000 ticks
+export const SOAK_TICKS = 12_000;
+export const LIVE_TICKS = 6000;
+export const TEST_MAX_TICKS = 6000;
+export type Suspendable = 'faction-survival';
 
 export interface ValidationRequest {
-  world: string; // SavedWorld JSON of the live island
-  sources: Record<string, string>; // sources of installed modules
+  world: string;
+  sources: Record<string, string>;
   candidate: { id: string; source: string };
   suspends: Suspendable[];
 }
@@ -36,14 +43,12 @@ export interface ValidationReport {
 export interface ValidatorEnv {
   loader: ModuleLoader;
   now: () => number;
-  /** called between phases/periodically so a host can detect hangs */
   progress?: (stage: string) => void;
   runLimitMs?: number;
 }
 
 class Abort extends Error {}
 
-/** Find the first non-JSON-safe value (Map, function, NaN, cycles...) in module-owned data. */
 export function jsonUnsafePath(v: unknown, path = 'state', seen = new Set<unknown>()): string | null {
   if (v === null || typeof v === 'string' || typeof v === 'boolean') return null;
   if (typeof v === 'number') return Number.isFinite(v) ? null : `${path} is ${v}`;
@@ -69,6 +74,45 @@ export function jsonUnsafePath(v: unknown, path = 'state', seen = new Set<unknow
   return null;
 }
 
+/** Jump the clock forward (without firing boundaries) to the next occurrence of `hour`. */
+export function jumpClockTo(sim: Sim, hour: number) {
+  const now = hourOf(sim.clockMs);
+  let dh = hour - now;
+  if (dh <= 0) dh += 24;
+  sim.clockMs += dh * HOUR_MS;
+  sim.lastJudgedCalDay = hour < 1 ? calDay(sim.clockMs) - 1 : calDay(sim.clockMs);
+  sim.light = sim.computeLight();
+}
+
+/** Walker reachability between the inner gate, both altars and every live lair. */
+export function reachabilityProblem(sim: Sim): string | null {
+  const L = sim.layout;
+  const seen = new Uint8Array(SIZE * SIZE);
+  const start = L.gates[0].z * SIZE + L.gates[0].x;
+  const q = [start];
+  seen[start] = 1;
+  while (q.length) {
+    const i = q.pop()!;
+    const x = i % SIZE, z = (i / SIZE) | 0;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz;
+      if (!sim.grid.inBounds(nx, nz)) continue;
+      const j = nz * SIZE + nx;
+      if (seen[j] || !sim.walkableFor('human', nx, nz)) continue;
+      seen[j] = 1;
+      q.push(j);
+    }
+  }
+  const ok = (p: { x: number; z: number }) => {
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (seen[(p.z + dz) * SIZE + p.x + dx]) return true;
+    return false;
+  };
+  if (!ok(L.villageAltar)) return 'the village altar can no longer be reached from the gate';
+  if (!ok(L.highAltar)) return 'the High Place altar can no longer be reached from the village';
+  for (const m of sim.monsters()) if (!ok(L.lairs[m.monster!.region])) return `the lair in region ${m.monster!.region} can no longer be reached on foot`;
+  return null;
+}
+
 export async function validateCandidate(req: ValidationRequest, env: ValidatorEnv): Promise<ValidationReport> {
   const report: ValidationReport = { ok: false, checks: [], errors: [], tests: [], invariants: {} };
   const { id, source } = req.candidate;
@@ -77,7 +121,7 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
     report.checks.push({ check, ok: false, message });
     return report;
   };
-  const limit = env.runLimitMs ?? 60_000;
+  const limit = env.runLimitMs ?? 90_000;
 
   // 1. Static
   if (new TextEncoder().encode(source).length > MAX_SOURCE_BYTES) return failCheck('static', `source is larger than ${MAX_SOURCE_BYTES / 1024} KB`);
@@ -107,22 +151,26 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
     },
   };
   const recordErrors = () => {
-    for (const f of faults.slice(0, 5 - report.errors.length)) report.errors.push({ hook: f.hook, error: f.error, line: f.line });
+    for (const f of faults.slice(report.errors.length, 5)) report.errors.push({ hook: f.hook, error: f.error, line: f.line });
   };
 
-  /** fresh clone of the live world, advanced to the next dawn, with the candidate installed */
-  const dawnClone = async (): Promise<{ island: Island; mod: ModuleRecord }> => {
+  /** fresh clone of the live world on a chosen clock, candidate installed */
+  const clone = async (msPerTick: number, hour: number): Promise<{ island: Island; mod: ModuleRecord }> => {
     const island = await Island.load(world, req.sources, env.loader, opts);
-    const toDawn = (TICKS_PER_DAY - (island.sim.tick % TICKS_PER_DAY)) % TICKS_PER_DAY;
-    for (let i = 0; i < toDawn; i++) island.step();
-    // step() lands on dayTick 0 and runs dawn; install right after so the candidate starts fresh at dawn
+    const sim = island.sim;
+    sim.judgmentEnabled = false;
+    sim.msPerTick = msPerTick;
+    sim.gameOver = null;
+    sim.lastRealMs = 0;
+    jumpClockTo(sim, hour);
     const fresh = await env.loader(id, source);
     island.install(id, fresh);
     return { island, mod: island.runtime.byId.get(id)! };
   };
-  const runTicks = (island: Island, n: number, stage: string) => {
+  const runTicks = (island: Island, n: number, stage: string, script?: (i: number) => void) => {
     const t0 = env.now();
     for (let i = 0; i < n; i++) {
+      script?.(i);
       island.step();
       if (i % 300 === 299) {
         env.progress?.(stage);
@@ -131,65 +179,107 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
     }
     island.sim.drainOut();
   };
+  const invariants = (sim: Sim, mod: ModuleRecord, tag: string): string[] => {
+    const fails: string[] = [];
+    let bad = 0, modEnts = 0;
+    for (const e of sim.ents.values()) {
+      if (!Number.isFinite(e.x) || !Number.isFinite(e.z) || e.x < 0 || e.z < 0 || e.x > SIZE || e.z > SIZE || !Number.isFinite(e.hp)) bad++;
+      if (e.owner) modEnts++;
+    }
+    const humans = sim.humans().filter((h) => h.id !== sim.championId).length;
+    const monsters = sim.monsters().length;
+    report.invariants[`${tag}.humans`] = humans;
+    report.invariants[`${tag}.monsters`] = monsters;
+    report.invariants[`${tag}.moduleEntities`] = modEnts;
+    if (bad) fails.push(`${tag}: ${bad} entities have NaN/out-of-bounds positions or HP`);
+    if (modEnts > MODULE_ENTITY_BUDGET) fails.push(`${tag}: ${modEnts} creation entities exceed the budget of ${MODULE_ENTITY_BUDGET}`);
+    if (!req.suspends.includes('faction-survival')) {
+      if (!humans) fails.push(`${tag}: the villagers were wiped out`);
+      if (!monsters) fails.push(`${tag}: the monsters were wiped out`);
+    }
+    if (mod.status === 'quarantined') fails.push(`${tag}: the module was quarantined`);
+    return fails;
+  };
 
   // 2. Install
   let island: Island, mod: ModuleRecord;
   try {
-    ({ island, mod } = await dawnClone());
+    ({ island, mod } = await clone(FAST_MS_PER_TICK, 5));
   } catch (err) {
     return failCheck('install', `define/init threw: ${(err as Error).message}`);
   }
   pass('install');
   env.progress?.('install');
 
-  // 3–4. Soak + absolute invariants
-  const startDay = island.sim.time.day;
+  // 3. (A) fast-clock soak with scripted events
+  const sim = island.sim;
   const t0 = env.now();
   try {
-    runTicks(island, SOAK_TICKS, 'soak');
+    runTicks(island, SOAK_TICKS, 'soak', (i) => {
+      if (i === 400) {
+        const v = sim.humans().find((h) => h.id !== sim.championId && !h.hidden);
+        if (v) kill(sim, v, { amount: 999, type: 'bite', sourceId: -1, sourceKind: 'validator', deathType: 'bitten' });
+      } else if (i === 800) {
+        const m = sim.monsters()[0];
+        if (m) applyDamage(sim, m, 50, { type: 'slash', sourceId: sim.championId });
+      } else if (i === 1200) offerFavor(sim, 'human', 40, 'village', 'lamb');
+      else if (i === 1600) {
+        const a = [...sim.ents.values()].find((e) => e.kind === 'animal');
+        if (a) {
+          kill(sim, a, { amount: 999, type: 'pierce', sourceId: -1, sourceKind: 'validator', deathType: 'impaled' });
+          offerFavor(sim, 'monster', 40, 'high', 'goat');
+        }
+      }
+    });
   } catch (err) {
     if (err instanceof Abort) return failCheck('soak', err.message);
     throw err;
   }
   report.msPerTick = Math.round(((env.now() - t0) / SOAK_TICKS) * 1000) / 1000;
-  const sim = island.sim;
-  // close out the last soaked day
-  const days = [...sim.history.filter((d) => d.day >= startDay), sim.dayStats].filter((d) => d.day < startDay + 2);
-  const inv = report.invariants;
-  inv.candidateErrors = faults.length;
-  inv.quarantined = mod.status === 'quarantined';
-  let badPos = 0;
-  for (const e of sim.ents.values()) if (!Number.isFinite(e.x) || !Number.isFinite(e.z) || e.x < 0 || e.z < 0 || e.x > SIZE || e.z > SIZE || !Number.isFinite(e.hp) || !Number.isFinite(e.hunger)) badPos++;
-  inv.badPositions = badPos;
-  inv.entities = sim.entityCount();
-  inv.monsters = sim.inhabitants('monster').length;
-  inv.humans = sim.inhabitants('human').length;
-  inv.daysChecked = days.length;
-  const fails: string[] = [];
+  const fails = invariants(sim, mod, 'soak');
   if (faults.length) fails.push(`the candidate threw ${faults.length} error(s) during the soak`);
-  if (badPos) fails.push(`${badPos} entities have NaN/out-of-bounds positions or stats`);
-  if (inv.entities > ENTITY_CAP) fails.push(`entity count ${inv.entities} exceeds the cap ${ENTITY_CAP}`);
-  for (const d of days) {
-    const ate = d.ate.monster + d.ate.human, slept = d.slept.monster + d.slept.human;
-    inv[`day${d.day - startDay + 1}.ate`] = ate;
-    inv[`day${d.day - startDay + 1}.slept`] = slept;
-    if (!req.suspends.includes('eat') && ate === 0) fails.push(`nobody ate on soak day ${d.day - startDay + 1}`);
-    if (!req.suspends.includes('sleep') && slept === 0) fails.push(`nobody slept on soak day ${d.day - startDay + 1}`);
-  }
-  if (!req.suspends.includes('faction-survival')) {
-    if (!inv.monsters) fails.push('the monsters were wiped out');
-    if (!inv.humans) fails.push('the humans were wiped out');
-  }
   const size = island.runtime.stateSize(mod);
-  inv.stateBytes = size;
+  report.invariants.stateBytes = size;
   if (size > MODULE_STATE_CAP) fails.push(`module state is ${size} bytes, over the ${MODULE_STATE_CAP} byte cap`);
+  const reach = reachabilityProblem(sim);
+  if (reach) fails.push(reach);
   recordErrors();
   if (fails.length) return failCheck('soak', fails.join('; '));
   pass('soak');
 
+  // 4. (B) live clock rate (catches per-tick effects tuned against the fast clock)
+  try {
+    const nf = faults.length;
+    const { island: b, mod: bm } = await clone(100, 22);
+    runTicks(b, LIVE_TICKS, 'live-rate');
+    const f2 = invariants(b.sim, bm, 'live');
+    if (faults.length > nf) f2.push(`the candidate threw ${faults.length - nf} error(s) at the live clock rate`);
+    recordErrors();
+    if (f2.length) return failCheck('live-rate', f2.join('; '));
+  } catch (err) {
+    return failCheck('live-rate', err instanceof Abort ? err.message : `failed: ${(err as Error).message}`);
+  }
+  pass('live-rate');
+  env.progress?.('live-rate');
+
+  // 5. (C) a day away (hooks run hour by hour in the resolver)
+  try {
+    const nf = faults.length;
+    const { island: c, mod: cm } = await clone(100, 9);
+    resolveAway(c.sim, DAY_MS, DAY_MS);
+    c.sim.drainOut();
+    const f3 = invariants(c.sim, cm, 'away');
+    if (faults.length > nf) f3.push(`the candidate threw ${faults.length - nf} error(s) while the player was away`);
+    recordErrors();
+    if (f3.length) return failCheck('away', f3.join('; '));
+  } catch (err) {
+    return failCheck('away', `failed: ${(err as Error).message}`);
+  }
+  pass('away');
+
   // 6. Visibility (credited during the soak)
   report.visible = { what: mod.visible?.what ?? 'none', count: mod.visibleCount };
-  if (!mod.visibleCount) return failCheck('visibility', 'invisible change: during the 2-day soak the module never spawned a shaped entity, changed a tile, emitted particles, set a shape/tint, emoted/spoke, changed the atmosphere, or had one of its behaviors selected');
+  if (!mod.visibleCount) return failCheck('visibility', 'invisible change: during the 2-day soak the module never spawned, changed a tile, emitted particles, set a shape/tint, emoted/spoke, changed the atmosphere, damaged/modified a creature, changed a rule outcome, or had a behavior selected');
   pass('visibility');
 
   // 7. Save round-trip
@@ -201,6 +291,7 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
     const savedJson = JSON.stringify(island.serialize());
     const before = JSON.parse(savedJson) as SavedWorld;
     const reloaded = await Island.load(before, { ...req.sources, [id]: source }, env.loader, opts);
+    reloaded.sim.judgmentEnabled = false;
     const rmod = reloaded.runtime.byId.get(id);
     if (!rmod || rmod.status !== 'active') return failCheck('round-trip', `module did not reload active${rmod ? ' (quarantined on load)' : ''}`);
     const after = reloaded.serialize();
@@ -217,16 +308,16 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
   pass('round-trip');
   env.progress?.('round-trip');
 
-  // 5. Module tests (fresh dawn clone each)
+  // 8. Module tests (fresh fast-clock clone each)
   let allTests = true;
   for (const test of def.tests ?? []) {
     const name = typeof test.name === 'string' ? test.name : 'unnamed test';
     try {
       const nf = faults.length;
-      const { island: c, mod: m } = await dawnClone();
-      if (test.start === 'dusk') runTicks(c, DUSK_TICK, `test ${name}`);
+      const hour = test.start === 'dusk' ? 18 : test.start === 'night' ? 23 : 6;
+      const { island: c, mod: m } = await clone(FAST_MS_PER_TICK, hour);
       if (test.setup) runModuleCode(() => test.setup!(m.api));
-      runTicks(c, Math.min(TICKS_PER_DAY, Math.max(0, Math.floor(test.ticks))), `test ${name}`);
+      runTicks(c, Math.min(TEST_MAX_TICKS, Math.max(0, Math.floor(test.ticks))), `test ${name}`);
       const r = runModuleCode(() => test.check(m.api));
       if (faults.length > nf) {
         recordErrors();
@@ -264,13 +355,13 @@ function checkShapeOfDef(def: ModuleDef, id: string): string | null {
   if (!Array.isArray(tests) || tests.length < 1 || tests.length > 3) return 'the module needs 1–3 tests';
   for (const t of tests) {
     if (!t || typeof t.check !== 'function') return 'every test needs a check(api) function';
-    if (typeof t.ticks !== 'number' || !(t.ticks >= 0 && t.ticks <= TICKS_PER_DAY)) return `test ticks must be a number from 0 to ${TICKS_PER_DAY}`;
-    if (t.start !== undefined && t.start !== 'dawn' && t.start !== 'dusk') return "test start must be 'dawn' or 'dusk'";
+    if (typeof t.ticks !== 'number' || !(t.ticks >= 0 && t.ticks <= TEST_MAX_TICKS)) return `test ticks must be a number from 0 to ${TEST_MAX_TICKS}`;
+    if (t.start !== undefined && !['dawn', 'dusk', 'night'].includes(t.start)) return "test start must be 'dawn', 'dusk' or 'night'";
   }
   if (def.hooks !== undefined && (typeof def.hooks !== 'object' || def.hooks === null)) return 'hooks must be an object';
+  for (const k of Object.keys(def.hooks ?? {})) if (!(HOOKS as readonly string[]).includes(k)) return `unknown hook '${k}' (allowed: ${HOOKS.join(', ')})`;
   for (const b of def.behaviors ?? []) {
     if (!b || typeof b.id !== 'string' || typeof b.score !== 'function' || typeof b.act !== 'function') return 'every behavior needs id, score(api, e) and act(api, e)';
-    if ((CORE_BEHAVIORS as readonly string[]).includes(b.id)) return `behavior id '${b.id}' collides with a core behavior; use api.ent.suppress to override core behaviors`;
   }
   return null;
 }

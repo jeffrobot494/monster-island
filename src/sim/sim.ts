@@ -11,12 +11,12 @@ import { populate } from './populate';
 import { stepHuman, villageHour, villageMidnight, foodTick } from './village';
 import { stepMonster, monsterMidnight } from './monster-ai';
 import { stepCorpse, stepBurning, stepAnimal } from './combat';
-import { stepChampion, championDawn, type Order } from './champion';
+import { stepChampion, championDawn, checkSuccession, type Order } from './champion';
 import { judgment } from './favor';
 import { updateVision } from './vision';
 
 export const ENTITY_CAP = 600;
-export const MAX_REPATHS_PER_TICK = 8;
+export const MAX_REPATHS_PER_TICK = 4;
 /** Module behaviors must score above this to take an inhabitant away from its core AI for a tick. */
 export const CORE_BASELINE = 50;
 export const LOCKED_STATES = new Set(['captive', 'downed', 'bound', 'carry', 'sacrifice', 'dead']);
@@ -74,7 +74,7 @@ export interface Emote {
 }
 
 export interface Alert {
-  kind: 'scream' | 'missing' | 'shofar' | 'judgment' | 'lair' | 'death' | 'info' | 'champion' | 'forbidden' | 'gameover';
+  kind: 'scream' | 'missing' | 'shofar' | 'judgment' | 'lair' | 'death' | 'info' | 'champion' | 'forbidden' | 'gameover' | 'altar' | 'creation';
   text: string;
   /** entity to point at (scream) */
   ent?: number;
@@ -121,6 +121,9 @@ export class Sim {
   costTables = new Map<string, CostTable>();
   private costVersion = -1;
   rulesVersion = 0;
+  /** bumped when a module changes tiles (work-site caches rebuild) */
+  tileEpoch = 0;
+  productionRules: { owner: string; fn: (job: string) => number | undefined }[] = [];
   repathQueue: number[] = [];
   repathsThisTick = 0;
 
@@ -139,6 +142,7 @@ export class Sim {
   pendingCreations: CreationRequest[] = [];
   domainHistory: Record<Faction, { night: number; domain: string }[]> = { human: [], monster: [] };
   nightIndex = 0;
+  lastJudgedCalDay = -1;
   creations: CreationRecord[] = [];
   missingSystems = ['Pain', 'Aging', 'Desire and birth', 'Cooking and the oven', 'Hunger', 'Sleep', 'Metalworking', 'Speech among monsters'];
   championId = -1;
@@ -175,8 +179,10 @@ export class Sim {
     };
   }
 
+  /** 1-based game day; an island created in the afternoon doesn't count its first midnight (R3) */
   get day(): number {
-    return calDay(this.clockMs) - calDay(this.createdClock) + 1;
+    const d = calDay(this.clockMs) - calDay(this.createdClock);
+    return Math.max(1, d + (hourOf(this.createdClock) >= 12 ? 0 : 1));
   }
 
   get hour(): number {
@@ -314,7 +320,10 @@ export class Sim {
 
   /** Movement class used for cost tables and rules.moveCost. */
   moveKey(e: Entity): string {
-    if (e.monster) return `monster:${e.monster.archetype}`;
+    if (e.monster) {
+      const lost = !!e.zones?.sig && e.zones.sig.state !== 'ok';
+      return `monster:${e.monster.archetype}|${e.monster.flies && !lost ? 'f' : ''}${e.monster.swims && !lost ? 's' : ''}`;
+    }
     return e.kind;
   }
 
@@ -327,14 +336,14 @@ export class Sim {
     let t = this.costTables.get(key);
     if (!t) {
       t = new Map();
-      const plain = key.split(':')[0];
-      const arch = key.startsWith('monster:') ? key.slice(8) : '';
-      const flies = arch === 'saraph';
-      const swims = arch === 'rahab';
+      const [named, flags = ''] = key.split('|');
+      const plain = named.split(':')[0];
+      const flies = flags.includes('f');
+      const swims = flags.includes('s');
       for (const [id, d] of this.grid.defs) {
         let blocked = false, best: number | undefined;
         for (const r of this.ruleFns) {
-          for (const k of plain === key ? [key] : [key, plain]) {
+          for (const k of plain === named ? [named] : [named, plain]) {
             let c: number | undefined;
             try {
               c = r.fn(k, id);
@@ -351,6 +360,7 @@ export class Sim {
         if (flies) base = id === 'deep-water' ? 2 : 1;
         if (swims && id === 'shallow-water') base = 1.3;
         if (plain === 'animal' && id === 'road') base = 3;
+        if (plain === 'monster' && isFinite(base) && !flies) base = 1 + (base - 1) / 2; // monsters pay half the terrain penalty
         t.set(id, blocked ? Infinity : best !== undefined ? Math.max(0.05, best) : base);
       }
       this.costTables.set(key, t);
@@ -389,6 +399,7 @@ export class Sim {
   }
 
   tileChanged(i: number) {
+    this.tileEpoch++;
     for (const e of this.ents.values()) if (e.path && e.path.pts.includes(i)) this.requeue(e);
   }
 
@@ -521,9 +532,13 @@ export class Sim {
       if (live) for (const l of this.listeners) l.onDawn?.();
     }
     if (h === 18 && live) for (const l of this.listeners) l.onDusk?.();
+    this.checkGameOver();
   }
 
   private midnight() {
+    const cd = calDay(this.clockMs);
+    if (cd === this.lastJudgedCalDay) return; // never twice for one date (R2)
+    this.lastJudgedCalDay = cd;
     this.nightIndex++;
     judgment(this);
     villageMidnight(this);
@@ -566,6 +581,11 @@ export class Sim {
       }
     }
     if (this.tick % 5 === 0) updateVision(this);
+    if (this.championPendingDawn) checkSuccession(this);
+    if (this.alarmUntil > this.tick && this.tick % 50 === 0) {
+      const V = this.layout.village;
+      if (!this.monsters().some((m) => m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < 22)) this.alarmUntil = 0;
+    }
     for (const l of this.listeners) l.onTick?.();
     this.checkGameOver();
   }
@@ -603,7 +623,7 @@ export class Sim {
     if (this.gameOver) return;
     let humans = 0, monsters = 0;
     for (const e of this.ents.values()) {
-      if (e.kind === 'human') humans++;
+      if (e.kind === 'human' && e.id !== this.championId) humans++;
       else if (e.kind === 'monster') monsters++;
     }
     if (monsters === 0 || humans === 0) {

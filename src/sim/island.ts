@@ -35,9 +35,9 @@ export class Island {
     this.runtime = new ModuleRuntime(sim, opts);
   }
 
-  static create(seed: number, opts: RuntimeOptions): Island {
+  static create(seed: number, clockMs: number, timescale: number, opts: RuntimeOptions): Island {
     const sim = new Sim(seed);
-    sim.generate();
+    sim.generate(clockMs, timescale);
     return new Island(sim, opts);
   }
 
@@ -75,7 +75,7 @@ export class Island {
     this.runtime.install(id, def, true);
     this.manifest.push({
       id, title: def.title, description: def.description ?? '', status: 'active',
-      dayInstalled: this.sim.time.day, requires: [...(def.requires ?? [])],
+      dayInstalled: this.sim.day, requires: [...(def.requires ?? [])],
     });
   }
 

@@ -1,17 +1,25 @@
-// The host side of the module contract (§5): per-module api, frozen views, attribution, caps, faults.
+// The host side of the creation-module contract (§11.3–11.5, R25–R27): per-module api, frozen views, attribution,
+// caps, faults, quarantine.
 import { Rng, hashSeed } from './rng';
-import { CORE_BEHAVIORS, ENTITY_CAP, type BehaviorEntry, type Sim, type SimListener } from './sim';
-import { timeInfo } from './time';
+import { type BehaviorEntry, type DamageInfo, type DeathInfo, type Sim, type SimListener } from './sim';
 import { SIZE } from './world';
-import { STATS, type Atmosphere, type EmitterDef, type Entity, type Faction, type ShapeDef, type ShapePart, type Stat } from './types';
+import { DMG_TYPES, JOBS, STATS, type Atmosphere, type EmitterDef, type Entity, type Faction, type Job, type ShapeDef, type ShapePart, type Stat } from './types';
+import { applyDamage, heal, initZones, kill, monsterMaxHp, humanMaxHp } from './combat';
+import { REGION_NAMES } from './island-gen';
+import { addNewcomer } from './village';
+import { cs } from './champion';
+import { monsterActive } from './monster-ai';
 
 export interface ModuleTest {
   name: string;
-  start?: 'dawn' | 'dusk';
+  start?: 'dawn' | 'dusk' | 'night';
   ticks: number;
   setup?: (api: any) => void;
   check: (api: any) => unknown;
 }
+
+export const HOOKS = ['onTick', 'onHour', 'onDawn', 'onDusk', 'onMidnight', 'onSpawn', 'onDeath', 'onDamage', 'onSacrifice', 'onCapture', 'onArrive'] as const;
+export type HookName = (typeof HOOKS)[number];
 
 export interface ModuleDef {
   id: string;
@@ -20,9 +28,13 @@ export interface ModuleDef {
   requires?: string[];
   define?: (api: any) => void;
   init?: (api: any) => void;
-  hooks?: Partial<Record<'onTick' | 'onDawn' | 'onDusk' | 'onSpawn' | 'onDeath' | 'onEat' | 'onArrive', (...a: any[]) => unknown>>;
+  hooks?: Partial<Record<HookName, (...a: any[]) => unknown>>;
   behaviors?: { id: string; appliesTo?: (api: any, e: any) => unknown; score: (api: any, e: any) => number; act: (api: any, e: any) => void }[];
-  rules?: { moveCost?: (kind: string, tile: string) => number | undefined };
+  rules?: {
+    moveCost?: (kind: string, tile: string) => number | undefined;
+    damage?: (info: DamageInfo) => number | undefined;
+    production?: (job: string) => number | undefined;
+  };
   teardown?: (api: any) => void;
   tests?: ModuleTest[];
 }
@@ -51,12 +63,13 @@ export interface ModuleRecord {
   setTileCount: number;
   logDay: number;
   logCount: number;
+  foodDay: number;
+  foodCount: number;
   shapes: Set<string>;
   emitters: Set<string>;
   tiles: Set<string>;
-  foods: Set<string>;
-  timeMs: number; // accumulated since the last stats sample
-  visible: VisibleEffect | null; // first visible effect
+  timeMs: number;
+  visible: VisibleEffect | null;
   visibleCount: number;
 }
 
@@ -88,10 +101,12 @@ export interface RuntimeOptions {
   onVisible?: (id: string, v: VisibleEffect) => void;
 }
 
-const RESERVED_KINDS = new Set(['monster', 'human', 'house', 'shrine', 'gravestone', 'berry-bush']);
+export const CORE_KINDS = new Set(['human', 'monster', 'animal', 'corpse', 'part', 'blood', 'structure']);
 const HEX = /^#[0-9a-fA-F]{6}$/;
 export const MODULE_STATE_CAP = 8 * 1024;
-const CAPS = { spawned: 150, shapes: 8, emitters: 6, tiles: 4, foods: 3, setTilePerDay: 300, attached: 32, logsPerDay: 30, schedules: 200 };
+export const MODULE_ENTITY_BUDGET = 400;
+const CAPS = { spawned: 150, shapes: 8, emitters: 6, tiles: 4, setTilePerDay: 300, attached: 40, logsPerDay: 30, schedules: 200, foodPerDay: 300 };
+const CORE_STATES = new Set(['flee', 'go-home', 'hide', 'rest', 'return', 'hunt', 'prowl', 'idle']);
 
 class ApiError extends Error {}
 
@@ -104,8 +119,7 @@ function num(v: unknown, name: string, min = -Infinity, max = Infinity): number 
   return v;
 }
 function int(v: unknown, name: string, min: number, max: number): number {
-  const n = num(v, name, min, max);
-  return Math.floor(n);
+  return Math.floor(num(v, name, min, max));
 }
 function color(v: unknown, name: string): string {
   if (typeof v !== 'string' || !HEX.test(v)) fail(`${name} must be a '#rrggbb' color (got ${JSON.stringify(v)})`);
@@ -124,6 +138,16 @@ export function moduleLine(stack: string | undefined): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/** Tiles modules may never change: walls, gates, altars, lairs (±1). */
+export function protectedTile(sim: Sim, x: number, z: number): boolean {
+  const L = sim.layout;
+  if (sim.grid.get(x, z) === 'wall') return true;
+  const near = (p: { x: number; z: number }, r = 1) => Math.abs(p.x - x) <= r && Math.abs(p.z - z) <= r;
+  if (L.gates.some((g) => near(g, 2)) || near(L.villageAltar) || near(L.highAltar, 2)) return true;
+  for (let r = 1; r <= 6; r++) if (near(L.lairs[r])) return true;
+  return Math.hypot(x - L.village.x, z - L.village.z) < L.wallRadius;
+}
+
 export class ModuleRuntime implements SimListener {
   mods: ModuleRecord[] = [];
   byId = new Map<string, ModuleRecord>();
@@ -136,7 +160,6 @@ export class ModuleRuntime implements SimListener {
     sim.listeners.push(this);
   }
 
-  /** Provide saved module data; applied as each module is (re)installed with first=false. */
   restore(saved: SavedModules | null) {
     this.saved = saved;
     if (saved) this.schedules = saved.schedules.map((s) => ({ ...s }));
@@ -144,19 +167,12 @@ export class ModuleRuntime implements SimListener {
 
   // ---------- install ----------
 
-  /**
-   * Install a module. first=true runs define+init (first install); first=false runs define only (reload).
-   * Throws on a bad def or a define/init error (the caller decides whether that's fatal).
-   */
   install(id: string, def: ModuleDef, first: boolean, status: 'active' | 'quarantined' = 'active') {
     if (!def || typeof def !== 'object') throw new Error('default export must be an object');
     if (def.id !== id) throw new Error(`module id must be '${id}' (got '${def.id}')`);
     if (typeof def.title !== 'string' || !def.title) throw new Error('module must have a title');
     if (this.byId.has(id)) throw new Error(`module '${id}' is already installed`);
-    for (const r of def.requires ?? []) {
-      const dep = this.byId.get(r);
-      if (!dep) throw new Error(`requires '${r}', which is not installed`);
-    }
+    for (const r of def.requires ?? []) if (!this.byId.get(r)) throw new Error(`requires '${r}', which is not installed`);
     const saved = this.saved?.mods[id];
     const mod: ModuleRecord = {
       id, def, status, phase: 'define', api: null,
@@ -164,8 +180,8 @@ export class ModuleRuntime implements SimListener {
       tileData: new Map(!first && saved ? saved.tileData.map(([i, o]) => [i, structuredClone(o)]) : []),
       rng: new Rng(!first && saved ? saved.rng : hashSeed(this.sim.seed, 'mod', id)),
       listeners: new Map(), faultDay: -1, faultCount: 0, totalFaults: saved?.totalFaults ?? 0,
-      setTileDay: -1, setTileCount: 0, logDay: -1, logCount: 0,
-      shapes: new Set(), emitters: new Set(), tiles: new Set(), foods: new Set(),
+      setTileDay: -1, setTileCount: 0, logDay: -1, logCount: 0, foodDay: -1, foodCount: 0,
+      shapes: new Set(), emitters: new Set(), tiles: new Set(),
       timeMs: 0, visible: null, visibleCount: 0,
     };
     if (!first && saved) mod.status = saved.status;
@@ -184,7 +200,6 @@ export class ModuleRuntime implements SimListener {
         this.uninstallRaw(mod);
         throw err;
       }
-      // a reloaded module whose define throws can't run; keep it, quarantined
       mod.phase = 'run';
       this.quarantine(mod, `define failed on load: ${(err as Error)?.message}`);
       return mod;
@@ -200,7 +215,6 @@ export class ModuleRuntime implements SimListener {
     return r;
   }
 
-  /** Remove every registration of a failed first install (used only when define/init throws). */
   private uninstallRaw(mod: ModuleRecord) {
     this.deactivate(mod);
     this.mods = this.mods.filter((m) => m !== mod);
@@ -208,7 +222,6 @@ export class ModuleRuntime implements SimListener {
     for (const s of mod.shapes) this.sim.shapes.delete(s);
     for (const s of mod.emitters) this.sim.emitters.delete(s);
     for (const t of mod.tiles) this.sim.grid.removeTileType(t);
-    for (const f of mod.foods) this.sim.foodKinds.delete(f);
     for (const e of [...this.sim.ents.values()]) if (e.owner === mod.id) this.sim.remove(e);
     for (const e of this.sim.ents.values()) delete e.data[mod.id];
     this.schedules = this.schedules.filter((s) => s.mod !== mod.id);
@@ -221,7 +234,7 @@ export class ModuleRuntime implements SimListener {
       const entry: BehaviorEntry = {
         id: b.id,
         owner: mod.id,
-        appliesTo: (e) => (b.appliesTo ? !!this.call(mod, `behavior ${b.id}.appliesTo`, () => b.appliesTo!(mod.api, this.view(e))) : true),
+        appliesTo: (e) => e.id !== this.sim.championId && (b.appliesTo ? !!this.call(mod, `behavior ${b.id}.appliesTo`, () => b.appliesTo!(mod.api, this.view(e))) : true),
         score: (e) => {
           const s = this.call(mod, `behavior ${b.id}.score`, () => b.score(mod.api, this.view(e)));
           return typeof s === 'number' ? s : 0;
@@ -233,24 +246,41 @@ export class ModuleRuntime implements SimListener {
       };
       this.sim.behaviors.push(entry);
     }
-    const mc = def.rules?.moveCost;
-    if (typeof mc === 'function') {
-      this.sim.ruleFns.push({
-        owner: mod.id,
-        fn: (kind, tile) => {
-          const r = this.call(mod, 'rules.moveCost', () => mc(kind, tile));
-          return typeof r === 'number' ? r : undefined;
-        },
-      });
+    const rules = def.rules ?? {};
+    if (typeof rules.moveCost === 'function') {
+      const mc = rules.moveCost;
+      this.sim.ruleFns.push({ owner: mod.id, fn: (kind, tile) => {
+        const r = this.call(mod, 'rules.moveCost', () => mc(kind, tile));
+        return typeof r === 'number' ? r : undefined;
+      } });
       this.sim.invalidateCosts();
+    }
+    if (typeof rules.damage === 'function') {
+      const dm = rules.damage;
+      this.sim.damageRules.push({ owner: mod.id, fn: (info) => {
+        const r = this.call(mod, 'rules.damage', () => dm(Object.freeze({ ...info })));
+        if (typeof r === 'number' && r !== 1) this.credit(mod, 'law', SIZE / 2, SIZE / 2);
+        return typeof r === 'number' ? r : undefined;
+      } });
+    }
+    if (typeof rules.production === 'function') {
+      const pr = rules.production;
+      this.sim.productionRules.push({ owner: mod.id, fn: (job) => {
+        const r = this.call(mod, 'rules.production', () => pr(job));
+        if (typeof r === 'number' && r !== 1) this.credit(mod, 'law', SIZE / 2, SIZE / 2);
+        return typeof r === 'number' ? r : undefined;
+      } });
     }
   }
 
   private deactivate(mod: ModuleRecord) {
-    this.sim.behaviors = this.sim.behaviors.filter((b) => b.owner !== mod.id);
-    const hadRules = this.sim.ruleFns.some((r) => r.owner === mod.id);
-    this.sim.ruleFns = this.sim.ruleFns.filter((r) => r.owner !== mod.id);
-    if (hadRules) this.sim.invalidateCosts();
+    const s = this.sim;
+    s.behaviors = s.behaviors.filter((b) => b.owner !== mod.id);
+    const hadRules = s.ruleFns.some((r) => r.owner === mod.id);
+    s.ruleFns = s.ruleFns.filter((r) => r.owner !== mod.id);
+    s.damageRules = s.damageRules.filter((r) => r.owner !== mod.id);
+    s.productionRules = s.productionRules.filter((r) => r.owner !== mod.id);
+    if (hadRules) s.invalidateCosts();
   }
 
   quarantine(mod: ModuleRecord, reason: string) {
@@ -258,7 +288,7 @@ export class ModuleRuntime implements SimListener {
     mod.status = 'quarantined';
     this.deactivate(mod);
     if (was !== 'quarantined' || reason.startsWith('define failed')) {
-      this.sim.log(`The work "${mod.def.title}" falters and is stilled (${reason}).`, 2, mod.id, 'quarantine');
+      this.sim.log(`The creation "${mod.def.title}" falters and is stilled (${reason}).`, 2, mod.id, 'quarantine');
       this.opts.onQuarantine?.(mod.id, reason);
     }
   }
@@ -266,7 +296,7 @@ export class ModuleRuntime implements SimListener {
   setStatus(id: string, status: 'active' | 'quarantined') {
     const mod = this.byId.get(id);
     if (!mod || mod.status === status) return;
-    if (status === 'quarantined') this.quarantine(mod, 'disabled by the petitioner');
+    if (status === 'quarantined') this.quarantine(mod, 'disabled by the player');
     else {
       mod.status = 'active';
       mod.faultCount = 0;
@@ -276,7 +306,6 @@ export class ModuleRuntime implements SimListener {
 
   // ---------- calls & faults ----------
 
-  /** Run module code with fault capture and timing. Returns undefined on fault or if inactive. */
   call<T>(mod: ModuleRecord, hook: string, fn: () => T): T | undefined {
     if (mod.status !== 'active') return undefined;
     this.viewCache.clear();
@@ -294,7 +323,7 @@ export class ModuleRuntime implements SimListener {
   }
 
   fault(mod: ModuleRecord, hook: string, err: unknown) {
-    const day = this.sim.time.day;
+    const day = this.sim.day;
     if (mod.faultDay !== day) {
       mod.faultDay = day;
       mod.faultCount = 0;
@@ -302,7 +331,7 @@ export class ModuleRuntime implements SimListener {
     mod.faultCount++;
     mod.totalFaults++;
     const e = err as Error;
-    const message = e instanceof Error ? `${e.name === 'ApiError' || e instanceof ApiError ? 'api: ' : `${e.name}: `}${e.message}` : String(err);
+    const message = e instanceof Error ? `${e instanceof ApiError ? 'api: ' : `${e.name}: `}${e.message}` : String(err);
     this.opts.onFault?.({ id: mod.id, hook, error: message, stack: e?.stack, line: moduleLine(e?.stack) });
     if (mod.faultCount > 5 && mod.status === 'active') this.quarantine(mod, `more than 5 faults today; last: ${message}`);
   }
@@ -320,12 +349,21 @@ export class ModuleRuntime implements SimListener {
   view(e: Entity): Readonly<Record<string, unknown>> {
     let v = this.viewCache.get(e.id);
     if (v) return v;
+    const s = this.sim;
+    const zones: string[] = [];
+    if (e.zones) for (const [z, st] of Object.entries(e.zones)) if (st && st.state !== 'ok') zones.push(`${z}:${st.state}`);
     v = Object.freeze({
       id: e.id, kind: e.kind, faction: e.faction, name: e.name, inhabitant: e.inhabitant,
-      x: e.x, z: e.z, hp: e.hp, maxHp: this.sim.stat(e, 'maxHp'), hunger: e.hunger,
-      speed: this.sim.stat(e, 'speed'), strength: this.sim.stat(e, 'strength'), hungerRate: this.sim.stat(e, 'hungerRate'),
-      homeId: e.homeId, behavior: e.behavior, tags: Object.freeze([...e.tags]), owner: e.owner,
-      shape: e.shape, tint: e.tint, scale: e.scale, hidden: e.hidden,
+      x: e.x, z: e.z, hp: e.hp, maxHp: s.stat(e, 'maxHp'), speed: s.stat(e, 'speed'), strength: s.stat(e, 'strength'), sight: s.stat(e, 'sight'),
+      level: e.level, xp: e.xp, state: e.state, downed: e.state === 'downed', champion: e.id === s.championId,
+      job: e.human?.job, homeId: e.human?.homeId, archetype: e.monster?.archetype,
+      enraged: e.monster ? e.monster.enragedUntil > s.clockMs : false,
+      active: e.monster ? monsterActive(s, e) : undefined,
+      flies: e.monster?.flies, swims: e.monster?.swims,
+      lair: e.monster ? Object.freeze({ x: e.monster.lairX, z: e.monster.lairZ }) : undefined,
+      zones: Object.freeze(zones), carrying: e.carrying ?? null, carriedBy: e.carriedBy ?? null,
+      corpse: e.corpse ? Object.freeze({ species: e.corpse.species, maxHp: e.corpse.maxHp, fresh: !e.corpse.bones, bones: e.corpse.bones, faction: e.corpse.faction }) : undefined,
+      tags: Object.freeze([...e.tags]), owner: e.owner, shape: e.shape, tint: e.tint, scale: e.scale, hidden: e.hidden,
     });
     this.viewCache.set(e.id, v);
     return v;
@@ -356,10 +394,12 @@ export class ModuleRuntime implements SimListener {
       for (const e of sim.ents.values()) if (e.owner === mod.id) n++;
       return n;
     };
-    const tileXZ = (x: unknown, z: unknown) => {
-      const ix = int(x, 'x', 0, SIZE - 1), iz = int(z, 'z', 0, SIZE - 1);
-      return [ix, iz] as const;
+    const moduleEntities = () => {
+      let n = 0;
+      for (const e of sim.ents.values()) if (e.owner) n++;
+      return n;
     };
+    const tileXZ = (x: unknown, z: unknown) => [int(x, 'x', 0, SIZE - 1), int(z, 'z', 0, SIZE - 1)] as const;
     const checkShape = (id: unknown) => {
       const s = str(id, 'shape id', 40);
       if (!sim.shapes.has(s)) fail(`unknown shape '${s}' (define it with api.vis.defineShape in define, or use a core shape)`);
@@ -375,28 +415,30 @@ export class ModuleRuntime implements SimListener {
       if (!set.has(id) && set.size >= cap) fail(`at most ${cap} ${what}s per module`);
       set.add(id);
     };
+    const daily = (key: 'setTile' | 'log' | 'food') => {
+      const day = sim.day;
+      if (key === 'setTile') { if (mod.setTileDay !== day) { mod.setTileDay = day; mod.setTileCount = 0; } return; }
+      if (key === 'log') { if (mod.logDay !== day) { mod.logDay = day; mod.logCount = 0; } return; }
+      if (mod.foodDay !== day) { mod.foodDay = day; mod.foodCount = 0; }
+    };
+    const pos = (p: { x: number; z: number }) => Object.freeze({ x: p.x + 0.5, z: p.z + 0.5 });
 
     const world = {
       size: SIZE,
-      tile: (x: unknown, z: unknown) => {
-        const ix = num(x, 'x'), iz = num(z, 'z');
-        return sim.grid.get(Math.floor(ix), Math.floor(iz));
-      },
+      tile: (x: unknown, z: unknown) => sim.grid.get(Math.floor(num(x, 'x')), Math.floor(num(z, 'z'))),
       setTile: (x: unknown, z: unknown, type: unknown) => {
         running('api.world.setTile');
         const [ix, iz] = tileXZ(x, z);
         const t = str(type, 'tile type', 40);
         if (!sim.grid.defs.has(t)) fail(`unknown tile type '${t}'`);
-        const day = sim.time.day;
-        if (mod.setTileDay !== day) {
-          mod.setTileDay = day;
-          mod.setTileCount = 0;
-        }
-        if (sim.grid.get(ix, iz) === t) return;
+        if (protectedTile(sim, ix, iz)) return false;
+        daily('setTile');
+        if (sim.grid.get(ix, iz) === t) return true;
         if (++mod.setTileCount > CAPS.setTilePerDay) fail(`at most ${CAPS.setTilePerDay} setTile calls per module per day`);
         sim.grid.set(ix, iz, t);
         sim.tileChanged(sim.grid.idx(ix, iz));
         rt.credit(mod, 'tile', ix + 0.5, iz + 0.5);
+        return true;
       },
       tileData: (x: unknown, z: unknown) => {
         const [ix, iz] = tileXZ(x, z);
@@ -419,7 +461,7 @@ export class ModuleRuntime implements SimListener {
       countTiles: (type: unknown) => sim.grid.count(str(type, 'tile type', 40)),
       findTiles: (type: unknown, limit?: unknown) => {
         const t = str(type, 'tile type', 40);
-        const max = limit === undefined ? 4096 : int(limit, 'limit', 0, 4096);
+        const max = limit === undefined ? 4096 : int(limit, 'limit', 0, 16384);
         const out: { x: number; z: number }[] = [];
         for (let i = 0; i < sim.grid.types.length && out.length < max; i++) if (sim.grid.types[i] === t) out.push({ x: i % SIZE, z: Math.floor(i / SIZE) });
         return out;
@@ -433,15 +475,15 @@ export class ModuleRuntime implements SimListener {
           const tx = cx + dx, tz = cz + dz;
           if (!sim.grid.inBounds(tx, tz) || sim.grid.get(tx, tz) !== t) continue;
           const d = dx * dx + dz * dz;
-          if (d <= R * R && d < bd) {
-            bd = d;
-            best = { x: tx, z: tz };
-          }
+          if (d <= R * R && d < bd) { bd = d; best = { x: tx, z: tz }; }
         }
         return best;
       },
       height: (x: unknown, z: unknown) => sim.grid.height(Math.floor(num(x, 'x')), Math.floor(num(z, 'z'))),
-      walkable: (kind: unknown, x: unknown, z: unknown) => sim.walkableFor(str(kind, 'kind', 40), Math.floor(num(x, 'x')), Math.floor(num(z, 'z'))),
+      walkable: (kind: unknown, x: unknown, z: unknown) => sim.walkableFor(str(kind, 'kind', 40), num(x, 'x'), num(z, 'z')),
+      regionAt: (x: unknown, z: unknown) => sim.grid.regionAt(num(x, 'x'), num(z, 'z')),
+      regionName: (id: unknown) => REGION_NAMES[int(id, 'region id', 0, 255)] ?? 'the sea',
+      isProtected: (x: unknown, z: unknown) => protectedTile(sim, int(x, 'x', 0, SIZE - 1), int(z, 'z', 0, SIZE - 1)),
     };
 
     const ent = {
@@ -462,7 +504,8 @@ export class ModuleRuntime implements SimListener {
           if (q.kind !== undefined && e.kind !== q.kind) continue;
           if (q.faction !== undefined && e.faction !== q.faction) continue;
           if (q.tag !== undefined && !e.tags.includes(q.tag)) continue;
-          if (q.behavior !== undefined && e.behavior !== q.behavior) continue;
+          if (q.state !== undefined && e.state !== q.state) continue;
+          if (q.job !== undefined && e.human?.job !== q.job) continue;
           if (q.inhabitant !== undefined && e.inhabitant !== !!q.inhabitant) continue;
           if (q.owner !== undefined && e.owner !== q.owner) continue;
           if (near && (e.x - near.x) ** 2 + (e.z - near.z) ** 2 > near.r * near.r) continue;
@@ -478,15 +521,17 @@ export class ModuleRuntime implements SimListener {
         running('api.ent.spawn');
         if (!o || typeof o !== 'object') fail('spawn needs an options object');
         const kind = str(o.kind, 'kind', 32);
-        if (RESERVED_KINDS.has(kind)) fail(`kind '${kind}' is reserved by the core; module entities are never inhabitants`);
+        if (CORE_KINDS.has(kind)) fail(`kind '${kind}' is reserved by the core; module entities are never humans or monsters (use api.village.spawnVillager or api.ent.revive)`);
         const x = num(o.x, 'x', 0, SIZE - 0.001), z = num(o.z, 'z', 0, SIZE - 0.001);
         const shape = checkShape(o.shape);
         const tint = o.tint === undefined ? undefined : color(o.tint, 'tint');
-        const scale = o.scale === undefined ? undefined : num(o.scale, 'scale', 0.1, 5);
+        const scale = o.scale === undefined ? undefined : num(o.scale, 'scale', 0.1, 6);
         const tags = o.tags === undefined ? [] : Array.isArray(o.tags) ? o.tags.map((t: unknown) => str(t, 'tag', 32)) : fail('tags must be an array of strings');
         if (ownedCount() >= CAPS.spawned) fail(`at most ${CAPS.spawned} live spawned entities per module`);
-        if (sim.entityCount() >= ENTITY_CAP) fail(`the island is full (${ENTITY_CAP} entities)`);
+        if (moduleEntities() >= MODULE_ENTITY_BUDGET) fail(`the island holds at most ${MODULE_ENTITY_BUDGET} creation entities`);
         const e = sim.spawn({ kind, x, z, shape, tint, scale, tags, owner: mod.id });
+        if (o.speed !== undefined) e.base.speed = num(o.speed, 'speed', 0, 5);
+        if (o.hp !== undefined) e.hp = e.base.maxHp = num(o.hp, 'hp', 1, 5000);
         for (const l of sim.listeners) if (l !== rt) l.onSpawn?.(e);
         rt.credit(mod, 'spawn', x, z);
         return rt.view(e);
@@ -494,29 +539,33 @@ export class ModuleRuntime implements SimListener {
       remove: (x: unknown) => {
         running('api.ent.remove');
         const e = rt.resolve(x);
-        if (e.inhabitant) {
-          e.harmedBy = mod.id;
-          sim.kill(e, mod.def.title);
-        } else if (e.owner === mod.id) sim.remove(e);
-        else fail(`can only remove your own entities or inhabitants (entity ${e.id} is a '${e.kind}')`);
+        if (e.owner !== mod.id) fail(`can only remove your own entities (entity ${e.id} is a '${e.kind}'); use api.ent.kill or api.ent.damage for creatures`);
+        sim.remove(e);
+      },
+      kill: (x: unknown, o: any = {}) => {
+        running('api.ent.kill');
+        const e = rt.resolve(x);
+        if (!e.inhabitant && e.kind !== 'animal') fail('kill works on humans, monsters and animals; remove your own entities with api.ent.remove');
+        e.harmedBy = mod.id;
+        kill(sim, e, { amount: e.hp, type: o.type ? String(o.type) : 'slash', sourceId: -1, sourceKind: mod.id, deathType: o.deathType });
+        rt.credit(mod, 'kill', e.x, e.z);
       },
       goTo: (x: unknown, gx: unknown, gz: unknown) => {
         running('api.ent.goTo');
         const e = rt.resolve(x);
         return sim.goTo(e, num(gx, 'x', 0, SIZE - 0.001), num(gz, 'z', 0, SIZE - 0.001));
       },
-      moveToward: (x: unknown, gx: unknown, gz: unknown) => {
+      moveToward: (x: unknown, gx: unknown, gz: unknown, speed?: unknown) => {
         running('api.ent.moveToward');
         const e = rt.resolve(x);
-        sim.moveToward(e, num(gx, 'x', 0, SIZE), num(gz, 'z', 0, SIZE));
+        sim.moveToward(e, num(gx, 'x', 0, SIZE), num(gz, 'z', 0, SIZE), speed === undefined ? sim.stat(e, 'speed') : num(speed, 'speed', 0, 10));
       },
       setPos: (x: unknown, px: unknown, pz: unknown) => {
         running('api.ent.setPos');
         const e = rt.resolve(x);
-        const nx = num(px, 'x', 0, SIZE - 0.001), nz = num(pz, 'z', 0, SIZE - 0.001);
-        if (e.inhabitant && !sim.walkableFor(e.kind, Math.floor(nx), Math.floor(nz))) fail(`tile (${Math.floor(nx)},${Math.floor(nz)}) is not walkable for '${e.kind}'`);
-        e.x = nx;
-        e.z = nz;
+        if (e.owner !== mod.id) fail('setPos only moves your own entities (move creatures with goTo or moveToward)');
+        e.x = num(px, 'x', 0, SIZE - 0.001);
+        e.z = num(pz, 'z', 0, SIZE - 0.001);
         sim.stop(e);
       },
       stop: (x: unknown) => sim.stop(rt.resolve(x)),
@@ -524,11 +573,16 @@ export class ModuleRuntime implements SimListener {
         running('api.ent.modify');
         const e = rt.resolve(x);
         if (!STATS.includes(stat as Stat)) fail(`stat must be one of ${STATS.join(', ')}`);
-        const mul = o?.mul === undefined ? 1 : num(o.mul, 'mul', 0, 100);
+        const mul = o?.mul === undefined ? 1 : num(o.mul, 'mul', 0, 20);
         const add = o?.add === undefined ? 0 : num(o.add, 'add', -1000, 1000);
         const m = (e.mods[stat as Stat] ??= {});
+        const before = sim.stat(e, 'maxHp');
         m[mod.id] = { mul, add };
-        if (stat === 'maxHp') e.hp = Math.min(e.hp, sim.stat(e, 'maxHp'));
+        if (stat === 'maxHp') {
+          const after = sim.stat(e, 'maxHp');
+          e.hp = Math.min(after, e.hp + Math.max(0, after - before));
+        }
+        rt.credit(mod, 'modify', e.x, e.z);
       },
       clearModify: (x: unknown, stat: unknown) => {
         const e = rt.resolve(x);
@@ -538,6 +592,7 @@ export class ModuleRuntime implements SimListener {
           delete m[mod.id];
           if (!Object.keys(m).length) delete e.mods[stat as Stat];
         }
+        if (stat === 'maxHp') e.hp = Math.min(e.hp, sim.stat(e, 'maxHp'));
       },
       addTag: (x: unknown, tag: unknown) => {
         const e = rt.resolve(x);
@@ -554,33 +609,79 @@ export class ModuleRuntime implements SimListener {
         e.tags = e.tags.filter((g) => g !== t);
         delete e.tagOwners[t];
       },
-      suppress: (x: unknown, behaviorId: unknown, ticks: unknown) => {
-        running('api.ent.suppress');
+      setCoreState: (x: unknown, state: unknown) => {
+        running('api.ent.setCoreState');
         const e = rt.resolve(x);
-        const b = str(behaviorId, 'behavior id', 40);
-        if (!(CORE_BEHAVIORS as readonly string[]).includes(b) && !sim.behaviors.some((x) => x.id === b)) fail(`unknown behavior '${b}'`);
-        e.suppressed[b] = sim.tick + int(ticks, 'ticks', 1, 18000);
+        const s = str(state, 'state', 20);
+        if (!CORE_STATES.has(s)) fail(`state must be one of ${[...CORE_STATES].join(', ')}`);
+        if (!e.inhabitant || e.id === sim.championId || ['captive', 'downed', 'bound', 'carry', 'sacrifice'].includes(e.state)) return false;
+        if (e.monster && s === 'hunt') {
+          e.monster.huntAt.unshift(sim.clockMs);
+          return true;
+        }
+        e.state = s;
+        e.stateUntil = sim.tick + 80;
+        sim.stop(e);
+        return true;
       },
-      damage: (x: unknown, n: unknown) => {
+      setTrait: (x: unknown, trait: unknown, on: unknown) => {
+        running('api.ent.setTrait');
+        const e = rt.resolve(x);
+        if (!e.monster) fail('setTrait works on monsters');
+        if (trait !== 'flies' && trait !== 'swims') fail("trait must be 'flies' or 'swims'");
+        e.monster[trait] = !!on;
+        sim.stop(e);
+        rt.credit(mod, 'trait', e.x, e.z);
+      },
+      revive: (x: unknown) => {
+        running('api.ent.revive');
+        const c = rt.resolve(x);
+        if (c.kind !== 'corpse' || !c.corpse || c.corpse.bones) fail('revive needs a fresh corpse (not bones)');
+        const data = c.data.__revive as any;
+        if (!data) fail('this corpse cannot be revived');
+        const e: Entity = structuredClone(data);
+        e.id = sim.nextId++;
+        e.x = c.x;
+        e.z = c.z;
+        e.state = e.kind === 'monster' ? 'return' : 'idle';
+        e.roll = 0; e.lift = 0; e.squash = 1; e.path = null; e.want = null; e.target = -1;
+        e.carrying = undefined; e.carriedBy = undefined; e.burnUntil = undefined;
+        initZones(e);
+        e.hp = sim.stat(e, 'maxHp') * 0.5;
+        e.tags = [...e.tags.filter((t) => t !== 'champion'), 'risen'];
+        if (e.human?.job === 'champion') e.human.job = 'farmer';
+        sim.ents.set(e.id, e);
+        for (const o of sim.monsters()) o.monster!.neighbors = o.monster!.neighbors.map((n) => (n === data.id ? e.id : n));
+        sim.remove(c);
+        sim.burst('smoke', e.x, e.z);
+        rt.credit(mod, 'revive', e.x, e.z);
+        return rt.view(e);
+      },
+      damage: (x: unknown, n: unknown, o: any = {}) => {
         running('api.ent.damage');
         const e = rt.resolve(x);
         const v = num(n, 'damage', 0, 10000);
-        if (!e.inhabitant && e.owner !== mod.id) fail('can only damage inhabitants or your own entities');
-        e.hp -= v;
-        if (e.inhabitant) e.harmedBy = mod.id;
-        else if (e.hp <= 0) sim.remove(e);
+        if (e.owner === mod.id) {
+          e.hp -= v;
+          if (e.hp <= 0) sim.remove(e);
+          return { killed: e.hp <= 0, downed: false };
+        }
+        if (!e.inhabitant && e.kind !== 'animal') fail('can only damage humans, monsters, animals or your own entities');
+        const type = o.type === undefined ? 'slash' : str(o.type, 'type', 20);
+        if (!(DMG_TYPES as readonly string[]).includes(type) && !['poison', 'cold', 'magic'].includes(type)) fail(`type must be one of ${DMG_TYPES.join(', ')}, poison, cold, magic`);
+        let sourceId: number | undefined;
+        if (o.source !== undefined) sourceId = rt.resolve(o.source, 'source').id;
+        e.harmedBy = mod.id;
+        rt.credit(mod, 'damage', e.x, e.z);
+        const r = applyDamage(sim, e, v, { type, sourceId });
+        return { killed: r.killed, downed: r.downed };
       },
       heal: (x: unknown, n: unknown) => {
         const e = rt.resolve(x);
         const v = num(n, 'heal', 0, 10000);
-        if (!e.inhabitant) fail('can only heal inhabitants');
-        e.hp = Math.min(sim.stat(e, 'maxHp'), e.hp + v);
-      },
-      feed: (x: unknown, n: unknown) => {
-        const e = rt.resolve(x);
-        const v = num(n, 'feed', -100, 100);
-        if (!e.inhabitant) fail('can only feed inhabitants');
-        sim.feed(e, v);
+        if (e.owner === mod.id) { e.hp = Math.min(e.base.maxHp, e.hp + v); return; }
+        if (!e.inhabitant) fail('can only heal humans, monsters or your own entities');
+        heal(sim, e, v);
       },
     };
 
@@ -615,7 +716,7 @@ export class ModuleRuntime implements SimListener {
       },
       setScale: (x: unknown, s: unknown) => {
         const e = rt.resolve(x);
-        e.scale = num(s, 'scale', 0.1, 5);
+        e.scale = num(s, 'scale', 0.1, 6);
       },
       attach: (x: unknown, id: unknown) => {
         running('api.vis.attach');
@@ -626,10 +727,7 @@ export class ModuleRuntime implements SimListener {
         sim.attach(e, em);
         rt.credit(mod, 'particles', e.x, e.z);
       },
-      detach: (x: unknown, id: unknown) => {
-        const e = rt.resolve(x);
-        sim.detach(e, checkEmitter(id));
-      },
+      detach: (x: unknown, id: unknown) => sim.detach(rt.resolve(x), checkEmitter(id)),
       burst: (id: unknown, x: unknown, y: unknown, z: unknown) => {
         running('api.vis.burst');
         const em = checkEmitter(id);
@@ -657,8 +755,10 @@ export class ModuleRuntime implements SimListener {
         if (o.fogColor !== undefined) a.fogColor = color(o.fogColor, 'fogColor');
         if (o.lightTint !== undefined) a.lightTint = color(o.lightTint, 'lightTint');
         if (o.fogDensity !== undefined) a.fogDensity = num(o.fogDensity, 'fogDensity', 0, 1);
+        if (o.darkness !== undefined) a.darkness = num(o.darkness, 'darkness', 0, 1);
+        if (o.light !== undefined) a.light = num(o.light, 'light', 0, 1);
         if (o.weather !== undefined) {
-          if (!['none', 'rain', 'snow'].includes(o.weather)) fail("weather must be 'none', 'rain' or 'snow'");
+          if (!['none', 'rain', 'fog', 'ash'].includes(o.weather)) fail("weather must be 'none', 'rain', 'fog' or 'ash'");
           a.weather = o.weather;
         }
         const before = JSON.stringify(sim.atmosphere);
@@ -674,11 +774,74 @@ export class ModuleRuntime implements SimListener {
       },
     };
 
+    const game = {
+      get day() { return sim.day; },
+      get favorToday() { return Object.freeze({ ...sim.favor }); },
+      get food() { return sim.food; },
+      get foodCap() { return sim.foodCap; },
+      get championId() { return sim.championId; },
+      get villageCenter() { return pos(sim.layout.village); },
+      get villageAltar() { return pos(sim.layout.villageAltar); },
+      get highAltar() { return pos(sim.layout.highAltar); },
+      get villageRadius() { return sim.layout.wallRadius; },
+      get regions() { return Object.freeze(REGION_NAMES.map((name, id) => Object.freeze({ id, name, center: pos(sim.layout.seeds[id]) }))); },
+      get lairs() {
+        return Object.freeze([1, 2, 3, 4, 5, 6].map((r) => {
+          const m = sim.monsters().find((x) => x.monster!.region === r);
+          const s = sim.byRole(`lair:${r}`);
+          return Object.freeze({ region: r, ...pos(sim.layout.lairs[r]), found: !!s?.tags.includes('found'), monsterId: m ? m.id : null });
+        }));
+      },
+      get creations() { return Object.freeze(sim.creations.map((c) => Object.freeze({ title: c.title, god: c.god, domain: c.domain, day: c.day }))); },
+    };
+
+    const village = {
+      addFood: (n: unknown) => {
+        running('api.village.addFood');
+        const v = num(n, 'food', -50, 50);
+        daily('food');
+        if ((mod.foodCount += Math.abs(v)) > CAPS.foodPerDay) fail(`at most ${CAPS.foodPerDay} food per module per day`);
+        sim.food = Math.max(0, Math.min(sim.foodCap, sim.food + v));
+        rt.credit(mod, 'food', sim.layout.village.x, sim.layout.village.z);
+      },
+      spawnVillager: (o: any = {}) => {
+        running('api.village.spawnVillager');
+        const job = o.job === undefined ? undefined : (JOBS as readonly string[]).includes(o.job) ? (o.job as Job) : fail(`job must be one of ${JOBS.join(', ')}`);
+        const level = o.level === undefined ? 1 : int(o.level, 'level', 1, 10);
+        const e = addNewcomer(sim, { job, level });
+        if (!e) return null;
+        rt.credit(mod, 'spawn', e.x, e.z);
+        return rt.view(e);
+      },
+    };
+
+    const monster = {
+      addHunt: (x: unknown, clockMs: unknown) => {
+        running('api.monster.addHunt');
+        const e = rt.resolve(x);
+        if (!e.monster) fail('addHunt needs a monster');
+        if (e.monster.huntAt.length >= 12) return false;
+        e.monster.huntAt.push(num(clockMs, 'clockMs'));
+        e.monster.huntAt.sort((a, b) => a - b);
+        return true;
+      },
+    };
+
+    const champion = {
+      setWeapon: (o: any) => {
+        running('api.champion.setWeapon');
+        const type = str(o?.type ?? 'slash', 'type', 10);
+        if (!(DMG_TYPES as readonly string[]).includes(type)) fail(`type must be one of ${DMG_TYPES.join(', ')}`);
+        cs(sim).weapon = { type, mul: num(o?.mul ?? 1, 'mul', 0.5, 3) };
+      },
+    };
+
     const api = {
       id: mod.id,
       get time() {
-        return timeInfo(sim.tick);
+        return sim.time;
       },
+      perHour: (x: unknown) => (num(x, 'x') * sim.msPerTick) / 3_600_000,
       rand: () => mod.rng.next(),
       randInt: (a: unknown, b: unknown) => mod.rng.int(Math.floor(num(a, 'a')), Math.floor(num(b, 'b'))),
       pick: <T>(arr: T[]) => (Array.isArray(arr) ? mod.rng.pick(arr) : fail('pick needs an array')),
@@ -692,13 +855,12 @@ export class ModuleRuntime implements SimListener {
       },
       schedule: (ticks: unknown, type: unknown, payload?: unknown) => {
         running('api.schedule');
-        const t = int(ticks, 'ticks', 1, 18000);
+        const t = int(ticks, 'ticks', 1, 36000);
         const ty = str(type, 'event type', 40);
         if (rt.schedules.filter((s) => s.mod === mod.id).length >= CAPS.schedules) fail(`at most ${CAPS.schedules} pending schedules per module`);
         rt.schedules.push({ due: sim.tick + t, mod: mod.id, type: ty, payload: payload === undefined ? null : JSON.parse(JSON.stringify(payload)) });
       },
-      world,
-      ent,
+      world, ent, vis, game, village, monster, champion,
       data: (x: unknown) => {
         const e = rt.resolve(x);
         return (e.data[mod.id] ??= {});
@@ -708,25 +870,6 @@ export class ModuleRuntime implements SimListener {
         const d = e.data[str(moduleId, 'module id', 80)];
         return d === undefined ? undefined : Object.freeze(structuredClone(d));
       },
-      food: {
-        register: (kind: unknown, o: any) => {
-          defineOnly('api.food.register');
-          const k = str(kind, 'food kind', 32);
-          if (RESERVED_KINDS.has(k) || k === 'mushroom') fail(`'${k}' is a core kind`);
-          const restores = num(o?.restores, 'restores', 1, 100);
-          let eatableBy: Faction[] | undefined;
-          if (o?.eatableBy !== undefined) {
-            if (!Array.isArray(o.eatableBy) || o.eatableBy.some((f: unknown) => f !== 'monster' && f !== 'human')) fail("eatableBy must be an array of 'monster' | 'human'");
-            eatableBy = [...o.eatableBy];
-          }
-          const existing = sim.foodKinds.get(k);
-          if (existing && existing.owner !== mod.id) fail(`food kind '${k}' is already registered by another module`);
-          if (!existing && mod.foods.size >= CAPS.foods) fail(`at most ${CAPS.foods} food kinds per module`);
-          mod.foods.add(k);
-          sim.foodKinds.set(k, { restores, eatableBy, owner: mod.id });
-        },
-      },
-      vis,
       events: {
         on: (type: unknown, fn: unknown) => {
           defineOnly('api.events.on');
@@ -744,16 +887,13 @@ export class ModuleRuntime implements SimListener {
       log: (text: unknown, importance: unknown = 1) => {
         const t = str(text, 'log text', 200);
         const imp = int(importance, 'importance', 1, 3);
-        const day = sim.time.day;
-        if (mod.logDay !== day) {
-          mod.logDay = day;
-          mod.logCount = 0;
-        }
+        daily('log');
         if (++mod.logCount > CAPS.logsPerDay) return;
         sim.log(t, imp, mod.id);
       },
     };
-    return makeFrozenApi(api);
+    for (const k of ['world', 'ent', 'vis', 'events', 'village', 'monster', 'champion'] as const) Object.freeze(api[k]);
+    return Object.freeze(api);
   }
 
   emit(type: string, payload: unknown, only: string | null) {
@@ -773,20 +913,18 @@ export class ModuleRuntime implements SimListener {
 
   // ---------- SimListener: dispatch in activation order ----------
 
-  private each(hook: keyof NonNullable<ModuleDef['hooks']>, ...args: (Entity | undefined)[]) {
+  private each(hook: HookName, ...args: unknown[]) {
     for (const m of this.mods) {
       const fn = m.def.hooks?.[hook];
       if (typeof fn !== 'function' || m.status !== 'active') continue;
-      this.call(m, hook, () => fn(m.api, ...args.map((a) => (a ? this.view(a) : a))));
+      this.call(m, hook, () => fn(m.api, ...args.map((a) => (a && typeof a === 'object' && 'kind' in (a as object) && 'id' in (a as object) ? this.view(a as Entity) : a))));
     }
   }
 
-  onDawn() {
-    this.each('onDawn');
-  }
-  onDusk() {
-    this.each('onDusk');
-  }
+  onHour() { this.each('onHour'); }
+  onDawn() { this.each('onDawn'); }
+  onDusk() { this.each('onDusk'); }
+  onMidnight() { this.each('onMidnight'); }
   onTick() {
     if (this.schedules.length) {
       const due = this.schedules.filter((s) => s.due <= this.sim.tick);
@@ -800,17 +938,16 @@ export class ModuleRuntime implements SimListener {
     }
     this.each('onTick');
   }
-  onSpawn(e: Entity) {
-    this.each('onSpawn', e);
+  onSpawn(e: Entity) { this.each('onSpawn', e); }
+  onDeath(e: Entity, info: DeathInfo) {
+    // remember enough to revive (api.ent.revive)
+    this.each('onDeath', e, Object.freeze({ ...info }));
   }
-  onDeath(e: Entity) {
-    this.each('onDeath', e);
-  }
-  onEat(e: Entity, food: Entity) {
-    this.each('onEat', e, food);
-  }
+  onDamage(e: Entity, info: DeathInfo) { this.each('onDamage', e, Object.freeze({ ...info })); }
+  onSacrifice(info: { faction: Faction; altar: string; victimKind: string; favor: number }) { this.each('onSacrifice', Object.freeze({ ...info })); }
+  onCapture(m: Entity, v: Entity) { this.each('onCapture', m, v); }
   onArrive(e: Entity) {
-    this.each('onArrive', e);
+    if (e.owner) this.each('onArrive', e);
   }
 
   // ---------- persistence ----------
@@ -839,7 +976,6 @@ export class ModuleRuntime implements SimListener {
     return out;
   }
 
-  /** Enforce the per-module state cap; returns ids that were quarantined. */
   enforceStateCaps(): string[] {
     const hit: string[] = [];
     for (const m of this.mods) {
@@ -850,12 +986,6 @@ export class ModuleRuntime implements SimListener {
     }
     return hit;
   }
-}
-
-function makeFrozenApi<T extends Record<string, any>>(api: T): T {
-  // freeze the namespaces, never through getters (api.state is the module's own mutable object)
-  for (const k of ['world', 'ent', 'vis', 'food', 'events']) Object.freeze(api[k]);
-  return Object.freeze(api);
 }
 
 export function validateShape(def: any): ShapeDef {
@@ -901,3 +1031,6 @@ export function validateEmitter(def: any): EmitterDef {
   if (def.glow !== undefined) e.glow = !!def.glow;
   return e;
 }
+
+void monsterMaxHp;
+void humanMaxHp;
