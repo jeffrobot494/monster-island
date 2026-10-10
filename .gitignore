@@ -2,3 +2,4 @@ node_modules
 dist
 .env.local
 dev/.vite.pid
+dev/.cdp.pid

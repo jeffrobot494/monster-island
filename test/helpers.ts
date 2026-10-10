@@ -12,6 +12,8 @@ export async function nodeLoader(_id: string, source: string): Promise<ModuleDef
 
 export const now = () => performance.now();
 
-export function refSource(name: 'fireflies' | 'wading'): string {
+export function refSource(name: 'war-hounds' | 'poison-fog'): string {
   return readFileSync(new URL(`../src/god/reference-modules/${name}.js`, import.meta.url), 'utf8');
 }
+
+export const START = Date.UTC(2026, 9, 10, 8, 0);

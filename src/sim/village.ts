@@ -54,7 +54,7 @@ export function humanSpeed(sim: Sim, e: Entity): number {
 }
 
 /** Pick the nearest work tile that still has stock (sites near the village run out first → drift outward). */
-function pickSite(sim: Sim, e: Entity): number {
+export function pickSite(sim: Sim, e: Entity): number {
   const job = e.human!.job;
   if (job === 'guard') {
     const guards = sim.humans().filter((h) => h.human!.job === 'guard').sort((a, b) => a.id - b.id);

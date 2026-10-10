@@ -1,5 +1,15 @@
 import { AiRateLimitError, type AiProvider, type AiRequest, type AiResponse } from './ai-provider';
 
+function devToken(): string {
+  try {
+    const p = new URLSearchParams(location.search).get('token');
+    if (p) localStorage.setItem('devAiToken', p);
+    return localStorage.getItem('devAiToken') ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /** Local platform default: the Vite dev server spawns `claude -p` (see dev/claude-code-middleware.ts). */
 export class ClaudeCodeProvider implements AiProvider {
   readonly name = 'claude-code';
@@ -18,7 +28,7 @@ export class ClaudeCodeProvider implements AiProvider {
     const { onProgress, ...wire } = req;
     const r = await fetch('/dev-ai/claude-code', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-dev-ai-token': devToken() },
       body: JSON.stringify(wire),
     });
     if (!r.ok || !r.body) {

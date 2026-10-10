@@ -1,8 +1,8 @@
-import type { MainToSim, ModuleSource, SimToMain } from './protocol';
+import type { MainToSim, SimToMain } from './protocol';
 
 type Handler = (m: SimToMain) => void;
 
-const WATCHDOG_MS = 5000;
+const WATCHDOG_MS = 15000;
 
 /** Main-thread owner of the sim worker: messaging, sequence checks, and the hang watchdog (§7). */
 export class SimClient {
@@ -11,7 +11,6 @@ export class SimClient {
   private lastFrameAt = performance.now();
   private awaitingResync = false;
   paused = false;
-  speed = 1;
   onMessage: Handler = () => {};
   onHang: () => void = () => {};
 
@@ -19,7 +18,7 @@ export class SimClient {
     setInterval(() => this.checkWatchdog(), 1000);
   }
 
-  start(init: { save: string | null; seed: number; modules: ModuleSource[]; quarantine?: string[]; skip?: number }) {
+  start(init: Omit<Extract<MainToSim, { type: 'init' }>, 'type'>) {
     this.worker?.terminate();
     this.worker = new Worker(new URL('./workers/sim.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (ev: MessageEvent<SimToMain>) => this.handle(ev.data);
@@ -27,20 +26,17 @@ export class SimClient {
     this.worker.onmessageerror = () => console.error('[sim worker] message error');
     this.lastSeq = 0;
     this.lastFrameAt = performance.now() + 10000; // grace period while loading
-    this.post({ type: 'init', ...init, speed: this.speed, paused: this.paused });
+    this.post({ type: 'init', ...init });
   }
 
   post(m: MainToSim) {
     this.worker?.postMessage(m);
   }
 
-  setControl(c: { speed?: number; paused?: boolean }) {
-    if (c.speed !== undefined) this.speed = c.speed;
-    if (c.paused !== undefined) {
-      if (this.paused && !c.paused) this.lastFrameAt = performance.now();
-      this.paused = c.paused;
-    }
-    this.post({ type: 'control', ...c });
+  setPaused(paused: boolean) {
+    if (this.paused && !paused) this.lastFrameAt = performance.now() + 5000;
+    this.paused = paused;
+    this.post({ type: 'control', paused });
   }
 
   private handle(m: SimToMain) {

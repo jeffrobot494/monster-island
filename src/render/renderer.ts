@@ -1,63 +1,89 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Terrain } from './terrain';
-import { ShapeRenderer } from './shapes';
+import { ShapeRenderer, type EntityVis } from './shapes';
 import { Particles } from './particles';
 import { Sprites } from './sprites';
 import { Sky } from './sky';
-import { ENT_STRIDE, type FramePayload, type SimToMain } from '../protocol';
+import { ENT_STRIDE, F_BOUND, F_CHAMPION, F_DOWNED, F_DRAGGED, F_TELEGRAPH, type FramePayload, type SimToMain } from '../protocol';
 import type { ShapeDef } from '../sim/types';
-import { TICKS_PER_SECOND } from '../sim/time';
+import { TICKS_PER_SECOND } from '../sim/clock';
 
 type FullState = Extract<SimToMain, { type: 'fullState' }>;
 type Defs = Extract<SimToMain, { type: 'defs' }>;
+
+const POLAR = (25 * Math.PI) / 180;
+
+class RingPool {
+  group = new THREE.Group();
+  private pool: THREE.Mesh[] = [];
+  private used = 0;
+  constructor(private color: string, private inner: number, private opacity: number) {}
+  begin() {
+    this.used = 0;
+  }
+  place(x: number, y: number, z: number, r: number, alpha = 1) {
+    let m = this.pool[this.used];
+    if (!m) {
+      m = new THREE.Mesh(new THREE.RingGeometry(this.inner, 1, 40), new THREE.MeshBasicMaterial({ color: this.color, transparent: true, opacity: this.opacity, depthWrite: false, side: THREE.DoubleSide }));
+      m.rotation.x = -Math.PI / 2;
+      m.renderOrder = 2;
+      this.pool.push(m);
+      this.group.add(m);
+    }
+    this.used++;
+    m.visible = true;
+    m.position.set(x, y + 0.04, z);
+    m.scale.setScalar(r);
+    (m.material as THREE.MeshBasicMaterial).opacity = this.opacity * alpha;
+  }
+  end() {
+    for (let i = this.used; i < this.pool.length; i++) this.pool[i].visible = false;
+  }
+}
 
 export class Renderer {
   renderer: THREE.WebGLRenderer;
   scene = new THREE.Scene();
   camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
   terrain = new Terrain();
   shapes = new ShapeRenderer();
   particles = new Particles();
   sprites = new Sprites();
   sky: Sky;
+  target = new THREE.Vector3(64, 0, 64);
+  dist = 26;
+  mapMode = false;
+  /** camera follows this entity (the champion) unless panning is allowed and the user dragged */
+  followId: number | null = null;
+  panOffset = new THREE.Vector3();
+  hour = 12;
+  light = 1;
+  /** entity the champion is attacking (marker) */
+  targetId: number | null = null;
+  selectedId: number | null = null;
+  private tap: { x: number; z: number; t: number } | null = null;
 
   private lastFrameAt = 0;
   private frameInterval = 100;
-  private tick = 0;
-  private prevTick = 0;
   private clock = new THREE.Clock();
-  private fly: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; t: number; dur: number } | null = null;
   private raycaster = new THREE.Raycaster();
-  private selection: THREE.Mesh;
-  selectedId: number | null = null;
-  speed = 1;
+  private telegraphs = new RingPool('#ff2a1a', 0.86, 0.75);
+  private markers = new RingPool('#ffd84a', 0.8, 0.9);
+  private champRing = new RingPool('#fff0a0', 0.78, 0.7);
+  private ropes = new RingPool('#c8a060', 0.55, 0.95);
+  private rope = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: '#d8b070' }));
+  private fly: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; t: number; dur: number } | null = null;
   paused = false;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: devicePixelRatio < 2 });
     this.renderer.setPixelRatio(Math.min(2, devicePixelRatio));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.camera = new THREE.PerspectiveCamera(30, 1, 0.5, 600);
-    this.camera.position.set(32, 48, 34 + 42);
-    this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.target.set(32, 0, 34);
-    this.controls.enableDamping = true;
-    this.controls.minDistance = 12;
-    this.controls.maxDistance = 140;
-    this.controls.maxPolarAngle = Math.PI * 0.42;
-    this.controls.minPolarAngle = Math.PI * 0.12;
-    this.controls.screenSpacePanning = false;
+    this.camera = new THREE.PerspectiveCamera(40, 1, 0.5, 700);
     this.sky = new Sky(this.scene);
-    this.scene.add(this.terrain.group, this.shapes.group, this.particles.group, this.sprites.group);
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.6, 24), new THREE.MeshBasicMaterial({ color: '#fff6c0', transparent: true, opacity: 0.85, depthWrite: false }));
-    ring.rotation.x = -Math.PI / 2;
-    ring.visible = false;
-    this.selection = ring;
-    this.scene.add(ring);
+    this.scene.add(this.terrain.group, this.shapes.group, this.particles.group, this.sprites.group, this.telegraphs.group, this.markers.group, this.champRing.group, this.ropes.group, this.rope);
     addEventListener('resize', () => this.resize());
     this.resize();
   }
@@ -76,22 +102,19 @@ export class Renderer {
   }
 
   onFullState(s: FullState) {
-    this.terrain.load(s.tiles, s.elev);
+    this.terrain.load(s.tiles, s.elev, s.explored);
     this.shapes.applyFrame(s.ents, ENT_STRIDE, true);
     this.particles.setAttached(s.attached);
     this.sky.atmosphere = { ...s.atmosphere };
     this.particles.weather = s.atmosphere.weather ?? 'none';
-    this.tick = this.prevTick = s.tick;
     this.lastFrameAt = performance.now();
   }
 
   onFrame(f: FramePayload) {
-    const now = performance.now();
-    this.frameInterval = 1000 / TICKS_PER_SECOND / Math.max(0.5, this.speed);
-    this.lastFrameAt = now;
-    this.prevTick = this.tick;
-    this.tick = f.tick;
+    this.frameInterval = 1000 / TICKS_PER_SECOND;
+    this.lastFrameAt = performance.now();
     if (f.tiles.length) this.terrain.applyChanges(f.tiles);
+    if (f.explored.length) this.terrain.fog.mark(f.explored);
     this.shapes.applyFrame(f.ents, ENT_STRIDE, false);
     for (const op of f.emitterOps) {
       if (op.op === 'attach') this.particles.attach(op.ent, op.emitter);
@@ -106,45 +129,131 @@ export class Renderer {
     }
   }
 
-  flyTo(x: number, z: number, dist = 26, dur = 2.2) {
-    const offset = this.camera.position.clone().sub(this.controls.target);
-    this.fly = { from: this.controls.target.clone(), to: new THREE.Vector3(x, 0, z), fromDist: offset.length(), toDist: dist, t: 0, dur };
+  setReveal(on: boolean) {
+    this.terrain.fog.reveal.value = on ? 1 : 0;
   }
 
-  pickAt(clientX: number, clientY: number): number | null {
+  zoom(factor: number) {
+    if (this.mapMode) return;
+    this.dist = Math.min(64, Math.max(12, this.dist * factor));
+  }
+
+  flyTo(x: number, z: number, dist = 26, dur = 2.2) {
+    this.fly = { from: this.target.clone(), to: new THREE.Vector3(x, 0, z), fromDist: this.dist, toDist: dist, t: 0, dur };
+  }
+
+  markTap(x: number, z: number) {
+    this.tap = { x, z, t: this.clock.elapsedTime };
+  }
+
+  /** World point on the terrain under a screen point. */
+  groundAt(clientX: number, clientY: number): { x: number; z: number } | null {
+    this.setRay(clientX, clientY);
+    const hits = this.raycaster.intersectObjects(this.terrain.group.children.filter((c) => !(c instanceof THREE.InstancedMesh)), false);
+    const p = hits[0]?.point;
+    if (p) return { x: p.x, z: p.z };
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.2);
+    const out = new THREE.Vector3();
+    return this.raycaster.ray.intersectPlane(plane, out) ? { x: out.x, z: out.z } : null;
+  }
+
+  private setRay(clientX: number, clientY: number) {
     const r = this.renderer.domElement.getBoundingClientRect();
     const p = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(p, this.camera);
-    return this.shapes.pick(this.raycaster);
+  }
+
+  /** Entity under a tap, generously: direct mesh hit, else the nearest entity within `radius` tiles of the ground point. */
+  pickAt(clientX: number, clientY: number, accept: (v: EntityVis) => boolean, radius = 0.9): number | null {
+    this.setRay(clientX, clientY);
+    const direct = this.shapes.pick(this.raycaster);
+    if (direct !== null) {
+      const v = this.shapes.ents.get(direct);
+      if (v && accept(v)) return direct;
+    }
+    const g = this.groundAt(clientX, clientY);
+    if (!g) return null;
+    let best: number | null = null, bd = radius;
+    for (const v of this.shapes.ents.values()) {
+      if (!accept(v)) continue;
+      const d = Math.hypot(v.x - g.x, v.z - g.z) - 0.25 * v.scale;
+      if (d < bd) { bd = d; best = v.id; }
+    }
+    return best;
   }
 
   render() {
     const dt = Math.min(0.1, this.clock.getDelta());
     const t = this.clock.elapsedTime;
     const alpha = this.paused ? 1 : Math.min(1, (performance.now() - this.lastFrameAt) / this.frameInterval);
-    const tickF = this.prevTick + (this.tick - this.prevTick) * alpha;
-    this.sky.update(tickF);
-    this.terrain.update(t);
-    this.shapes.update(alpha, t, this.sky.night);
-    const pos = (id: number) => this.shapes.positionOf(id);
-    const h = (id: number) => this.shapes.heightOf(id);
-    this.particles.update(this.paused ? 0 : dt, pos, h, this.controls.target);
-    this.sprites.update(t, pos, h);
-    if (this.selectedId !== null) {
-      const p = pos(this.selectedId);
-      this.selection.visible = !!p;
-      if (p) this.selection.position.set(p.x, p.y + 0.03, p.z);
-    } else this.selection.visible = false;
+    // camera
     if (this.fly) {
       const f = this.fly;
       f.t = Math.min(1, f.t + dt / f.dur);
       const e = f.t < 0.5 ? 2 * f.t * f.t : 1 - (-2 * f.t + 2) ** 2 / 2;
-      const offset = this.camera.position.clone().sub(this.controls.target).normalize();
-      this.controls.target.lerpVectors(f.from, f.to, e);
-      this.camera.position.copy(this.controls.target).addScaledVector(offset, f.fromDist + (f.toDist - f.fromDist) * e);
-      if (f.t >= 1) this.fly = null;
+      this.target.lerpVectors(f.from, f.to, e);
+      this.dist = f.fromDist + (f.toDist - f.fromDist) * e;
+      if (f.t >= 1) {
+        this.fly = null;
+        this.panOffset.set(0, 0, 0);
+        this.followHold = t + 3;
+      }
+    } else if (this.mapMode) {
+      this.target.lerp(new THREE.Vector3(64, 0, 66), Math.min(1, dt * 4));
+    } else if (this.followId !== null && t > this.followHold) {
+      const p = this.shapes.positionOf(this.followId);
+      if (p) {
+        const goal = new THREE.Vector3(p.x, 0, p.z).add(this.panOffset);
+        if (goal.distanceTo(this.target) > 25) this.target.copy(goal);
+        else this.target.lerp(goal, Math.min(1, dt * 5));
+      }
     }
-    this.controls.update();
+    const d = this.mapMode ? 150 : this.dist;
+    this.camera.position.set(this.target.x, this.target.y + d * Math.cos(POLAR), this.target.z + d * Math.sin(POLAR));
+    this.camera.lookAt(this.target);
+
+    this.sky.update(this.hour, this.light, this.target);
+    this.terrain.update(t);
+    this.shapes.update(alpha, t, this.sky.night);
+    const pos = (id: number) => this.shapes.positionOf(id);
+    const h = (id: number) => this.shapes.heightOf(id);
+    this.particles.update(this.paused ? 0 : dt, pos, h, this.target);
+    this.sprites.update(t, pos, h);
+
+    // rings: telegraphs (the real hit radius), downed markers, target marker, champion, tap
+    this.telegraphs.begin();
+    this.markers.begin();
+    this.champRing.begin();
+    this.ropes.begin();
+    let champPos: THREE.Vector3 | null = null, dragPos: THREE.Vector3 | null = null;
+    for (const v of this.shapes.ents.values()) {
+      const gy = v.py + (v.y - v.py) * alpha;
+      const gx = v.px + (v.x - v.px) * alpha, gz = v.pz + (v.z - v.pz) * alpha;
+      if (v.flags & F_TELEGRAPH && v.ring > 0) this.telegraphs.place(gx, gy, gz, v.ring, 0.6 + 0.4 * Math.sin(t * 30));
+      if (v.flags & F_DOWNED && !(v.flags & F_CHAMPION)) this.markers.place(gx, gy, gz, 0.5 + 0.2 * v.scale + Math.sin(t * 5) * 0.08, 0.8);
+      if (v.flags & F_CHAMPION) {
+        this.champRing.place(gx, gy, gz, 0.42, 0.8);
+        champPos = new THREE.Vector3(gx, gy + 0.4, gz);
+      }
+      if (v.flags & F_BOUND) this.ropes.place(gx, gy, gz, 0.3 + 0.25 * v.scale, 1);
+      if (v.flags & F_DRAGGED) dragPos = new THREE.Vector3(gx, gy + 0.25, gz);
+      if (v.id === this.targetId || v.id === this.selectedId) this.markers.place(gx, gy, gz, 0.35 + 0.3 * v.scale, 1);
+    }
+    if (this.tap && t - this.tap.t < 0.6) {
+      const k = (t - this.tap.t) / 0.6;
+      const tx = Math.floor(this.tap.x), tz = Math.floor(this.tap.z);
+      this.champRing.place(this.tap.x, this.terrain.height(tx, tz), this.tap.z, 0.2 + k * 0.4, 1 - k);
+    }
+    this.telegraphs.end();
+    this.markers.end();
+    this.champRing.end();
+    this.ropes.end();
+    this.rope.visible = !!(champPos && dragPos);
+    if (champPos && dragPos) {
+      this.rope.geometry.setFromPoints([champPos, dragPos]);
+    }
     this.renderer.render(this.scene, this.camera);
   }
+
+  private followHold = 0;
 }

@@ -1,317 +1,407 @@
-// DOM overlay: HUD, omen cards, shrine status, banner, chronicle, inspector, dev panel.
-import type { Omen } from '../god/schemas';
+// DOM overlay (§14): HUD, champion card, actions, alerts, inspector, sheets (village, monsters, book, chronicle, god,
+// settings), altar, Judgment/Genesis cards, away panel, game over.
+import type { Action, Hud, InspectInfo, MonsterCard, VillagerInfo } from '../protocol';
+import type { ChronicleEvent, CreationRecord, Job } from '../sim/types';
+import type { AwaySummary } from '../sim/offline';
 import type { LiveCall, TraceEntry } from '../god/pipeline';
-import type { InspectInfo, ModuleStat } from '../protocol';
-import type { ChronicleEvent } from '../sim/types';
-import { timeInfo } from '../sim/time';
+import { fmtClock } from '../sim/clock';
+import { JOBS } from '../sim/types';
 
 type Attrs = Record<string, string | boolean | ((ev: any) => void)>;
-export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, ...kids: (Node | string | null | false)[]): HTMLElementTagNameMap[K] {
+export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, ...kids: (Node | string | null | false | undefined)[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (typeof v === 'function') el.addEventListener(k.replace(/^on/, ''), v);
     else if (v === true) el.setAttribute(k, '');
     else if (v !== false) el.setAttribute(k, v);
   }
-  for (const c of kids) if (c !== null && c !== false) el.append(c);
+  for (const c of kids) if (c !== null && c !== false && c !== undefined) el.append(c);
   return el;
 }
 
-const TONE_ICON: Record<string, string> = { cozy: '☕', eerie: '🌫', chaotic: '🌀', social: '🎉', wild: '🌿' };
-const SUSPEND_TEXT: Record<string, string> = { eat: 'some days nobody may eat', sleep: 'some nights nobody may sleep', 'faction-survival': 'a whole people may perish' };
-
-/**
- * Make a streamed, still-incomplete JSON answer readable: string values are unescaped and shown under their key
- * (so a module's "source" reads as code), everything else is dropped.
- */
-export function readablePartialJson(raw: string): string {
-  let out = '';
-  let lastKey = '';
-  const stack: ('{' | '[')[] = [];
-  let expectKey = false; // in an object, the next string is a key
-  for (let i = 0; i < raw.length; i++) {
-    const c = raw[i];
-    if (c === '{' || c === '[') {
-      stack.push(c);
-      expectKey = c === '{';
-    } else if (c === '}' || c === ']') {
-      stack.pop();
-      expectKey = false;
-    } else if (c === ',') expectKey = stack[stack.length - 1] === '{';
-    else if (c === '"') {
-      let v = '';
-      let done = false;
-      for (i++; i < raw.length; i++) {
-        const ch = raw[i];
-        if (ch === '"') {
-          done = true;
-          break;
-        }
-        if (ch !== '\\') {
-          v += ch;
-          continue;
-        }
-        const n = raw[++i];
-        if (n === undefined) break;
-        if (n === 'n') v += '\n';
-        else if (n === 't') v += '\t';
-        else if (n === 'u') {
-          const hex = raw.slice(i + 1, i + 5);
-          if (hex.length < 4) break;
-          v += String.fromCharCode(parseInt(hex, 16));
-          i += 4;
-        } else if (n !== 'r') v += n;
-      }
-      if (expectKey) {
-        lastKey = v;
-        expectKey = false;
-      } else out += lastKey === 'source' ? `${v}${done ? '\n' : ''}` : `${lastKey}: ${v}${done ? '\n' : ''}`;
-      if (!done) break;
-    }
-  }
-  return out;
+function fill(el: HTMLElement, ...kids: (Node | string | null | false | undefined)[]) {
+  el.replaceChildren(...kids.filter((k): k is Node | string => !!k));
 }
-
-const fmtClock = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 export interface UiCallbacks {
-  onSpeed(speed: number): void;
-  onPause(): void;
-  onChoose(i: number | 'god', whisper: string): void;
-  onShowMe(): void;
-  onCloseInspector(): void;
-  onToggleModule(id: string, active: boolean): void;
-  onDevInstall(name: string): void;
-  onPanelChange(): void;
+  action(a: Action): void;
+  finish(): void;
+  drop(): void;
+  goAltar(): void;
+  toggleMap(): void;
+  closeInspector(): void;
+  newIsland(): void;
+  showCreation(): void;
+  dev(cmd: string): void;
+  panelChanged(open: boolean): void;
 }
+
+const GOD = { human: 'the Most High', monster: 'Dagon' } as const;
+const STATE_TEXT: Record<string, string> = {
+  idle: 'Standing ready', walk: 'Walking', fight: 'Fighting', drag: 'Dragging', downed: 'Beaten down!', captive: 'Being carried off!',
+};
 
 export class Ui {
   root = document.getElementById('ui')!;
-  private clock = h('span', { class: 'clock' });
-  private pops = h('span', { class: 'pops' });
-  private speedBtns: HTMLButtonElement[] = [];
-  private pauseBtn: HTMLButtonElement;
-  private shrine = h('div', { class: 'shrine-status' });
-  private cards = h('div', { class: 'omens hidden' });
-  private banner = h('div', { class: 'banner hidden' });
-  private chronicle = h('aside', { class: 'panel chronicle hidden' });
-  private chronicleList = h('ol', { class: 'chronicle-list' });
-  private inspector = h('aside', { class: 'panel inspector hidden' });
-  private dev = h('aside', { class: 'panel dev hidden' });
-  private devMods = h('div');
-  private manual = h('div', { class: 'manual hidden' });
-  private godlog = h('aside', { class: 'panel godlog hidden' });
-  private godLive = h('div', { class: 'god-live hidden' });
-  private godLiveHead = h('div', { class: 'god-live-head' });
-  private godThinking = h('pre', { class: 'god-stream thinking' });
-  private godThinkingBox = h('details', { class: 'hidden' }, h('summary', {}, 'Thinking'), this.godThinking);
-  private godOutput = h('pre', { class: 'god-stream' });
-  private godList = h('ol', { class: 'god-list' });
-  private godVersion = -1;
-  private godLast: TraceEntry | null = null;
-  private bannerTimer = 0;
-  private shownOmens: Omen[] | null = null;
+  private top = h('header', { class: 'top' });
+  private clock = h('div', { class: 'clock' });
+  private favor = h('div', { class: 'favor' });
+  private pop = h('div', { class: 'pop' });
+  private skulls = h('div', { class: 'skulls' });
+  private foodBar = h('div', { class: 'foodbar' }, h('i'));
+  private champ = h('div', { class: 'champ' });
+  private actions = h('div', { class: 'actions' });
+  private finishBtn: HTMLButtonElement;
+  private dropBtn: HTMLButtonElement;
+  private altarBtn: HTMLButtonElement;
+  private toasts = h('div', { class: 'toasts' });
+  private status = h('div', { class: 'godstatus hidden' });
+  private ready = h('button', { class: 'ready hidden' }, '✦ A creation is ready');
+  private inspector = h('div', { class: 'card inspector hidden' });
+  private sheet = h('div', { class: 'sheet hidden' });
+  private sheetBody = h('div', { class: 'sheet-body' });
+  private tabs: Record<string, HTMLButtonElement> = {};
+  private tab = 'village';
+  private modal = h('div', { class: 'modal hidden' });
+  private arrow = h('div', { class: 'arrow hidden' }, '➤');
+  private fallen = h('div', { class: 'fallen hidden' });
+  private hud: Hud | null = null;
+  private villagers: VillagerInfo[] = [];
+  private monsters: MonsterCard[] = [];
+  private chronicle: ChronicleEvent[] = [];
+  private god: { trace: TraceEntry[]; live: LiveCall | null; version: number; status: string } = { trace: [], live: null, version: 0, status: '' };
+  private renderedTab = '';
+  private altarOpen = false;
 
-  constructor(readonly cb: UiCallbacks, badge: string, devMode: boolean) {
-    this.pauseBtn = h('button', { class: 'btn', title: 'Pause (space)', onclick: () => cb.onPause() }, '⏸');
-    for (const s of [1, 2]) {
-      const b = h('button', { class: 'btn', onclick: () => cb.onSpeed(s) }, `${s}×`);
-      this.speedBtns.push(b);
+  constructor(readonly cb: UiCallbacks, private devMode: boolean) {
+    this.top.append(
+      h('div', { class: 'top-row' }, this.clock, this.pop, this.skulls),
+      h('div', { class: 'top-row' }, this.favor, this.foodBar),
+    );
+    this.finishBtn = h('button', { class: 'act danger hidden', onclick: () => cb.finish() }, '⚔ Finish');
+    this.dropBtn = h('button', { class: 'act hidden', onclick: () => cb.drop() }, '✋ Drop');
+    this.altarBtn = h('button', { class: 'act', onclick: () => cb.goAltar() }, '🔥 Altar');
+    this.actions.append(
+      this.finishBtn, this.dropBtn, this.altarBtn,
+      h('button', { class: 'act', onclick: () => cb.toggleMap() }, '🗺 Map'),
+      h('button', { class: 'act', onclick: () => this.openSheet() }, '☰'),
+    );
+    this.ready.addEventListener('click', () => cb.showCreation());
+    const head = h('div', { class: 'sheet-head' });
+    for (const [k, label] of [['village', 'Village'], ['monsters', 'Monsters'], ['book', 'Book'], ['chronicle', 'Chronicle'], ['god', 'Gods'], ['settings', '⚙']] as const) {
+      const b = h('button', { class: 'tab', onclick: () => this.showTab(k) }, label);
+      this.tabs[k] = b;
+      head.append(b);
     }
-    const chronBtn = h('button', { class: 'btn wide', onclick: () => this.togglePanel(this.chronicle) }, '📜 Chronicle');
-    const godBtn = h('button', { class: 'btn wide', title: 'What the god is doing', onclick: () => this.togglePanel(this.godlog) }, '🔮 God');
-    this.shrine.addEventListener('click', () => this.togglePanel(this.godlog));
-    this.shrine.title = 'Show what the god is doing';
-    const hud = h('header', { class: 'hud' },
-      h('div', { class: 'hud-left' }, h('strong', { class: 'title' }, 'Monster Island'), this.clock, this.pops),
-      h('div', { class: 'hud-right' }, this.pauseBtn, ...this.speedBtns, chronBtn, godBtn,
-        devMode ? h('button', { class: 'btn wide', onclick: () => this.togglePanel(this.dev) }, '🛠 Dev') : null,
-        h('span', { class: 'badge', title: 'platform · AI provider' }, badge)),
-    );
-    this.chronicle.append(h('div', { class: 'panel-head' }, h('h2', {}, 'Chronicle'), h('button', { class: 'x', onclick: () => this.togglePanel(this.chronicle) }, '×')), this.chronicleList);
-    this.dev.append(
-      h('div', { class: 'panel-head' }, h('h2', {}, 'Dev'), h('button', { class: 'x', onclick: () => this.togglePanel(this.dev) }, '×')),
-      h('p', { class: 'muted' }, 'Install a reference module directly (skips the god and validation):'),
-      h('div', { class: 'row' }, ...['fireflies', 'wading', 'thrower', 'hang'].map((n) => h('button', { class: 'btn wide', onclick: () => cb.onDevInstall(n) }, n))),
-      h('h3', {}, 'Modules'),
-      this.devMods,
-    );
-    this.godLive.append(this.godLiveHead, this.godThinkingBox, this.godOutput);
-    this.godlog.append(
-      h('div', { class: 'panel-head' }, h('h2', {}, 'The god at work'), h('button', { class: 'x', onclick: () => this.togglePanel(this.godlog) }, '×')),
-      this.godLive,
-      h('h3', {}, 'Activity'),
-      this.godList,
-    );
-    this.root.append(hud, this.shrine, this.banner, this.cards, this.chronicle, this.inspector, this.dev, this.godlog, this.manual);
-    this.setSpeed(1, false);
+    head.append(h('button', { class: 'x', onclick: () => this.closeSheet() }, '×'));
+    this.sheet.append(head, this.sheetBody);
+    this.root.append(this.top, this.champ, this.actions, this.toasts, this.status, this.ready, this.inspector, this.sheet, this.modal, this.arrow, this.fallen);
   }
 
-  isPanelOpen() {
-    return [this.chronicle, this.inspector, this.dev, this.godlog].some((p) => !p.classList.contains('hidden')) || !this.manual.classList.contains('hidden');
+  isBusy(): boolean {
+    return !this.sheet.classList.contains('hidden') || !this.modal.classList.contains('hidden');
   }
 
-  private togglePanel(p: HTMLElement) {
-    const opening = p.classList.contains('hidden');
-    // right-hand panels share a slot
-    if (opening) for (const o of [this.chronicle, this.dev, this.godlog]) if (o !== p) o.classList.add('hidden');
-    p.classList.toggle('hidden');
-    if (p === this.godlog) {
-      this.godVersion = -1;
-      this.godLast = null;
+  // ---------- HUD ----------
+
+  setHud(hud: Hud) {
+    this.hud = hud;
+    const night = hud.light < 0.5;
+    this.clock.textContent = `${night ? '☾' : '☀'} Day ${hud.day} · ${fmtClock(hud.clockMs)}${hud.timescale !== 1 ? ` ×${hud.timescale}` : ''}`;
+    const total = Math.max(1, hud.favor.human + hud.favor.monster);
+    this.favor.innerHTML = '';
+    this.favor.append(
+      h('span', { class: 'fh' }, `☀ ${hud.favor.human}`),
+      h('span', { class: 'fbar' }, h('i', { style: `width:${(hud.favor.human / total) * 100}%` })),
+      h('span', { class: 'fm' }, `${hud.favor.monster} ☾`),
+    );
+    this.favor.title = 'Favor today: the Most High vs Dagon. Judgment at midnight.';
+    this.pop.textContent = `👥 ${hud.pop}`;
+    this.pop.title = 'Villagers';
+    const slain = 6 - hud.monstersAlive;
+    this.skulls.textContent = '👹'.repeat(hud.monstersAlive) + '✝'.repeat(Math.max(0, slain));
+    this.skulls.title = `${hud.monstersAlive} monsters alive`;
+    (this.foodBar.firstChild as HTMLElement).style.width = `${(hud.food / hud.foodCap) * 100}%`;
+    this.foodBar.title = `Food ${Math.round(hud.food)} / ${hud.foodCap}`;
+    this.foodBar.dataset.label = `🌾 ${Math.round(hud.food)}`;
+    this.foodBar.classList.toggle('low', hud.food < 60);
+
+    const c = hud.champion;
+    this.champ.classList.toggle('hidden', !c);
+    if (c) {
+      this.champ.innerHTML = '';
+      this.champ.append(
+        h('div', { class: 'champ-name' }, `${c.name.split(' ')[0]} · Lv ${c.level}`),
+        h('div', { class: 'hp' }, h('i', { style: `width:${(c.hp / c.maxHp) * 100}%` }), h('span', {}, `${Math.ceil(c.hp)} / ${Math.round(c.maxHp)}`)),
+        h('div', { class: 'xp' }, h('i', { style: `width:${(c.xp / c.xpNext) * 100}%` })),
+        h('div', { class: 'champ-state' }, c.dragging ? `Dragging ${c.dragging.name.split(' ')[0]} (${c.dragging.value} favor)` : STATE_TEXT[c.state] ?? c.state),
+      );
+      this.finishBtn.classList.toggle('hidden', !c.downedTarget);
+      if (c.downedTarget) this.finishBtn.textContent = `⚔ Finish ${c.downedTarget.name}`;
+      this.dropBtn.classList.toggle('hidden', !c.dragging);
+      this.altarBtn.classList.toggle('glow', c.nearAltar || !!c.dragging);
     }
-    this.cb.onPanelChange();
+    this.fallen.classList.toggle('hidden', !hud.championPendingDawn || !!hud.gameOver);
+    if (hud.championPendingDawn) this.fallen.textContent = 'Your champion has fallen. A new champion will rise at dawn.';
+    if (this.altarOpen) this.renderAltar();
+    if (!this.sheet.classList.contains('hidden') && (this.tab === 'book' || this.tab === 'god')) this.renderTab();
   }
 
-  setSpeed(speed: number, paused: boolean) {
-    this.speedBtns.forEach((b, i) => b.classList.toggle('on', !paused && speed === i + 1));
-    this.pauseBtn.classList.toggle('on', paused);
-    this.pauseBtn.textContent = paused ? '▶' : '⏸';
+  setGodStatus(text: string, trace: TraceEntry[], live: LiveCall | null, version: number) {
+    this.god = { trace, live, version, status: text };
+    this.status.classList.toggle('hidden', !text);
+    this.status.textContent = text;
+    if (!this.sheet.classList.contains('hidden') && this.tab === 'god') this.renderTab();
   }
 
-  setTime(tick: number) {
-    const t = timeInfo(tick);
-    this.clock.textContent = `Day ${t.day + 1} · ${String(t.hour).padStart(2, '0')}:00 ${t.isNight ? '☾' : '☀'}`;
+  setCreationReady(on: boolean) {
+    this.ready.classList.toggle('hidden', !on);
   }
 
-  setPops(monsters: number, humans: number) {
-    this.pops.textContent = `👹 ${monsters}  🧑 ${humans}`;
+  setVillagers(v: VillagerInfo[], m: MonsterCard[]) {
+    this.villagers = v;
+    this.monsters = m;
+    if (!this.sheet.classList.contains('hidden') && (this.tab === 'village' || this.tab === 'monsters')) this.renderTab();
+    if (this.altarOpen) this.renderAltar();
   }
 
-  setShrine(text: string, stage: number) {
-    this.shrine.textContent = text;
-    this.shrine.dataset.stage = String(stage);
+  setChronicle(c: ChronicleEvent[]) {
+    this.chronicle = c;
+    if (!this.sheet.classList.contains('hidden') && this.tab === 'chronicle') this.renderTab();
   }
 
-  showOmens(omens: Omen[] | null) {
-    if (omens === this.shownOmens) return;
-    this.shownOmens = omens;
-    this.cards.replaceChildren();
-    if (!omens) {
-      this.cards.classList.add('hidden');
-      return;
-    }
-    const whisper = h('input', { class: 'whisper', maxlength: '140', placeholder: 'Whisper a wish to the god (optional)…' }) as HTMLInputElement;
-    const list = h('div', { class: 'cards' });
-    omens.forEach((o, i) => {
-      list.append(h('button', { class: `card tone-${o.tone}`, onclick: () => this.cb.onChoose(i, whisper.value) },
-        h('div', { class: 'card-tone' }, `${TONE_ICON[o.tone] ?? '✦'} ${o.tone}`),
-        h('h3', {}, o.title),
-        h('p', { class: 'change' }, o.change),
-        h('div', { class: 'card-more' },
-          h('p', { class: 'omen-line' }, `“${o.omen}”`),
-          h('p', { class: 'visible' }, h('b', {}, 'You will see: '), o.visible),
-        ),
-        o.suspends.length ? h('p', { class: 'warn' }, `⚠ This bends the island's laws: ${o.suspends.map((s) => SUSPEND_TEXT[s] ?? s).join('; ')}.`) : null,
-      ));
-    });
-    this.cards.append(
-      h('div', { class: 'omens-head' }, h('h2', {}, 'The god offers three omens'), h('span', { class: 'muted' }, 'Choose whenever you like. Hover a card for more.')),
-      list,
-      h('div', { class: 'omens-foot' }, whisper, h('button', { class: 'btn wide', onclick: () => this.cb.onChoose('god', whisper.value) }, '🎲 Let the god decide')),
-    );
-    this.cards.classList.remove('hidden');
+  // ---------- alerts ----------
+
+  toast(text: string, kind = 'info', seconds = 6) {
+    const t = h('div', { class: `toast ${kind}` }, text);
+    t.addEventListener('click', () => t.remove());
+    this.toasts.prepend(t);
+    while (this.toasts.children.length > 4) this.toasts.lastElementChild!.remove();
+    setTimeout(() => t.classList.add('out'), seconds * 1000);
+    setTimeout(() => t.remove(), seconds * 1000 + 600);
   }
 
-  showBanner(text: string, showMe: boolean, seconds = 7) {
-    clearTimeout(this.bannerTimer);
-    this.banner.replaceChildren(h('span', {}, text), ...(showMe ? [h('button', { class: 'btn wide', onclick: () => this.cb.onShowMe() }, 'Show me')] : []));
-    this.banner.classList.remove('hidden');
-    this.bannerTimer = window.setTimeout(() => this.banner.classList.add('hidden'), seconds * 1000);
+  /** Big centered banner (Judgment, lair found, etc.). */
+  banner(title: string, text: string, kind = 'judgment', seconds = 7) {
+    const b = h('div', { class: `banner ${kind}` }, h('div', { class: 'banner-title' }, title), h('div', {}, text));
+    b.addEventListener('click', () => b.remove());
+    this.root.append(b);
+    setTimeout(() => b.classList.add('out'), seconds * 1000);
+    setTimeout(() => b.remove(), seconds * 1000 + 800);
   }
 
-  setChronicle(events: ChronicleEvent[]) {
-    this.chronicleList.replaceChildren(...events.slice().reverse().map((e) => h('li', { class: `imp-${e.importance} src-${e.source === 'core' ? 'core' : e.source === 'god' ? 'god' : 'mod'}` }, h('span', { class: 'day' }, `Day ${e.day + 1}`), e.text)));
+  setArrow(x: number, y: number, angle: number, on: boolean, label = '') {
+    this.arrow.classList.toggle('hidden', !on);
+    if (!on) return;
+    this.arrow.style.left = `${x}px`;
+    this.arrow.style.top = `${y}px`;
+    this.arrow.style.transform = `translate(-50%, -50%) rotate(${angle}rad)`;
+    this.arrow.title = label;
   }
+
+  // ---------- inspector ----------
 
   setInspector(info: InspectInfo | null) {
-    if (!info) {
-      this.inspector.classList.add('hidden');
-      return;
-    }
-    const bar = (v: number, max: number, cls: string) => h('div', { class: `bar ${cls}` }, h('i', { style: `width:${Math.max(0, Math.min(100, (v / max) * 100))}%` }));
-    const mods = Object.entries(info.data).filter(([, d]) => d && Object.keys(d as object).length);
-    this.inspector.replaceChildren(...([
-      h('div', { class: 'panel-head' }, h('h2', {}, info.name ?? info.kind), h('button', { class: 'x', onclick: () => this.cb.onCloseInspector() }, '×')),
-      h('p', { class: 'muted' }, info.faction ? `${info.faction} · ${info.behavior || 'idle'}` : info.kind),
-      info.faction ? h('div', { class: 'stat' }, h('span', {}, `Hunger ${Math.round(info.hunger)}`), bar(info.hunger, 100, 'hunger')) : null,
-      info.faction ? h('div', { class: 'stat' }, h('span', {}, `HP ${Math.ceil(info.hp)} / ${Math.round(info.maxHp)}`), bar(info.hp, info.maxHp, 'hp')) : null,
-      info.tags.length ? h('p', {}, h('b', {}, 'Tags: '), info.tags.join(', ')) : null,
-      ...mods.map(([id, d]) => h('details', { open: true }, h('summary', {}, id), h('pre', {}, JSON.stringify(d, null, 1).slice(0, 600)))),
-    ] as (HTMLElement | null)[]).filter((x): x is HTMLElement => !!x));
-    if (this.inspector.classList.contains('hidden')) {
-      this.inspector.classList.remove('hidden');
-      this.cb.onPanelChange();
-    }
+    this.inspector.classList.toggle('hidden', !info);
+    if (!info) return;
+    fill(this.inspector, 
+      h('button', { class: 'x', onclick: () => this.cb.closeInspector() }, '×'),
+      h('div', { class: 'card-title' }, info.title),
+      info.maxHp ? h('div', { class: 'hp small' }, h('i', { style: `width:${((info.hp ?? 0) / info.maxHp) * 100}%` }), h('span', {}, `${Math.ceil(info.hp ?? 0)} / ${Math.round(info.maxHp)}`)) : null,
+      ...info.lines.map((l) => h('p', {}, l)),
+    );
   }
 
-  openGodLog() {
-    if (this.godlog.classList.contains('hidden')) this.togglePanel(this.godlog);
+  // ---------- sheets ----------
+
+  openSheet(tab = this.tab) {
+    this.sheet.classList.remove('hidden');
+    this.cb.panelChanged(true);
+    this.showTab(tab);
   }
 
-  /** The god panel; cheap to call often (redraws only when open and something changed). */
-  setGodActivity(trace: TraceEntry[], live: LiveCall | null, version: number) {
-    if (this.godlog.classList.contains('hidden')) return;
-    if (live) {
-      const secs = Math.floor((Date.now() - live.startedAt) / 1000);
-      const out = live.output.length;
-      this.godLiveHead.replaceChildren(
-        h('b', {}, live.label),
-        h('span', { class: 'muted' }, ` · ${live.status}${live.thinkingTokens ? ` (~${live.thinkingTokens.toLocaleString()} thinking tokens)` : ''} · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}${out ? ` · ${(out / 1024).toFixed(1)} KB written` : ''}`),
+  closeSheet() {
+    this.sheet.classList.add('hidden');
+    this.cb.panelChanged(false);
+  }
+
+  showTab(k: string) {
+    this.tab = k;
+    for (const [n, b] of Object.entries(this.tabs)) b.classList.toggle('on', n === k);
+    this.renderedTab = '';
+    this.renderTab();
+  }
+
+  private renderTab() {
+    const hud = this.hud;
+    const body = this.sheetBody;
+    const scroll = body.scrollTop;
+    if (this.tab === 'village') {
+      const key = JSON.stringify(this.villagers.map((v) => [v.id, v.job, v.nextJob, Math.round(v.hp), v.state, v.level]));
+      if (key === this.renderedTab) return;
+      this.renderedTab = key;
+      fill(body, 
+        h('p', { class: 'muted' }, `${this.villagers.length} villagers · food ${Math.round(hud?.food ?? 0)}/${hud?.foodCap ?? 500} · ${hud?.fold ?? 0} lambs in the fold. Job changes take effect at the next shift (06:00 or 18:00).`),
+        ...this.villagers.map((v) => {
+          const sel = h('select', { onchange: (ev: Event) => this.cb.action({ kind: 'setJob', id: v.id, job: (ev.target as HTMLSelectElement).value as Job }) });
+          for (const j of JOBS) sel.append(h('option', { value: j, ...(j === (v.nextJob ?? v.job) ? { selected: true } : {}) }, j));
+          return h('div', { class: 'row-card' },
+            h('div', { class: 'rc-main' },
+              h('div', { class: 'rc-name' }, `${v.name}${v.elder ? ' (elder)' : ''}`),
+              h('div', { class: 'muted' }, `Lv ${v.level} · ${Math.ceil(v.hp)}/${Math.round(v.maxHp)} HP · ${v.shift} shift · ${v.state}${v.nextJob ? ` → ${v.nextJob}` : ''}`),
+              h('div', { class: 'bio' }, v.bio)),
+            sel);
+        }),
+      );
+    } else if (this.tab === 'monsters') {
+      const key = JSON.stringify(this.monsters);
+      if (key === this.renderedTab) return;
+      this.renderedTab = key;
+      fill(body, 
+        h('p', { class: 'muted' }, 'Six monsters hide in six lairs. Learn their hours; strike while they rest.'),
+        ...this.monsters.map((m) => h('div', { class: `row-card ${m.dead ? 'dead' : ''}` },
+          h('div', { class: 'rc-main' },
+            h('div', { class: 'rc-name' }, m.dead ? `✝ ${m.name}` : m.name),
+            h('div', { class: 'muted' }, `${m.display} · ${m.region}${m.lairFound ? ' · lair found' : ' · lair hidden'}${m.level ? ` · Lv ${m.level}` : ''}${m.enraged ? ' · ENRAGED' : ''}`),
+            m.seen && !m.dead ? h('div', { class: 'bio' }, m.special) : null,
+            m.seenHours.length ? h('div', { class: 'bio' }, `Seen active at ${m.seenHours.map((x) => `${x}:00`).join(', ')}`) : null,
+            m.hp !== null && m.maxHp ? h('div', { class: 'hp small' }, h('i', { style: `width:${(m.hp / m.maxHp) * 100}%` })) : null))),
+      );
+    } else if (this.tab === 'book') {
+      const key = JSON.stringify([hud?.creations, hud?.pendingCreations, hud?.missingSystems]);
+      if (key === this.renderedTab) return;
+      this.renderedTab = key;
+      const list = hud?.creations ?? [];
+      fill(body, 
+        h('h3', { class: 'serif' }, 'The Book of Creation'),
+        list.length ? null : h('p', { class: 'muted' }, 'Nothing has been added to the world yet. Each midnight, the god whose followers offered more favor shapes it.'),
+        ...[...list].reverse().map((c) => h('div', { class: `creation ${c.god}` },
+          h('div', { class: 'rc-name' }, `Day ${c.day} · ${c.title}`),
+          h('div', { class: 'muted' }, `${c.god === 'human' ? 'The Most High' : 'Dagon'} · ${c.domain} · scale ${c.scale}`),
+          h('p', { class: 'serif' }, c.announcement))),
+        hud?.pendingCreations.length ? h('p', { class: 'muted' }, `Awaiting: ${hud.pendingCreations.map((r) => `${GOD[r.god]} (day ${r.day}, scale ${r.scale})`).join(', ')}`) : null,
+        h('p', { class: 'muted' }, `The world still lacks: ${(hud?.missingSystems ?? []).join(', ')}.`),
+      );
+    } else if (this.tab === 'chronicle') {
+      const key = String(this.chronicle.length);
+      if (key === this.renderedTab) return;
+      this.renderedTab = key;
+      fill(body, h('ol', { class: 'chron' }, ...[...this.chronicle].reverse().slice(0, 150).map((e) =>
+        h('li', { class: `imp${e.importance} src-${e.source === 'core' ? 'core' : e.source === 'god' ? 'god' : 'mod'}` }, h('span', { class: 'when' }, `D${e.day} ${fmtClock(e.clockMs)}`), ' ', e.text))));
+    } else if (this.tab === 'god') {
+      const key = `${this.god.version}:${this.god.status}`;
+      if (key === this.renderedTab) return;
+      this.renderedTab = key;
+      const live = this.god.live;
+      fill(body, 
+        h('p', {}, this.god.status || 'The gods wait for midnight.'),
+        live ? h('div', { class: 'live' }, h('div', { class: 'muted' }, `${live.label} · ${live.status} · ${Math.round((Date.now() - live.startedAt) / 1000)}s${live.thinkingTokens ? ` · ~${live.thinkingTokens} thinking tokens` : ''}`), h('pre', {}, live.output.slice(-1500))) : null,
+        h('ol', { class: 'chron' }, ...[...this.god.trace].reverse().slice(0, 80).map((t) => h('li', { class: `lvl-${t.level}` }, h('span', { class: 'when' }, new Date(t.t).toLocaleTimeString()), ' ', t.text, t.detail ? h('pre', { class: 'detail' }, t.detail) : null))),
+      );
+    } else if (this.tab === 'settings') {
+      if (this.renderedTab === 'settings') return;
+      this.renderedTab = 'settings';
+      fill(body, 
+        h('p', {}, 'Island Humans and Monsters — MVP.'),
+        h('p', { class: 'muted' }, 'Tap the ground to move. Tap a monster to attack; when its red ring flashes, tap away to dodge. Beat a monster down, tap it to bind it, drag it home and burn it on the altar for its full HP in favor. Judgment falls at midnight.'),
+        h('button', { class: 'btn wide danger', onclick: () => { if (confirm('Abandon this island and start a new one?')) this.cb.newIsland(); } }, 'New island'),
+        this.devMode ? h('div', { class: 'dev' },
+          h('h3', {}, 'Dev'),
+          ...[['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['install-war-hounds', 'Install war-hounds'], ['install-poison-fog', 'Install poison fog'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
       );
     }
-    if (version === this.godVersion) return;
-    this.godVersion = version;
-    this.godLive.classList.toggle('hidden', !live);
-    if (live) {
-      this.godThinkingBox.classList.toggle('hidden', !live.thinking);
-      this.godThinking.textContent = live.thinking.slice(-4000);
-      const stick = this.godOutput.scrollTop + this.godOutput.clientHeight >= this.godOutput.scrollHeight - 30;
-      this.godOutput.textContent = live.output ? readablePartialJson(live.output) : live.thinkingTokens ? 'The god is thinking. Its words appear here as it writes…' : 'Waiting for the first words…';
-      if (stick) this.godOutput.scrollTop = this.godOutput.scrollHeight;
-    }
-    const last = this.godLast ? trace.lastIndexOf(this.godLast) : -1;
-    if (last === trace.length - 1 && this.godLast) return;
-    const stick = this.godlog.scrollTop + this.godlog.clientHeight >= this.godlog.scrollHeight - 40;
-    const row = (e: TraceEntry) => h('li', { class: `lvl-${e.level}` },
-      h('span', { class: 'time' }, fmtClock(e.t)),
-      e.detail ? h('details', {}, h('summary', {}, e.text), h('pre', {}, e.detail)) : h('span', {}, e.text),
-    );
-    // append only what's new so expanded details stay open; rebuild if the start of the log was trimmed
-    if (last < 0 || this.godList.children.length > 400) this.godList.replaceChildren(...trace.map(row));
-    else this.godList.append(...trace.slice(last + 1).map(row));
-    if (!trace.length) this.godList.replaceChildren(h('li', { class: 'muted' }, 'Nothing yet. Activity appears here as the god works.'));
-    this.godLast = trace[trace.length - 1] ?? null;
-    if (stick) this.godlog.scrollTop = this.godlog.scrollHeight;
+    body.scrollTop = scroll;
   }
 
-  setModuleStats(stats: ModuleStat[], titles: Record<string, string>) {
-    if (this.dev.classList.contains('hidden')) return;
-    this.devMods.replaceChildren(
-      ...(stats.length ? stats : []).map((s) => h('div', { class: `devmod ${s.status}` },
-        h('div', {}, h('b', {}, titles[s.id] ?? s.id), h('div', { class: 'muted' }, `${s.id} · ${s.status} · ${s.msPerTick.toFixed(2)} ms/tick · faults today ${s.faultsToday}`)),
-        h('button', { class: 'btn wide', onclick: () => this.cb.onToggleModule(s.id, s.status !== 'active') }, s.status === 'active' ? 'Disable' : 'Enable'),
-      )),
-      stats.length ? '' : h('p', { class: 'muted' }, 'No modules installed yet.'),
-    );
+  // ---------- altar ----------
+
+  openAltar() {
+    this.altarOpen = true;
+    this.modal.classList.remove('hidden');
+    this.cb.panelChanged(true);
+    this.renderAltar(true);
   }
 
-  /** ManualProvider: ask a human to paste module source. */
+  closeModal() {
+    this.altarOpen = false;
+    this.modal.classList.add('hidden');
+    this.cb.panelChanged(false);
+  }
+
+  private altarKey = '';
+  private renderAltar(force = false) {
+    const hud = this.hud;
+    const c = hud?.champion;
+    const key = JSON.stringify([hud?.fold, c?.dragging, c?.nearAltar, hud?.favor, hud?.prayer, this.villagers.filter((v) => v.inVillage).length]);
+    if (!force && key === this.altarKey) return;
+    this.altarKey = key;
+    const prayer = h('textarea', { maxlength: '200', placeholder: 'Pray for what the Most High should make tonight…' }) as HTMLTextAreaElement;
+    prayer.value = hud?.prayer ?? '';
+    const near = !!c?.nearAltar;
+    const forbidden = h('details', { class: 'forbidden' }, h('summary', {}, '⚠ The forbidden offering'),
+      h('p', { class: 'muted' }, 'You may burn one of your own people. The elder will condemn you, and Dagon drinks the same blood: his favor rises by the same amount.'),
+      ...this.villagers.filter((v) => v.inVillage).map((v) => h('button', { class: 'btn wide danger', onclick: () => {
+        if (confirm(`Burn ${v.name} on the altar? (+${Math.round(v.maxHp)} favor to BOTH gods)`) && confirm('The elder will curse you. Are you certain?')) this.cb.action({ kind: 'offerVillager', id: v.id });
+      } }, `${v.name.split(' ')[0]} (${Math.round(v.maxHp)})`)));
+    fill(this.modal, h('div', { class: 'card altar' },
+      h('button', { class: 'x', onclick: () => this.closeModal() }, '×'),
+      h('div', { class: 'card-title' }, 'Altar of the Most High'),
+      h('p', { class: 'muted' }, `Favor today: the Most High ${hud?.favor.human ?? 0}, Dagon ${hud?.favor.monster ?? 0}. Judgment at midnight.`),
+      near ? null : h('p', { class: 'warn' }, 'You must stand at the altar to make offerings.'),
+      h('button', { class: 'btn wide', ...(near && (hud?.fold ?? 0) > 0 ? {} : { disabled: true }), onclick: () => this.cb.action({ kind: 'offerLamb' }) }, `🐑 Offer a lamb (+40) · ${hud?.fold ?? 0} in the fold`),
+      c?.dragging ? h('button', { class: 'btn wide gold', ...(near && c.dragging.value > 0 ? {} : { disabled: true }), onclick: () => this.cb.action({ kind: 'offerDragged' }) }, `🔥 Burn ${c.dragging.name.split(' ')[0]} (+${c.dragging.value})`) : h('p', { class: 'muted' }, 'Drag a crippled monster (or a fresh carcass) here for a far greater offering.'),
+      h('div', { class: 'pray' }, prayer, h('button', { class: 'btn wide', onclick: () => this.cb.action({ kind: 'pray', text: prayer.value }) }, '🙏 Pray')),
+      forbidden,
+    ));
+  }
+
+  // ---------- cards ----------
+
+  genesis(rec: CreationRecord) {
+    fill(this.modal, h('div', { class: `card genesis ${rec.god}` },
+      h('div', { class: 'muted' }, `Day ${rec.day} · ${rec.god === 'human' ? 'The Most High' : 'Dagon'} · ${rec.domain} · scale ${rec.scale}`),
+      h('div', { class: 'card-title big' }, rec.title),
+      h('p', { class: 'serif scripture' }, rec.announcement),
+      h('button', { class: 'btn wide', onclick: () => this.closeModal() }, 'And it was so.'),
+    ));
+    this.modal.classList.remove('hidden');
+    this.cb.panelChanged(true);
+  }
+
+  away(s: AwaySummary) {
+    const hrs = s.hours >= 48 ? `${Math.round(s.hours / 24)} days` : `${Math.round(s.hours)} hours`;
+    fill(this.modal, h('div', { class: 'card away' },
+      h('div', { class: 'card-title' }, `While you were away (${hrs})`),
+      s.deaths.length ? h('ul', {}, ...s.deaths.map((d) => h('li', {}, d))) : h('p', {}, 'No one was taken.'),
+      ...s.events.map((e) => h('p', { class: 'muted' }, e)),
+      ...s.judgments.map((j) => h('p', { class: 'serif' }, j)),
+      h('p', { class: 'muted' }, `Food ${s.foodBefore} → ${s.foodAfter}.`),
+      h('button', { class: 'btn wide', onclick: () => this.closeModal() }, 'To the walls'),
+    ));
+    this.modal.classList.remove('hidden');
+    this.cb.panelChanged(true);
+  }
+
+  gameOver(winner: 'human' | 'monster', hud: Hud) {
+    fill(this.modal, h('div', { class: `card gameover ${winner}` },
+      h('div', { class: 'card-title big' }, winner === 'human' ? 'The island is yours' : 'The island belongs to the beasts'),
+      h('p', { class: 'serif' }, winner === 'human' ? 'The last monster is dead. The hills are quiet, and the Most High rests.' : 'The last of the village is gone. Dagon feasts on the High Place.'),
+      h('p', { class: 'muted' }, `Day ${hud.gameOver?.day ?? hud.day} · monsters slain ${hud.stats.monsterKills} · villagers lost ${hud.stats.villagerDeaths} · creations ${hud.creations.length}`),
+      h('button', { class: 'btn wide gold', onclick: () => this.cb.newIsland() }, 'A new island'),
+    ));
+    this.modal.classList.remove('hidden');
+  }
+
   askSource(prompt: string): Promise<string> {
     return new Promise((resolve) => {
-      const ta = h('textarea', { spellcheck: 'false', placeholder: 'export default { id: …, title: …, define(api) {}, tests: [...] }' }) as HTMLTextAreaElement;
-      this.manual.replaceChildren(
-        h('h2', {}, 'Manual god: paste a module'),
-        h('pre', { class: 'manual-prompt' }, prompt.slice(-1500)),
+      const ta = h('textarea', { spellcheck: 'false', class: 'code', placeholder: 'export default { id: …, title: …, define(api) {}, tests: [...] }' }) as HTMLTextAreaElement;
+      fill(this.modal, h('div', { class: 'card' },
+        h('div', { class: 'card-title' }, 'Manual god: paste a module'),
+        h('pre', { class: 'detail' }, prompt.slice(-1200)),
         ta,
-        h('button', { class: 'btn wide', onclick: () => {
-          this.manual.classList.add('hidden');
-          this.cb.onPanelChange();
-          resolve(ta.value);
-        } }, 'Offer it to the island'),
-      );
-      this.manual.classList.remove('hidden');
-      this.cb.onPanelChange();
+        h('button', { class: 'btn wide', onclick: () => { this.closeModal(); resolve(ta.value); } }, 'Offer it to the world'),
+      ));
+      this.modal.classList.remove('hidden');
     });
   }
 }

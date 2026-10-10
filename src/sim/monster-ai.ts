@@ -414,7 +414,7 @@ function hunt(sim: Sim, m: Entity) {
     sim.emote(prey, '😱', 3);
     const c = sim.champion();
     if (c && c !== prey && Math.hypot(c.x - prey.x, c.z - prey.z) < 19) {
-      sim.alert({ kind: 'scream', text: `A scream! ${firstName(prey)} is being carried off by ${M.seen ? firstName(m) : 'something'}!`, ent: m.id, until: sim.tick + 3000 });
+      sim.alert({ kind: 'scream', text: `A scream! ${firstName(prey)} is being carried off by ${M.seen ? firstName(m) : 'something'}!`, ent: prey.id, until: sim.tick + 3000 });
       prey.human!.missingReported = true;
     }
   } else {
@@ -441,7 +441,7 @@ function carry(sim: Sim, m: Entity) {
       sim.emote(v, sim.rng.pick(['😱', 'Help!', 'AAAH!', '🙏'])!, 1.5, true);
       if (c && c !== v && Math.hypot(c.x - v.x, c.z - v.z) < 19 && !H.missingReported) {
         H.missingReported = true;
-        sim.alert({ kind: 'scream', text: `A scream! ${firstName(v)} is being carried off!`, ent: m.id, until: sim.tick + 3000 });
+        sim.alert({ kind: 'scream', text: `A scream! ${firstName(v)} is being carried off!`, ent: v.id, until: sim.tick + 3000 });
       }
     }
     if (!H.missingReported && sim.tick - H.capturedAt > 600) {

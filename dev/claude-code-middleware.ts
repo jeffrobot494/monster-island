@@ -33,6 +33,20 @@ function transcript(messages: Req['messages']): string {
 }
 
 let queue: Promise<unknown> = Promise.resolve();
+interface Job { lines: unknown[]; listeners: Set<(o: any) => void>; final: any; at: number }
+const jobs = new Map<string, Job>();
+setInterval(() => {
+  for (const [k, j] of jobs) if (Date.now() - j.at > 24 * 3600_000) jobs.delete(k);
+}, 3600_000).unref?.();
+
+/** Per-boot token for LAN clients (R32); localhost needs none. */
+export const LAN_TOKEN = Math.random().toString(36).slice(2, 10);
+function allowed(req: IncomingMessage): boolean {
+  const ip = req.socket.remoteAddress ?? '';
+  if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('::ffff:127.')) return true;
+  const hdr = req.headers['x-dev-ai-token'];
+  return hdr === LAN_TOKEN;
+}
 let inFlight = 0;
 
 /** Live progress forwarded to the browser while claude -p runs. */
@@ -141,13 +155,13 @@ function send(res: ServerResponse, status: number, body: unknown) {
 export function claudeCodePlugin(): Plugin {
   let version: string | null = null;
   return {
-    name: 'monster-island-claude-code',
+    name: 'humans-monsters-claude-code',
     apply: 'serve',
     configureServer(server) {
       const v = spawnSync('claude', ['--version'], { env: childEnv(), encoding: 'utf8' });
       version = v.status === 0 ? v.stdout.trim() : null;
       if (!version) server.config.logger.warn('[god] `claude` CLI not found; the game will fall back to ManualProvider.');
-      else server.config.logger.info(`[god] ClaudeCodeProvider ready (${version})`);
+      else server.config.logger.info(`[god] ClaudeCodeProvider ready (${version}). LAN token: ?token=${LAN_TOKEN}`);
       const env = server.config.env;
       const models = {
         propose: process.env.CLAUDE_CODE_PROPOSE_MODEL ?? env.CLAUDE_CODE_PROPOSE_MODEL ?? 'sonnet',
@@ -164,8 +178,9 @@ export function claudeCodePlugin(): Plugin {
       server.middlewares.use('/dev-ai/status', (_req, res) => send(res, 200, { ok: !!version, version, models }));
       server.middlewares.use('/dev-ai/claude-code', async (req, res) => {
         if (req.method !== 'POST') return send(res, 405, { error: 'POST only' });
+        if (!allowed(req)) return send(res, 403, { error: 'LAN clients need ?token= (printed in the dev server log)' });
         if (!version) return send(res, 503, { error: 'claude CLI not available' });
-        let body: Req;
+        let body: Req & { jobKey?: string };
         try {
           body = JSON.parse(await readBody(req));
         } catch {
@@ -177,30 +192,57 @@ export function claudeCodePlugin(): Plugin {
         res.setHeader('content-type', 'application/x-ndjson');
         res.setHeader('cache-control', 'no-cache');
         const line = (o: unknown) => res.writableEnded || res.write(JSON.stringify(o) + '\n');
-        let closed = false;
-        const gone = new AbortController();
-        res.on('close', () => {
-          closed = true;
-          if (!res.writableFinished) gone.abort();
-        });
-        const t0 = Date.now();
-        if (inFlight > 0) line({ type: 'progress', kind: 'status', text: 'queued behind another god call' });
-        inFlight++;
-        const job = queue.then(() => {
-          line({ type: 'progress', kind: 'status', text: `starting claude -p (${model})` });
-          return runClaude(body, model, (p) => closed || line({ type: 'progress', ...p }), gone.signal);
-        });
-        queue = job.catch(() => undefined);
-        job.finally(() => inFlight--).catch(() => undefined);
-        try {
-          const result = await job;
-          const secs = (Date.now() - t0) / 1000;
-          server.config.logger.info(`[god] ${body.role} via ${model}: ${secs.toFixed(1)}s, ${result.usage.input} in / ${result.usage.output} out`);
-          line({ type: 'result', ...result, model, seconds: secs });
-        } catch (err: any) {
-          server.config.logger.warn(`[god] ${body.role} failed: ${err.message}`);
-          line({ type: 'error', error: err.message, rateLimit: !!err.rateLimit });
+        // server-side jobs (R30): a job keeps running when the page goes away; a page that comes back with the same
+        // jobKey re-attaches to it (or gets its cached result) instead of paying for a second call
+        const key = body.jobKey ?? `anon-${Date.now()}-${Math.random()}`;
+        let job = jobs.get(key);
+        if (job) line({ type: 'progress', kind: 'status', text: job.final ? 'answer was ready (cached)' : 're-attached to the running call' });
+        else {
+          job = { lines: [], listeners: new Set(), final: null, at: Date.now() };
+          jobs.set(key, job);
+          const j = job;
+          const emit = (o: any) => {
+            if (o.type === 'progress' && o.kind !== 'delta') j.lines.push(o);
+            for (const l of j.listeners) l(o);
+          };
+          const t0 = Date.now();
+          if (inFlight > 0) emit({ type: 'progress', kind: 'status', text: 'queued behind another god call' });
+          inFlight++;
+          const run = queue.then(() => {
+            emit({ type: 'progress', kind: 'status', text: `starting claude -p (${model})` });
+            return runClaude(body, model, (p) => emit({ type: 'progress', ...p }), new AbortController().signal);
+          });
+          queue = run.catch(() => undefined);
+          run.finally(() => inFlight--).catch(() => undefined);
+          run.then((result) => {
+            const secs = (Date.now() - t0) / 1000;
+            server.config.logger.info(`[god] ${body.role} via ${model}: ${secs.toFixed(1)}s, ${result.usage.input} in / ${result.usage.output} out`);
+            j.final = { type: 'result', ...result, model, seconds: secs };
+            emit(j.final);
+          }, (err: any) => {
+            server.config.logger.warn(`[god] ${body.role} failed: ${err.message}`);
+            j.final = { type: 'error', error: err.message, rateLimit: !!err.rateLimit };
+            emit(j.final);
+            setTimeout(() => jobs.delete(key), 1000); // errors are not cached
+          });
         }
+        for (const l of job.lines) line(l);
+        if (job.final) {
+          line(job.final);
+          return res.end();
+        }
+        await new Promise<void>((resolve) => {
+          const l = (o: any) => {
+            line(o);
+            if (o.type === 'result' || o.type === 'error') done();
+          };
+          const done = () => {
+            job!.listeners.delete(l);
+            resolve();
+          };
+          job!.listeners.add(l);
+          res.on('close', done);
+        });
         res.end();
       });
     },

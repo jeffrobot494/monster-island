@@ -1,9 +1,19 @@
-// Messages between the main thread and the sim worker (§4).
-import type { EmitterOp, Emote } from './sim/sim';
-import type { Atmosphere, ChronicleEvent, EmitterDef, ShapeDef, TileTypeDef } from './sim/types';
+// Messages between the main thread and the sim worker.
+import type { EmitterOp, Emote, Alert } from './sim/sim';
+import type { Order } from './sim/champion';
+import type { AwaySummary } from './sim/offline';
+import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Job, ShapeDef, TileTypeDef } from './sim/types';
 
-export const ENT_STRIDE = 9; // id, shapeIdx, x, y, z, yaw, tint, scale, flags
-export const FLAG_SELECTED_INHABITANT = 1;
+// id, shapeIdx, x, y, z, yaw, tint, scale, flags, lift, roll, squash, ring
+export const ENT_STRIDE = 13;
+export const F_INHABITANT = 1;
+export const F_TELEGRAPH = 2;
+export const F_DOWNED = 4;
+export const F_CHAMPION = 8;
+export const F_TARGET = 16;
+export const F_BOUND = 32;
+export const F_MONSTER = 64;
+export const F_DRAGGED = 128;
 
 export interface ModuleSource {
   id: string;
@@ -11,14 +21,102 @@ export interface ModuleSource {
   status: 'active' | 'quarantined';
 }
 
+export type Action =
+  | { kind: 'offerLamb' }
+  | { kind: 'offerDragged' }
+  | { kind: 'offerVillager'; id: number }
+  | { kind: 'pray'; text: string }
+  | { kind: 'setJob'; id: number; job: Job };
+
 export type MainToSim =
-  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; speed: number; paused: boolean; quarantine?: string[]; skip?: number }
-  | { type: 'control'; speed?: number; paused?: boolean }
-  | { type: 'install'; id: string; source: string }
+  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; clockMs: number; realMs: number; timescale: number; quarantine?: string[]; reveal?: boolean; invincible?: boolean; skip?: number }
+  | { type: 'control'; paused: boolean }
+  | { type: 'catchUp'; clockMs: number; realMs: number }
+  | { type: 'order'; order: Order }
+  | { type: 'action'; action: Action }
+  | { type: 'install'; id: string; source: string; record: CreationRecord; night: number }
+  | { type: 'creationFailed'; night: number }
   | { type: 'setModuleStatus'; id: string; status: 'active' | 'quarantined' }
   | { type: 'requestSave' }
   | { type: 'resync' }
-  | { type: 'inspect'; id: number | null };
+  | { type: 'inspect'; id: number | null }
+  | { type: 'devJudge'; human: number; monster: number }
+  | { type: 'devSkipHours'; hours: number }
+  | { type: 'devScenario'; name: string };
+
+export interface VillagerInfo {
+  id: number;
+  name: string;
+  job: Job;
+  nextJob?: Job;
+  shift: 'day' | 'night';
+  level: number;
+  hp: number;
+  maxHp: number;
+  state: string;
+  bio: string;
+  elder: boolean;
+  inVillage: boolean;
+}
+
+export interface MonsterCard {
+  id: number;
+  name: string;
+  archetype: string;
+  display: string;
+  region: string;
+  lairFound: boolean;
+  seen: boolean;
+  level: number | null;
+  hp: number | null;
+  maxHp: number | null;
+  seenHours: number[];
+  enraged: boolean;
+  special: string;
+  dead: boolean;
+}
+
+export interface Hud {
+  tick: number;
+  clockMs: number;
+  day: number;
+  hour: number;
+  light: number;
+  timescale: number;
+  champion: null | {
+    id: number;
+    name: string;
+    hp: number;
+    maxHp: number;
+    level: number;
+    xp: number;
+    xpNext: number;
+    state: string;
+    x: number;
+    z: number;
+    dragging: null | { name: string; value: number; kind: string };
+    nearAltar: boolean;
+    downedTarget: null | { id: number; name: string };
+    weaponMul: number;
+  };
+  championPendingDawn: boolean;
+  favor: { human: number; monster: number };
+  food: number;
+  foodCap: number;
+  fold: number;
+  pop: number;
+  monstersAlive: number;
+  alarm: boolean;
+  prayer: string;
+  pendingCreations: CreationRequest[];
+  creations: CreationRecord[];
+  domainHistory: Record<'human' | 'monster', { night: number; domain: string }[]>;
+  missingSystems: string[];
+  gameOver: { winner: 'human' | 'monster'; day: number } | null;
+  stats: { monsterKills: number; villagerDeaths: number; humanSacrifices: number; monsterSacrifices: number };
+  /** monsters near the champion (for the danger check before showing a creation card) */
+  dangerNear: boolean;
+}
 
 export interface FramePayload {
   type: 'frame';
@@ -26,23 +124,20 @@ export interface FramePayload {
   tick: number;
   ents: Float32Array;
   tiles: [number, string][];
+  explored: number[];
   emitterOps: EmitterOp[];
   emotes: Emote[];
   atmosphere?: Atmosphere;
-  pops: [number, number]; // monsters, humans (incl. sleepers)
 }
 
 export interface InspectInfo {
   id: number;
   name?: string;
   kind: string;
-  faction?: string;
-  hunger: number;
-  hp: number;
-  maxHp: number;
-  behavior: string;
-  tags: string[];
-  data: Record<string, unknown>;
+  title: string;
+  lines: string[];
+  hp?: number;
+  maxHp?: number;
 }
 
 export interface ModuleStat {
@@ -54,9 +149,12 @@ export interface ModuleStat {
 
 export type SimToMain =
   | FramePayload
-  | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere }
+  | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; explored: Uint8Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere }
   | { type: 'defs'; shapes: [string, ShapeDef][]; emitters: [string, EmitterDef][]; tiles: TileTypeDef[]; shapeIndex: string[] }
   | { type: 'events'; events: ChronicleEvent[] }
+  | { type: 'alerts'; alerts: Alert[] }
+  | { type: 'hud'; hud: Hud }
+  | { type: 'villagers'; villagers: VillagerInfo[]; monsters: MonsterCard[] }
   | { type: 'save'; world: string; tick: number; reason: string }
   | { type: 'moduleFault'; id: string; hook: string; error: string; stack?: string }
   | { type: 'quarantined'; id: string; reason: string }
@@ -64,5 +162,6 @@ export type SimToMain =
   | { type: 'moduleStats'; stats: ModuleStat[] }
   | { type: 'inspect'; info: InspectInfo | null }
   | { type: 'visible'; id: string; x: number; z: number; what: string }
-  | { type: 'dawn'; day: number }
+  | { type: 'away'; summary: AwaySummary }
+  | { type: 'actionResult'; error: string | null }
   | { type: 'error'; error: string };

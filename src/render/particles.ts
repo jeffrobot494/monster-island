@@ -80,7 +80,7 @@ export class Particles {
   private seed = 1;
   private c1 = new THREE.Color();
   private c2 = new THREE.Color();
-  weather: 'none' | 'rain' | 'snow' = 'none';
+  weather: 'none' | 'rain' | 'fog' | 'ash' = 'none';
 
   constructor() {
     this.group.add(this.normal.points, this.glow.points);
@@ -136,13 +136,17 @@ export class Particles {
       }
     }
     if (this.weather !== 'none') {
-      const rain = this.weather === 'rain';
-      const d: EmitterDef = rain
+      const w = this.weather;
+      const d: EmitterDef = w === 'rain'
         ? { color: '#a8c4e8', size: 0.07, rate: 0, life: 1.1, speed: 0, spread: 0, gravity: 18 }
-        : { color: '#ffffff', size: 0.13, rate: 0, life: 4, speed: 0, spread: 0, gravity: 0.6 };
-      const n = Math.round((rain ? 160 : 50) * dt * 10) / 10;
-      for (let i = 0; i < n; i++) {
-        this.emit(d, focus.x + (this.rand() - 0.5) * 50, 14 + this.rand() * 4, focus.z + (this.rand() - 0.5) * 50);
+        : w === 'ash'
+          ? { color: '#5a5450', color2: '#8a8078', size: 0.1, rate: 0, life: 5, speed: 0.2, spread: 1, gravity: 0.3 }
+          : { color: '#b8c8a8', color2: '#d8e0d0', size: 1.2, rate: 0, life: 6, speed: 0.15, spread: 1, gravity: 0 };
+      const n = (w === 'rain' ? 160 : w === 'ash' ? 50 : 12) * dt;
+      let k = Math.floor(n) + (this.rand() < n % 1 ? 1 : 0);
+      while (k-- > 0) {
+        const y = w === 'fog' ? 0.5 + this.rand() * 1.5 : 14 + this.rand() * 4;
+        this.emit(d, focus.x + (this.rand() - 0.5) * 50, y, focus.z + (this.rand() - 0.5) * 50);
       }
     }
     this.normal.update(dt);

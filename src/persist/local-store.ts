@@ -4,7 +4,7 @@ import { RUN_LIMITS, byteLength, type SaveStore } from './save-store';
 export class LocalSaveStore implements SaveStore {
   private prefix: string;
   constructor(slot = 'default') {
-    this.prefix = `monster-island/${slot}/`;
+    this.prefix = `humans-monsters/${slot}/`;
   }
   async get(key: string) {
     return localStorage.getItem(this.prefix + key);

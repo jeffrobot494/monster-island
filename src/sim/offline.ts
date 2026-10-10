@@ -3,7 +3,7 @@ import type { Sim } from './sim';
 import type { Entity } from './types';
 import { DAY_MS, HOUR_MS } from './clock';
 import { SIZE } from './world';
-import { PRODUCTION, onShift, productionMul } from './village';
+import { PRODUCTION, onShift, pickSite, productionMul } from './village';
 import { boldness, isEnraged } from './monster-ai';
 import { applyDamage, firstName, gainXp, heal, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
@@ -88,6 +88,8 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     const step = Math.min(left, toHour);
     const f = step / HOUR_MS;
     const end = sim.clockMs + step;
+    // workers on shift need a site (they would have walked to one)
+    for (const h of sim.humans()) if (h.id !== sim.championId && onShift(sim, h) && (h.human!.site < 0 || sim.stock[h.human!.site] < 0.34)) h.human!.site = pickSite(sim, h);
     // hunts due in this slice
     for (const m of sim.monsters()) {
       const M = m.monster!;

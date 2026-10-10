@@ -2,41 +2,28 @@
 // structured-output backend accepts them; lengths are enforced after parsing.
 export type JSONSchema = Record<string, unknown>;
 
-export const TONES = ['cozy', 'eerie', 'chaotic', 'social', 'wild'] as const;
-export const SUSPENDS = ['eat', 'sleep', 'faction-survival'] as const;
+export const ALL_DOMAINS = ['creatures', 'weather', 'sky', 'land', 'plants', 'bodies', 'laws', 'fundamental'] as const;
 
-export interface Omen {
+export interface Decree {
   title: string;
-  omen: string;
-  change: string;
+  domain: string;
+  announcement: string;
+  mechanic: string;
   visible: string;
-  builds_on: string[];
-  tone: (typeof TONES)[number];
-  suspends: (typeof SUSPENDS)[number][];
+  priestsPrayer: string;
 }
 
-export const PROPOSE_SCHEMA: JSONSchema = {
+export const DECREE_SCHEMA: JSONSchema = {
   type: 'object',
   properties: {
-    omens: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          title: { type: 'string' },
-          omen: { type: 'string' },
-          change: { type: 'string' },
-          visible: { type: 'string' },
-          builds_on: { type: 'array', items: { type: 'string' } },
-          tone: { type: 'string', enum: [...TONES] },
-          suspends: { type: 'array', items: { type: 'string', enum: [...SUSPENDS] } },
-        },
-        required: ['title', 'omen', 'change', 'visible', 'builds_on', 'tone', 'suspends'],
-        additionalProperties: false,
-      },
-    },
+    title: { type: 'string' },
+    domain: { type: 'string', enum: [...ALL_DOMAINS] },
+    announcement: { type: 'string' },
+    mechanic: { type: 'string' },
+    visible: { type: 'string' },
+    priestsPrayer: { type: 'string' },
   },
-  required: ['omens'],
+  required: ['title', 'domain', 'announcement', 'mechanic', 'visible', 'priestsPrayer'],
   additionalProperties: false,
 };
 
@@ -86,18 +73,12 @@ export function checkAgainstSchema(value: unknown, schema: JSONSchema, path = '$
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s);
 
-export function normalizeOmens(data: unknown): Omen[] {
-  const err = checkAgainstSchema(data, PROPOSE_SCHEMA);
-  if (err) throw new Error(`proposal did not match the schema: ${err}`);
-  const omens = (data as { omens: Omen[] }).omens.slice(0, 3);
-  if (omens.length < 3) throw new Error(`expected 3 omens, got ${omens.length}`);
-  return omens.map((o) => ({
-    title: clip(o.title, 40),
-    omen: clip(o.omen, 100),
-    change: clip(o.change, 300),
-    visible: clip(o.visible, 160),
-    builds_on: o.builds_on.slice(0, 2),
-    tone: o.tone,
-    suspends: [...new Set(o.suspends)],
-  }));
+export function normalizeDecree(data: unknown): Decree {
+  const err = checkAgainstSchema(data, DECREE_SCHEMA);
+  if (err) throw new Error(`decree did not match the schema: ${err}`);
+  const d = data as Decree;
+  return {
+    title: clip(d.title, 40), domain: d.domain, announcement: clip(d.announcement, 320), mechanic: clip(d.mechanic, 450),
+    visible: clip(d.visible, 180), priestsPrayer: clip(d.priestsPrayer, 160),
+  };
 }

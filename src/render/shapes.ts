@@ -26,6 +26,11 @@ export interface EntityVis {
   x: number; y: number; z: number; yaw: number;
   scale: number;
   inhabitant: boolean;
+  flags: number;
+  lift: number; plift: number;
+  roll: number; proll: number;
+  squash: number;
+  ring: number;
   phase: number;
   seen: number;
 }
@@ -85,7 +90,8 @@ export class ShapeRenderer {
       let v = this.ents.get(id);
       if (!v) {
         const group = new THREE.Group();
-        v = { id, group, parts: [], shapeIdx: -2, tint: -1, px: ents[o + 2], py: ents[o + 3], pz: ents[o + 4], pyaw: ents[o + 5], x: 0, y: 0, z: 0, yaw: 0, scale: 1, inhabitant: false, phase: (id * 0.618) % 1, seen: 0 };
+        v = { id, group, parts: [], shapeIdx: -2, tint: -1, px: ents[o + 2], py: ents[o + 3], pz: ents[o + 4], pyaw: ents[o + 5], x: 0, y: 0, z: 0, yaw: 0, scale: 1, inhabitant: false, flags: 0, lift: ents[o + 9], plift: ents[o + 9], roll: ents[o + 10], proll: ents[o + 10], squash: 1, ring: 0, phase: (id * 0.618) % 1, seen: 0 };
+        group.rotation.order = 'YZX';
         this.ents.set(id, v);
         this.group.add(group);
         snap = true;
@@ -95,18 +101,27 @@ export class ShapeRenderer {
         v.py = ents[o + 3];
         v.pz = ents[o + 4];
         v.pyaw = ents[o + 5];
+        v.plift = ents[o + 9];
+        v.proll = ents[o + 10];
       } else {
         v.px = v.x;
         v.py = v.y;
         v.pz = v.z;
         v.pyaw = v.yaw;
+        v.plift = v.lift;
+        v.proll = v.roll;
       }
+      v.lift = ents[o + 9];
+      v.roll = ents[o + 10];
+      v.squash = ents[o + 11];
+      v.ring = ents[o + 12];
+      v.flags = ents[o + 8];
       v.x = ents[o + 2];
       v.y = ents[o + 3];
       v.z = ents[o + 4];
       v.yaw = ents[o + 5];
       v.scale = ents[o + 7];
-      v.inhabitant = ents[o + 8] === 1;
+      v.inhabitant = (ents[o + 8] & 1) === 1;
       const tint = ents[o + 6];
       if (shapeIdx !== v.shapeIdx || tint !== v.tint) {
         v.shapeIdx = shapeIdx;
@@ -132,9 +147,12 @@ export class ShapeRenderer {
       let dyaw = v.yaw - v.pyaw;
       if (dyaw > Math.PI) dyaw -= Math.PI * 2;
       if (dyaw < -Math.PI) dyaw += Math.PI * 2;
-      v.group.position.set(x, y, z);
+      const roll = v.proll + (v.roll - v.proll) * alpha;
+      const lift = v.plift + (v.lift - v.plift) * alpha;
+      v.group.position.set(x, y + lift + roll * 0.1 * v.scale, z);
       v.group.rotation.y = v.pyaw + dyaw * Math.min(1, alpha * 1.5);
-      v.group.scale.setScalar(v.scale);
+      v.group.rotation.z = roll * Math.PI * 0.5;
+      v.group.scale.set(v.scale, v.scale * v.squash, v.scale);
       const moving = Math.abs(v.x - v.px) + Math.abs(v.z - v.pz) > 0.001;
       for (const { mesh, part } of v.parts) {
         mesh.position.set(part.pos[0], part.pos[1], part.pos[2]);

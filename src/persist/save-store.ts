@@ -9,10 +9,10 @@ export interface SaveStore {
 export const RUN_LIMITS = { maxKeys: 128, comfortableValueBytes: 256 * 1024, maxValueBytes: 1024 * 1024, bucketBytes: 10 * 1024 * 1024 };
 
 export const KEYS = {
-  world: 'mi:world',
-  chronicle: 'mi:chronicle',
-  pending: 'mi:pending',
-  mod: (id: string) => `mi:mod:${id}`,
+  world: 'hm:world',
+  chronicle: 'hm:chronicle',
+  pending: 'hm:pending',
+  mod: (id: string) => `hm:mod:${id}`,
 };
 
 export function byteLength(s: string) {

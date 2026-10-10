@@ -1,6 +1,7 @@
 import type { JSONSchema } from '../schemas';
 
 export type AiRole = 'propose' | 'implement' | 'repair';
+/** stable id of one logical call, so a reconnecting page re-attaches instead of paying twice (R30) */
 
 export interface AiRequest {
   role: AiRole;
@@ -8,6 +9,7 @@ export interface AiRequest {
   messages: { role: 'user' | 'assistant'; content: string }[];
   schema: JSONSchema;
   maxTokens: number;
+  jobKey?: string;
   /** live progress while the call runs (providers that can stream call it; not sent over the wire) */
   onProgress?: (p: AiProgress) => void;
 }

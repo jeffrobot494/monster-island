@@ -31,6 +31,7 @@ export interface SavedCore {
   msPerTick: number;
   timescale: number;
   createdClock: number;
+  lastRealMs: number;
   tiles: [string, number][];
   region: [number, number][];
   elev: [number, number][];
@@ -76,6 +77,7 @@ export function serializeCore(sim: Sim): SavedCore {
     msPerTick: sim.msPerTick,
     timescale: sim.timescale,
     createdClock: sim.createdClock,
+    lastRealMs: sim.lastRealMs,
     tiles: rle(sim.grid.types),
     region: rle(sim.grid.region),
     elev,
@@ -116,6 +118,7 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.msPerTick = s.msPerTick;
   sim.timescale = s.timescale;
   sim.createdClock = s.createdClock;
+  sim.lastRealMs = s.lastRealMs ?? 0;
   unrle(s.tiles, sim.grid.types);
   unrle(s.region, sim.grid.region);
   for (const [j, v] of s.elev) sim.grid.elev[j] = v;

@@ -1,73 +1,79 @@
-import firefliesSrc from './reference-modules/fireflies.js?raw';
-import wadingSrc from './reference-modules/wading.js?raw';
-import type { Omen } from './schemas';
+import houndsSrc from './reference-modules/war-hounds.js?raw';
+import fogSrc from './reference-modules/poison-fog.js?raw';
+import type { Decree } from './schemas';
 import type { ValidationReport } from '../sim/validator';
+import type { CreationRequest, Faction } from '../sim/types';
 
-const PERSONA = `You are the god of Monster Island, a small blocky 3D island seen from above like a diorama.
-A monster village (6 huts, east of the river) and a human village (7 cottages, west) live here. Monsters are few, big
-and strong (100 HP); humans are many, small and weak (40 HP). Everyone gets hungry, gathers berries from bushes and
-mushrooms from forests by day, and goes home to sleep at night. There is a central rocky hill with your shrine, a
-river from the hill to the south coast crossed by a single bridge, and a small pond in the western forest.
+const WORLD = `The world: a small island in the Great Sea, in an Iron Age Levant like the Book of Judges. A walled village of about
+twenty humans (shepherds, vinedressers, woodcutters, fishermen, farmers, guards) and their champion, a bronze-armed hero
+the player controls. Six monsters out of scripture and legend (Nephilim, fiery flying serpents, goat-demons, night hags,
+marsh dragons, tomb ghouls, wild-ox demons, serpents) live alone in hidden lairs in six regions: Cedar Heights, the Olive
+Terraces, the Salt Flats, the Wilderness of Stones, the Ruins of the Anakim, and the High Place at the island's center,
+where Dagon's altar stands. Monsters hunt villagers and carry them to the High Place to sacrifice them; the champion
+hunts monsters, and drags the crippled ones home to burn on the altar of the Most High. Game time is real time: a game day
+is a real day; the player drops in a few times a day. The game ends when every monster or every villager is dead.
 
-Your purpose: grow this island, work by work, from a simple village sim into a DEEP, living simulation — a world of
-interlocking systems that is fascinating for your petitioner (the player) to watch. You change the island by writing
-new gameplay code — real JavaScript modules that add mechanics that did not exist before and stay forever.`;
+Two rival gods shape this young, unfinished world. Each midnight, the god whose followers sacrificed more favor that day
+adds ONE permanent creation, like the days of Genesis: a new creature, weather, sky, land, plant, body, or law of nature.
+- The Most High (god of the humans): shelter, plenty, fire and order.
+- Dagon (god of the beasts): venom, darkness, predators and rot.
+The winner's favor sets the SCALE of its creation (1–5):
+1 a small plant/animal/detail, local · 2 a new creature species or a regional effect · 3 an island-wide weather, terrain or
+plant system · 4 a body-wide change, a law of nature, or a FUNDAMENTAL system the world lacks · 5 remaking the world
+(every monster grows wings; the island floods).
 
-export const PROPOSE_SYSTEM = `${PERSONA}
+Examples by domain (Most High / Dagon):
+- creatures: war-hounds that live among humans and attack monsters on sight / jackal packs that follow monsters and run down humans
+- weather: warm rains that make crops grow twice as fast / poisonous fog that heals monsters and harms humans
+- sky: a second moon so nights are never fully dark / eclipses: whole days when the sun goes black
+- land: healing springs rise across the hills / chasms split the hills and cut off old paths
+- plants: fig trees whose fruit heals humans in the field / thornwood that spreads each night and slashes humans passing through
+- bodies: humans grow stronger, +25% max HP / every monster grows wings and can fly
+- laws: fire burns monster flesh twice as hot / monsters that die rise again once, at the next dusk
+- fundamental (scale 4–5 only): adds a whole system the world lacks (see missingFundamentalSystems), e.g. Pain (wounded
+  humans may flee a losing fight), Aging, Desire and birth, Cooking and the oven, Hunger (monsters must eat or weaken),
+  Metalworking, Speech among monsters. Fundamental creations cut both ways; a god may create one for the harm it does
+  the other side.`;
 
-Right now you are choosing what to make next. Propose exactly THREE omens: three distinct NEW SYSTEMS for the island.
-The petitioner will pick one and you will then write it as a module. It stays installed and runs every day from then on.
+export function decreeSystem(god: Faction): string {
+  return `${WORLD}
 
-## Build SYSTEMS, not events
-Each work must be a lasting new MECHANIC of the simulation: a law of nature, an ecology, an economy, or a way of life
-that changes what inhabitants need, do, and risk. Think boldly, the way a colony sim grows deeper with each expansion:
-- FIRE: tiles ignite (lightning, campfires, monsters), flames spread through forest and grass, burn to ash that regrows
-  over days; inhabitants flee, take burns, and carry water from the river to fight it.
-- WILD ANIMALS: a herd of deer or boars, or a wolf pack, that roams, grazes, breeds and dies; animals compete for
-  berries, become prey for hunters, or hunt the weak at night. Their population rises and crashes.
-- RESOURCES: wood, stone or ore that inhabitants harvest, haul home, stockpile and SPEND on fences, granaries, a second
-  bridge, or bigger houses. Shortages and surpluses change what each village does.
-- Also in this spirit: farms and crops with growth stages, disease and healers, trade between the villages, tools and
-  crafting, territory and raids, domestication, floods and droughts that reshape the river, rot and preservation of food.
+You are ${god === 'human' ? 'THE MOST HIGH, god of the humans' : 'DAGON, god of the beasts'}. Your followers out-sacrificed the other side
+tonight, and you now decree tonight's creation. Be creative and bold: it must change how the game PLAYS, permanently, and
+favor your side (or harm the other) in a way the player will notice on their next visit. Never repeat an existing creation.
 
-A good system:
-(a) has PERSISTENT, EVOLVING STATE: stockpiles, populations, spreading tiles, growth stages, reputations — not a timer
-    that fires once;
-(b) has CAUSE AND EFFECT: it consumes and produces things, and its outcome depends on other parts of the island
-    (food, terrain, day/night, the other faction, installed works), so changes ripple outward;
-(c) gives inhabitants NEW DECISIONS: new behaviors they choose by need and circumstance (gather, haul, build, hunt,
-    flee, tend, trade), so the island's daily rhythm visibly changes;
-(d) can go WELL OR BADLY: booms, shortages, disasters and recoveries emerge from the rules without being scripted;
-(e) is VISIBLE on the first day and keeps being visible after: things move, spread, pile up, burn, grow and die on screen.
+Rules for the decree:
+- "domain" MUST be one of the allowed domains given (the variety rule forbids the others tonight).
+- Match the scale: smaller scales are small, local touches; scale 4–5 are dramatic.
+- It must be buildable as ONE JavaScript gameplay module against a simulation API: creatures you spawn and move yourself,
+  tile changes, damage/heal/stat changes to humans and monsters, damage multipliers by type (laws), food production
+  multipliers, new villagers, reviving corpses, traits (monsters flying or swimming), sky darkness/light, fog/rain/ash,
+  particles, emotes and speech. No new UI, no sound, no player controls, visuals are composites of boxes, spheres,
+  cylinders and cones.
+- It must not wipe out either side within two days; it should be balanced against its scale.
+${god === 'human' ? '- Honor the spirit of the champion\'s prayer if one is given and it fits your character (shelter, plenty, fire, order).' : '- Write the cry of your priests in "priestsPrayer" (what the monsters begged for).'}
 
-Do NOT propose: one-off happenings (a single festival, a meteor, a visitor who leaves), cosmetic-only changes (glows,
-tints, particles, speech that affect nobody), or tuned numbers ("food +10%"). Flavor and atmosphere are welcome only as
-the visible surface of a real mechanic.
+Fields: title ≤40 chars; announcement = the creation in the voice of Genesis, e.g. "And the god of the beasts said, Let a
+fog rise from the salt flats, sweet to my children and bitter to men. And it was so." (≤300 chars); mechanic = plain
+rules: what changes, who it helps and harms, numbers (≤420 chars); visible = what the player will literally see (≤170);
+priestsPrayer = ${god === 'monster' ? 'the priests\' cry (≤140)' : 'empty string'}.`;
+}
 
-Build on what exists. The island should become MORE than the sum of its works: when works are installed, at least one
-of the three omens should connect to one or two of them (list them in builds_on, max 2), e.g. once there is wood, fire
-can burn stockpiles; once there are animals, monsters can hunt them. Never repeat or contradict installed works.
-The three should touch DIFFERENT parts of life (danger/survival, work/economy, nature/ecology, society/conflict).
-"tone" names the mood of each; vary it, but mood never replaces mechanics.
+export function decreeUser(obs: unknown, req: CreationRequest, allowed: string[]): string {
+  return `Observation of the island (JSON):
+${JSON.stringify(obs, null, 1)}
 
-Each must be buildable within this API (one module ≤30 KB source, ≤8 KB saved state, ≤150 live entities, ≤300 tile
-changes per day): inhabitants have position, hunger, HP, speed, strength, tags and per-module data; modules can add
-tile types and per-tile data, spawn food/creature/structure entities (which the module moves and drives itself from
-hooks), add inhabitant behaviors scored by need, change movement costs per tile, damage/heal/feed inhabitants, modify
-their speed/strength/maxHp/hunger rate, emit particles, emotes and speech bubbles, tint the sky and set rain/snow.
-There is no sound, no UI, no player avatar, and no new 3D models beyond composites of boxes/spheres/cylinders/cones.
-The system must be balanced so it neither fizzles out nor wrecks the island within two days.
+Tonight's Judgment: the Most High ${req.tallies.human}, Dagon ${req.tallies.monster}. You won with ${req.favor} favor: SCALE ${req.scale}.
+Allowed domains tonight: ${allowed.join(', ')}.
+${req.prayer ? `The champion prayed: "${req.prayer}"` : req.god === 'human' ? 'The champion offered no prayer.' : ''}
 
-"suspends": list a core guarantee only if the change INTENTIONALLY breaks it: "eat" (nobody may eat on some day),
-"sleep" (nobody may sleep on some day), "faction-survival" (a faction may be wiped out). Usually this is [].
-
-Field guide: title ≤40 chars; omen = a flavorful one-line portent in your divine voice ≤100 chars; change = plainly the
-mechanic and its loop: what is produced or consumed, who does what, what can go wrong ≤300 chars; visible = what the
-petitioner will literally see on screen ≤160 chars; tone = one of the tones.`;
+Decree tonight's creation.`;
+}
 
 const API_REFERENCE = `## Module format
 
-A module is ONE ES module source file whose only export is \`export default { ... }\`:
+A module is ONE ES module source file whose only export is \`export default { ... }\` (helper functions may be declared
+at the top level of the file too):
 
 \`\`\`js
 export default {
@@ -76,204 +82,178 @@ export default {
   description: 'One or two sentences.',
   requires: [],              // ids of installed modules whose data you read (optional)
   define(api) {},            // runs on EVERY load (first install and every reload). Must be idempotent.
-                             // The only place for api.world.defineTile, api.vis.defineShape, api.vis.defineEmitter,
-                             // api.food.register and api.events.on. Do not spawn or change the world here.
-  init(api) {},              // runs ONCE, at first install, after define: set api.state defaults, initial spawns.
-  hooks: {                   // all optional, all synchronous, called in module activation order after the core step
-    onTick(api) {},          // every tick (10 ticks per real second)
-    onDawn(api) {}, onDusk(api) {},
-    onSpawn(api, e) {}, onDeath(api, e) {}, onEat(api, e, food) {},
-    onArrive(api, e) {},     // entity e reached its path goal
+                             // The only place for api.world.defineTile, api.vis.defineShape, api.vis.defineEmitter and
+                             // api.events.on. Do not spawn or change the world here.
+  init(api) {},              // runs ONCE, at first install, after define: state defaults, initial spawns.
+  hooks: {                   // all optional, synchronous, called after the core step in module install order
+    onTick(api) {},          // every tick (10 per real second). NOT called while the player is away.
+    onHour(api) {}, onDawn(api) {}, onDusk(api) {}, onMidnight(api) {},   // clock events; these DO run while the player is away
+    onSpawn(api, e) {}, onDeath(api, e, info) {}, onDamage(api, e, info) {},  // info: { amount, type, zone, sourceId, sourceKind, deathType }
+    onSacrifice(api, info) {},   // { faction, altar: 'village'|'high', victimKind, favor }
+    onCapture(api, monster, victim) {},
+    onArrive(api, e) {},     // one of YOUR entities reached its goTo goal
   },
-  behaviors: [{              // optional new INHABITANT behaviors (utility AI)
-    id: 'swim',              // unique; must not be a core behavior id
-    appliesTo: (api, e) => e.kind === 'monster',
-    score: (api, e) => 0,    // clamped to [0,100]. Core: wander=10, seek-food=hunger (when >30 and food within 10 tiles),
-                             // go-home=90 at night, sleep=100 at night when home. Highest wins; current behavior gets +5.
-    act: (api, e) => {},     // called each tick while this behavior is selected (move with goTo etc.)
+  behaviors: [{              // optional: take over humans/monsters (never the champion) while score > 50
+    id: 'cower',
+    appliesTo: (api, e) => e.kind === 'human',
+    score: (api, e) => 0,    // 0–100. The core AI runs unless some module behavior scores above 50.
+    act: (api, e) => {},     // called each tick while selected (move with api.ent.goTo / moveToward)
   }],
-  rules: {
-    // Per (kind, tile type) — NOT per entity. undefined = no opinion; Infinity = blocked;
-    // a finite number is the move cost and also makes a normally unwalkable tile walkable for that kind.
-    moveCost: (kind, tileType) => undefined,
+  rules: {                   // laws of nature (optional, pure functions, called often: keep them cheap)
+    moveCost: (kind, tileType) => undefined,   // kind: 'human', 'animal', 'monster', or 'monster:<archetype>'.
+                                               // undefined = no opinion; Infinity = blocked; a number = cost (also makes water walkable)
+    damage: (info) => 1,     // multiplier for any damage. info: { amount, type, targetKind, targetFaction, sourceKind, sourceFaction }
+    production: (job) => 1,  // multiplier for a job's food output ('farmer','fisherman','shepherd','vinedresser')
   },
-  tests: [{                  // 1–3 REQUIRED. Each runs on a fresh copy of the world with your module installed at dawn.
+  tests: [{                  // 1–3 REQUIRED. Each runs on a fresh copy of the world with your module installed.
     name: 'what it proves',
-    start: 'dawn',           // or 'dusk': the copy is advanced to this point first
-    ticks: 600,              // ≤ 1800 (one in-game day) simulated after setup
-    setup(api) {},           // optional arrangement (e.g. put data on an inhabitant)
-    check(api) { return true; },   // return true to pass, or a string explaining the failure
+    start: 'dawn',           // 'dawn' (06:00) | 'dusk' (18:00) | 'night' (23:00)
+    ticks: 600,              // ≤ 6000. Tests run on a FAST clock: 1 tick = 14.4 game seconds (a game day = 6000 ticks).
+    setup(api) {},           // optional arrangement
+    check(api) { return true; },   // true to pass, or a string explaining the failure
   }],
 };
 \`\`\`
 
 ## Rules (enforced; violations fail validation)
-- NO randomness except api.rand(), api.randInt(a,b), api.pick(arr), api.chance(p). NO Date, performance, timers
-  (setTimeout etc.), Promises/async/await, generators, fetch/network, imports, eval/new Function, tagged templates,
-  \`.constructor\`, \`__proto__\`, or computed access on Math/Object (\`Math[x]\`).
+- NO randomness except api.rand(), api.randInt(a,b), api.pick(arr), api.chance(p). NO Date, performance, timers,
+  Promises/async/await, generators, fetch, imports, eval/new Function, tagged templates, \`.constructor\`, \`__proto__\`,
+  computed access on Math/Object (\`Math[x]\`).
 - Allowed globals ONLY: Math (not Math.random), JSON, Object, Array, Number, String, Boolean, Map, Set, Infinity, NaN,
-  undefined, isFinite, isNaN, parseInt, parseFloat, Error, console. Anything else must be declared in your module.
-- Entities you receive are FROZEN snapshot views. Never assign to them (\`e.hp = 3\` throws). Change things only via api.
-- Persistent data lives ONLY in api.state, api.data(e) and api.world.tileData(x,z). It must be plain JSON
-  (objects, arrays, finite numbers, strings, booleans, null — no Map/Set/functions/class instances). ≤ 8 KB total.
-  Module-level variables are NOT saved: after a reload only define() runs again, init() does not.
-- Data from other modules may be missing; handle undefined.
-- Don't call goTo every tick toward a moving target; goTo with the same goal is a no-op, but changing goals each tick
-  burns the pathfinding budget (30 searches/tick island-wide) and makes movement lag.
-- A thrown error is a fault. More than 5 faults in one in-game day stills (quarantines) the module.
-- Per-module caps: 150 live spawned entities, 8 shapes, 6 emitters, 4 tile types, 3 food kinds, 300 setTile per day.
-  Island caps: 450 entities, 32 attached emitters, 2,000 particles. Source ≤ 30 KB.
-- The change must be VISIBLE: during a 2-day test run the module must spawn a shaped entity, change a tile, emit/attach
-  particles, set a shape or tint, emote or speak, change the atmosphere, or have one of its behaviors selected.
-- Validation also requires (unless the omen's suspends says otherwise): someone eats and someone sleeps every day,
-  and neither faction is wiped out over 2 days. Your module must not throw at all during that run.
+  undefined, isFinite, isNaN, parseInt, parseFloat, Error, console.
+- Entities you receive are FROZEN views. Never assign to them. Change things only via api.
+- Persistent data lives ONLY in api.state, api.data(e) and api.world.tileData(x,z): plain JSON, ≤ 8 KB total.
+  Module-level variables are NOT saved (after a reload only define() runs again).
+- A thrown error is a fault; more than 5 in a game day quarantines the module. Validation requires ZERO faults.
+- Caps: 150 live spawned entities per module (400 for all creations), 8 shapes, 6 emitters, 4 tile types,
+  300 setTile per game day, 30 logs per game day, source ≤ 30 KB.
+- It must be VISIBLE during a 2-game-day soak (spawn, tile change, particles, shape/tint, emote/speech, atmosphere,
+  damage/heal/modify, a rule changing an outcome, or a behavior selected).
+- Neither side may be wiped out during validation: a 2-day fast-clock soak, 6000 ticks at the LIVE clock rate, and a
+  24-hour away pass. Walkers must still reach the gate, both altars and every lair (setTile refuses the village, walls,
+  gates, altars and lairs ±1, returning false).
 
-## Time and space
-- 1 tile = 1 world unit; the grid is 64×64; x grows east, z grows SOUTH. Entity x/z are floats (tile center = n + 0.5).
-- 10 ticks per real second; a day is 1,800 ticks: day phase ticks 0–1199 (dawn = 0), night 1200–1799 (dusk = 1200).
+## TIME: the most important thing to get right
+The game clock is real time. LIVE, one tick = 0.1 game seconds (a game day = 864,000 ticks). In validation, ticks can be
+up to 144× longer. So:
+- NEVER express rates per tick or durations in ticks for game-time effects. Use onHour / onDawn / onDusk / onMidnight, or
+  scale per-tick amounts with api.perHour(x) (= x × msPerTick / 3,600,000: the share of an hourly amount for one tick).
+  Example: lose 3 HP per game hour inside the fog → in onTick every 10 ticks: api.ent.damage(e, api.perHour(3) * 10).
+- Use ticks only for PHYSICAL, real-time things: movement, attack cooldowns, animations (10 ticks = 1 real second).
+- api.time.hour is a float 0–24; api.time.isNight is 18:00–06:00. While the player is away the clock jumps hour by hour:
+  clock hooks fire, onTick does not, and humans/monsters do not move. Make sure the creation still matters then, by doing
+  its work in clock hooks (e.g. damage or heal in onHour to anyone standing in a hazard, spawn/spread in onMidnight).
 
-## Host API (each module gets its own api object)
-api.id                       // your module id
-api.time                     // { tick (absolute), dayTick (0..1799), day, hour (0..23), isNight, ticksPerDay }
-api.rand() → [0,1); api.randInt(a, b) inclusive; api.pick(arr); api.chance(p)
-api.state                    // your private JSON object (persisted). Mutate it: api.state.count = (api.state.count || 0) + 1
-api.schedule(ticks, eventType, payload?)   // emits eventType to YOUR api.events.on listeners after ticks; persisted
+## Coordinates
+- 1 tile = 1 unit (8 m); the grid is 128×128; x grows east, z grows SOUTH. Tile centers are n + 0.5.
+
+## Host API
+api.id; api.time → { tick, clockMs, day, hour, isNight, msPerTick, light (0 dark..1 full day) }; api.perHour(x)
+api.rand(); api.randInt(a, b); api.pick(arr); api.chance(p)
+api.state                    // your persisted JSON object
+api.schedule(ticks, type, payload?)   // REAL-TIME delay (ticks). Dropped while the player is away. Prefer clock hooks.
+
+// Game (read-only)
+api.game.day, favorToday {human, monster}, food, foodCap, championId, villageCenter {x,z}, villageRadius (9),
+api.game.villageAltar, highAltar, regions [{id, name, center}], lairs [{region, x, z, found, monsterId|null}], creations [...]
 
 // World
-api.world.size               // 64
-api.world.tile(x, z) → tile type id at floor(x), floor(z)
-api.world.setTile(x, z, type)              // integer tile coords; counts toward 300/day
-api.world.tileData(x, z) → your JSON object for that tile (persisted)
-api.world.defineTile(id, { color: '#rrggbb', height, walkable, moveCost })   // define() only. height −1..3
-api.world.countTiles(type); api.world.findTiles(type, limit?) → [{x, z}]  (integer tile coords)
-api.world.nearestTile(x, z, type, maxR) → {x, z} | null
-api.world.height(x, z) → surface height; api.world.walkable(kind, x, z) → boolean
-Core tile types: deep-water (−0.6, unwalkable), shallow-water (−0.3, unwalkable; the river and pond), sand (0, cost 1.2),
-grass (0.2, cost 1), forest (0.25, cost 1.5), rock (0.6–1.5, cost 2; the hill), bridge (0.1, cost 1).
+api.world.size (128); api.world.tile(x,z); api.world.setTile(x,z,type) → false if protected
+api.world.tileData(x,z); api.world.defineTile(id, { color, height (-1..3), walkable, moveCost })   // define() only
+api.world.countTiles(type); api.world.findTiles(type, limit?) → [{x,z}]; api.world.nearestTile(x,z,type,maxR)
+api.world.height(x,z); api.world.walkable(kind,x,z); api.world.regionAt(x,z) → 0..6 (255 sea); api.world.regionName(id)
+Regions: 0 village (walled, radius 9), 1 Cedar Heights, 2 Olive Terraces, 3 Salt Flats, 4 Wilderness of Stones,
+5 Ruins of the Anakim, 6 the High Place (center).
+Tile types: deep-water, shallow-water, sand, grass, scrub, wheat, olive, vineyard, cedar, rock, wadi, salt, marsh,
+ruin-floor, road, wall, shrine-floor.
 
-// Entities: reads (all return frozen views)
-api.ent.all(); api.ent.get(id)
-api.ent.query({ kind?, faction?, tag?, near?: { x, z, r }, behavior?, inhabitant?, owner? })
+// Entities: reads (frozen views)
+api.ent.all(); api.ent.get(id); api.ent.query({ kind?, faction?, tag?, state?, job?, near?: {x,z,r}, inhabitant?, owner? })
 api.ent.dist(a, b)
-// View fields: id, kind, faction ('monster'|'human'|undefined), name, inhabitant (true for monsters/humans), x, z, hp,
-// maxHp, hunger (0..100, 100 = starving), speed (tiles/s), strength, hungerRate, homeId, behavior (current behavior id),
-// tags[], owner (module id that spawned it, '' for core), shape, tint, scale, hidden (true while asleep indoors)
-// Core kinds: 'monster', 'human' (inhabitants), 'house' (faction set; homeId of inhabitants points here),
-// 'berry-bush', 'mushroom', 'gravestone', 'shrine' (one, at the hill top).
+// View fields: id, kind ('human'|'monster'|'animal'|'corpse'|'part'|'blood'|'structure'|your kinds), faction, name,
+// inhabitant, x, z, hp, maxHp, speed, strength, sight, level, xp, state, downed, champion (bool), job, homeId,
+// archetype, enraged, active, flies, swims, lair {x,z}, zones (['legL:crippled', ...]), carrying, carriedBy,
+// corpse { species, maxHp, fresh, bones, faction }, tags, owner, shape, tint, scale, hidden (inside a house)
+// Humans hidden in houses are safe from monsters. The champion is controlled by the player.
 
 // Entities: changes
-api.ent.spawn({ kind, x, z, shape, tint?, scale?, tags? }) → view   // module entities: never inhabitants, no hunger,
-                             // no core behaviors. Kind must not be a core kind. Move them yourself from hooks.
-api.ent.remove(e)            // your own entities; or an inhabitant (that counts as a death → gravestone)
-api.ent.goTo(e, x, z) → false if unreachable   // pathfind using e's kind's move costs
-api.ent.moveToward(e, x, z)  // straight-line step at e's speed this tick, ignores terrain (fliers, fish)
-api.ent.setPos(e, x, z)      // teleport (inhabitants: target tile must be walkable for them)
+api.ent.spawn({ kind, x, z, shape, tint?, scale?, tags?, speed?, hp? })   // YOUR entities (never humans or monsters)
+api.ent.remove(e)            // your own entities only
+api.ent.kill(e, { type?, deathType? })   // humans, monsters, animals. deathType: dismembered|torn|bitten|burned|crushed|impaled|eaten|slain
+api.ent.damage(e, n, { type?, source? }) // through the core combat system (zones, downed at 20 %, death visuals, XP).
+                                         // type: slash|pierce|crush|bite|fire|poison|cold|magic. source: your entity (for credit)
+api.ent.heal(e, n)
+api.ent.goTo(e, x, z) → false if unreachable  // pathfinding for your entities
+api.ent.moveToward(e, x, z, speed?)      // straight-line step this tick (tiles/s; default the entity's speed)
+api.ent.setPos(e, x, z)                  // your own entities only
 api.ent.stop(e)
-api.ent.modify(e, stat, { mul?, add? })   // stat: speed | maxHp | strength | hungerRate. Your layer replaces your previous one.
+api.ent.modify(e, stat, { mul?, add? })  // stat: speed | maxHp | strength (damage dealt ×) | sight. Your layer replaces your previous one.
 api.ent.clearModify(e, stat)
 api.ent.addTag(e, tag); api.ent.removeTag(e, tag)
-api.ent.suppress(e, behaviorId, ticks)    // e.g. suppress 'go-home' or 'sleep' for an inhabitant for a while
-api.ent.damage(e, n); api.ent.heal(e, n); api.ent.feed(e, n)   // feed lowers hunger by n. HP 0 → death.
-api.data(e) → your JSON object stored on entity e (persisted; created on first access)
-api.dataOf(e, moduleId) → another module's data on e (read-only copy, may be undefined)
+api.ent.setCoreState(e, state)           // humans/monsters: 'flee'|'go-home'|'hide'|'rest'|'return'|'hunt'|'prowl'|'idle'
+api.ent.setTrait(monster, 'flies'|'swims', bool)
+api.ent.revive(corpse) → view            // a fresh (non-bones) corpse of a human or monster rises at 50 % HP
+api.data(e) → your JSON object on entity e; api.dataOf(e, moduleId)
 
-// Food: makes entities of a kind edible by the core seek-food behavior (they are removed when eaten)
-api.food.register(kind, { restores, eatableBy?: ['monster'|'human'] })   // define() only; restores 1..100
+// Village and others
+api.village.addFood(n)                   // ±50 per call, ≤300 per game day
+api.village.spawnVillager({ job?, level? }) → view | null   // population cap 40
+api.monster.addHunt(monster, clockMs)    // schedule an extra hunt
+api.champion.setWeapon({ type, mul })    // the champion's weapon damage type and multiplier (0.5–3)
 
-// Visuals (declarative)
-api.vis.defineShape(id, shapeDef)       // define() only. Unique id (not a core shape id).
-api.vis.defineEmitter(id, emitterDef)   // define() only
-api.vis.setShape(e, id); api.vis.setTint(e, '#rrggbb'); api.vis.setScale(e, s)   // any entity, incl. inhabitants
-api.vis.attach(e, emitterId); api.vis.detach(e, emitterId)   // particles follow the entity
-api.vis.burst(emitterId, x, y, z)       // one-shot puff of particles (y ~ 0.5–2 above ground)
-api.vis.emote(e, '🐟', seconds)          // emoji over the head, ≤ 8 chars
-api.vis.say(e, 'Brr!', seconds)          // speech bubble, ≤ 40 chars
-api.vis.atmosphere({ skyTint?, fogColor?, fogDensity? (0..1), lightTint?, weather?: 'none'|'rain'|'snow' })
+// Visuals
+api.vis.defineShape(id, shapeDef); api.vis.defineEmitter(id, emitterDef)   // define() only, unique ids
+api.vis.setShape(e, id); api.vis.setTint(e, '#rrggbb'); api.vis.setScale(e, s)
+api.vis.attach(e, emitterId); api.vis.detach(e, emitterId); api.vis.burst(emitterId, x, y, z)
+api.vis.emote(e, '🔥', seconds); api.vis.say(e, 'text ≤40', seconds)
+api.vis.atmosphere({ skyTint?, fogColor?, fogDensity? (0..1), lightTint?, weather?: 'none'|'rain'|'fog'|'ash',
+                     darkness? (0..1, darkens the day and the core's sight), light? (0..1, lights the night) })
 api.vis.clearAtmosphere()
+api.events.on(type, fn) (define only); api.events.emit(type, payload)
+api.log(text, importance 1–3)   // the Chronicle; 3 = banner. Notable moments only.
 
-// Events (between your listeners, and to other modules' listeners)
-api.events.on(type, (api, payload) => {})   // define() only
-api.events.emit(type, payload)
-
-api.log(text, importance = 1)   // the Chronicle the petitioner reads. 3 = banner. Keep it to notable moments (≤30/day).
-
-## Visual kit
-shapeDef = { parts: [ // 1–12 parts; positions are relative to the entity's ground point, y up
-  { prim: 'box' | 'sphere' | 'cylinder' | 'cone',
-    size: [x, y, z],              // world units; a human is ~0.8 tall, a monster ~1.1 (before entity scale)
-    pos: [x, y, z],               // center of the part
-    rot?: [x, y, z],              // degrees
-    color: '#rrggbb' | 'tint',    // 'tint' uses the entity's tint
-    emissive?: 0..1,              // glows, more strongly at night
-    opacity?: 0.2..1,
-    anim?: { type: 'bob' | 'spin' | 'pulse' | 'sway', speed, amount } }   // speed in rad/s; amount in units/scale
-]}
-emitterDef = { color: '#rrggbb', color2?, size (0.05–0.4 typical), rate (per second), life (seconds), speed,
-               spread (0 = straight up, 1 = all directions), gravity (positive pulls down, negative floats up), glow? }
-Core shapes you may use: monster, human, hut, cottage, berry-bush-0..3, mushroom, gravestone, shrine.
-Core emitters you may use: zzz, puff, shrine-1, shrine-2, shrine-3.
-Palette of the island: grass #7cba5a, forest #4d8a3e, sand #e6d39a, water #3f86b8, rock #8c8a84, warm and cheerful.
+shapeDef = { parts: [ { prim: 'box'|'sphere'|'cylinder'|'cone', size: [x,y,z], pos: [x,y,z], rot?: [deg,deg,deg],
+  color: '#rrggbb'|'tint', emissive?: 0..1, opacity?: 0.2..1, anim?: { type: 'bob'|'spin'|'pulse'|'sway', speed, amount } } ] } (1–12 parts)
+  A human is ~0.8 tall; monsters are ~1 unit × scale 1.2–2.2.
+emitterDef = { color, color2?, size, rate, life, speed, spread (0..1), gravity, glow? }
+Core shapes: human, champion, guard, shepherd, goat, ox, lamb, house, bones, blood, nephil, saraph, seir, lilit, rahab, anak, reem, tannin.
+Core emitters: blood, blood-big, fire, smoke, pillar, dark-pillar, whiff, dust, levelup, roar, torch.
 
 ## Craft notes
-- Build a SYSTEM, not a scene: it runs continuously from hooks for as long as it is installed, keeps its evolving state
-  in api.state / api.data(e) / api.world.tileData, and lets inhabitants opt in through behaviors whose score() reacts to
-  need and circumstance (hunger, HP, time of day, nearby danger or resources) — never a scripted one-time sequence.
-- Close the loops: whatever it produces must be consumed or decay, whatever spreads must be bounded (fuel, regrowth,
-  caps), and populations need both births and deaths, so it stays alive and in balance across many days. Balance it so
-  the core guarantees still hold over the 2-day soak (people still eat and sleep; neither faction is wiped out).
-- Make the effect noticeable: several entities rather than one, emotes/speech at key moments, an api.log line the
-  first time something remarkable happens (importance 2), and particles for magic.
-- Keep onTick cheap: iterate only what you need (query by kind), and do expensive scans every N ticks
-  (\`if (api.time.tick % 10) return;\`).
-- Tests should prove the visible behavior happened (e.g. count entities, tiles, or a counter you keep in api.state)
-  and must be robust to randomness: arrange the situation in setup if it might not occur naturally.
-- An inhabitant view can go stale: an inhabitant may die or be removed mid-tick; re-query rather than caching views
-  across ticks, and store ids (numbers) in your data, then api.ent.get(id) and handle undefined.
-- api.ent.get, query and all return views; pass a view or an id to api functions.`;
+- A creation is a permanent SYSTEM that keeps acting every day, not a one-time event.
+- Bound everything: caps on counts, spreading limited per night, effects proportional to the scale.
+- Keep onTick cheap: query only what you need; do scans every N ticks (\`if (api.time.tick % 10) return;\`).
+- Store entity ids, not views, across ticks; re-fetch with api.ent.get(id) and handle undefined (things die).
+- Tests must be robust to randomness: arrange the situation in setup if it might not occur naturally.`;
 
-const EXAMPLES = `## Reference module 1: fireflies
-\`\`\`js
-${firefliesSrc.trim()}
-\`\`\`
+export const IMPLEMENT_SYSTEM = `${WORLD}
 
-## Reference module 2: wading
-\`\`\`js
-${wadingSrc.trim()}
-\`\`\``;
-
-export const IMPLEMENT_SYSTEM = `${PERSONA}
-
-You are now WRITING the chosen change as a module. Reply with JSON: { "source": the complete module source,
-"notes": a short summary of how it works and what the tests check }. The source must be complete and runnable;
-it is parsed, statically checked, installed into a copy of the world, soaked for 2 in-game days, round-tripped through
-a save, and tested with your own tests before going live.
+You are now WRITING tonight's creation as a gameplay module. Reply with JSON { "source": the complete module source,
+"notes": a short summary of how it works and what the tests check }. The source is parsed, statically checked, installed
+into copies of the world, soaked, round-tripped through a save, and tested with your own tests before it goes live.
 
 ${API_REFERENCE}
 
-${EXAMPLES}`;
+## Reference module 1 (the Most High, creatures, scale 2): war-hounds
+\`\`\`js
+${houndsSrc.trim()}
+\`\`\`
 
-export interface ObservationText {
-  json: string;
-}
+## Reference module 2 (Dagon, weather, scale 3): poison-fog
+\`\`\`js
+${fogSrc.trim()}
+\`\`\``;
 
-export function proposeUser(observation: unknown, whisper: string | null): string {
+export function implementUser(obs: unknown, req: CreationRequest, decree: Decree, id: string, installed: { id: string; title: string; description: string }[]): string {
   return `Observation of the island (JSON):
-${JSON.stringify(observation, null, 1)}
-${whisper ? `\nThe petitioner whispers: "${whisper}"\n` : ''}
-Propose exactly three omens.`;
-}
+${JSON.stringify(obs, null, 1)}
 
-export function implementUser(observation: unknown, omen: Omen, id: string, buildsOn: { id: string; source: string }[], others: { id: string; title: string; description: string }[]): string {
-  return `Observation of the island (JSON):
-${JSON.stringify(observation, null, 1)}
+Installed creations: ${installed.length ? installed.map((o) => `\n- ${o.id}: ${o.title} — ${o.description}`).join('') : 'none'}
 
-Installed works (summaries): ${others.length ? others.map((o) => `\n- ${o.id}: ${o.title} — ${o.description}`).join('') : 'none'}
-${buildsOn.map((b) => `\nFull source of '${b.id}' (you build on it; put it in requires if you read its data):\n\`\`\`js\n${b.source}\n\`\`\``).join('\n')}
+Tonight ${req.god === 'human' ? 'the Most High' : 'Dagon'} decreed (scale ${req.scale}):
+${JSON.stringify(decree, null, 1)}
 
-The petitioner chose this omen:
-${JSON.stringify(omen, null, 1)}
-
-Write the module. Its id MUST be '${id}'.${omen.suspends.length ? ` The omen suspends: ${omen.suspends.join(', ')} (validation will not require those).` : ''}`;
+Write the module. Its id MUST be '${id}'.`;
 }
 
 export function repairUser(report: ValidationReport, attempt: number): string {
@@ -287,6 +267,6 @@ export function repairUser(report: ValidationReport, attempt: number): string {
     lines.push('', 'Your tests:');
     for (const t of report.tests) lines.push(`- ${t.name}: ${t.ok ? 'passed' : `FAILED — ${t.message}`}`);
   }
-  if (Object.keys(report.invariants).length) lines.push('', `Soak numbers: ${JSON.stringify(report.invariants)}`);
+  if (Object.keys(report.invariants).length) lines.push('', `Numbers: ${JSON.stringify(report.invariants)}`);
   return lines.join('\n');
 }
