@@ -35,10 +35,11 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | F | finish a downed monster |
 | T | torch on/off (it takes your shield hand) |
 | Q | inspect what you're looking at |
+| V | first / third person camera (also the button at the bottom right) |
 | M | map |
 | Tab or Esc | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
 
-The world never pauses: it runs on the real clock, even while the journal is open. Whenever you release the mouse, your
+A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night. The world never pauses, even while the journal is open. Whenever you release the mouse, your
 champion holds his ground and strikes back at anything attacking him.
 
 ## How to play
@@ -53,7 +54,7 @@ champion holds his ground and strikes back at anything attacking him.
   **F** to finish it where it lies.
 - **Defend.** A scream shows a red **!** on the compass toward the captive. Strike the carrier and it drops its
   prisoner. The shofar means a monster is at the walls.
-- **Judgment** falls at local midnight: the god with more favor today adds a creation to the world.
+- **Judgment** falls at midnight (every 8 minutes): the god with more favor today adds a creation to the world.
 - You win when all six monsters are dead, and lose when every villager is.
 
 ## URL parameters (dev)
@@ -69,6 +70,7 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 | `?nolock=1` | drag-to-look without pointer lock |
 | `?hideplay=1` | hide the click-to-play card |
 | `?noshadow=1` | shadows off |
+| `?third=1` | start in third person |
 
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test

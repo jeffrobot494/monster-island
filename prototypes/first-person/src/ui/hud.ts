@@ -1,7 +1,7 @@
 // The first-person HUD (spec §8.1, F20, F22, F28): crosshair, target frame, prompts, compass, bars, wind-up arcs,
 // hurt vignette, downed overlay, click-to-play, one-time hints.
 import type { Hud } from '../protocol';
-import { fmtClock } from '../sim/clock';
+import { GAME_TIMESCALE, fmtClock } from '../sim/clock';
 import { h } from './ui';
 import { keyLabel, type Settings } from '../input/controls';
 
@@ -45,6 +45,7 @@ export class HudView {
   private hurt = h('div', { class: 'hurt' });
   private downed = h('div', { class: 'downed-msg hidden' });
   play = h('div', { class: 'play hidden' });
+  private camBtn = h('button', { class: 'cam-toggle', type: 'button' }) as HTMLButtonElement;
   private hint = h('div', { class: 'hint hidden' });
   private hpI = h('i');
   private stI = h('i');
@@ -55,12 +56,13 @@ export class HudView {
   private hintTimer = 0;
   private seenHints = new Set<string>();
   onPlay: () => void = () => {};
+  onCamera: () => void = () => {};
 
   constructor(parent: HTMLElement, private settings: Settings) {
     this.root = h('div', { class: 'hud' });
     this.compass.append(this.strip, h('div', { class: 'compass-tick' }));
     this.bl.append(this.nameEl, h('div', { class: 'bar hp' }, this.hpI), h('div', { class: 'bar st' }, this.stI), h('div', { class: 'bar xpb' }, this.xpI), this.stateEl);
-    this.root.append(this.fx, this.hurt, this.compass, this.tl, this.tr, this.bl, this.xhair, this.target, this.prompt, this.downed, this.hint, this.play);
+    this.root.append(this.fx, this.hurt, this.compass, this.tl, this.tr, this.bl, this.xhair, this.target, this.prompt, this.downed, this.hint, this.play, this.camBtn);
     parent.prepend(this.root);
     try {
       for (const k of JSON.parse(localStorage.getItem('hmfp:hints') ?? '[]')) this.seenHints.add(k);
@@ -68,8 +70,19 @@ export class HudView {
       /* storage unavailable */
     }
     this.play.addEventListener('click', () => this.onPlay());
+    this.camBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onCamera();
+    });
+    this.setCamera(settings.thirdPerson);
     window.addEventListener('resize', () => this.resizeFx());
     this.resizeFx();
+  }
+
+  /** Label the camera button with the view it switches to. */
+  setCamera(third: boolean) {
+    this.camBtn.textContent = `${third ? 'First person' : 'Third person'} (${keyLabel(this.settings.bindings.camera)})`;
+    this.xhair.classList.toggle('third', third);
   }
 
   private resizeFx() {
@@ -98,6 +111,7 @@ export class HudView {
         row(keyLabel(b.torch), 'torch'),
         row(keyLabel(b.inspect), 'inspect'),
         row(keyLabel(b.map), 'map'),
+        row(keyLabel(b.camera), 'first / third person'),
         row(`${keyLabel(b.journal)} / Esc`, 'journal'),
       ),
       h('div', { class: 'play-go' }, 'Click to play'),
@@ -126,12 +140,12 @@ export class HudView {
   setHud(hud: Hud, stamina: number, winded: boolean) {
     const night = hud.light < 0.5;
     const jm = Math.max(0, hud.judgmentInMs);
-    const jh = Math.floor(jm / 3_600_000), jmin = Math.floor((jm % 3_600_000) / 60_000);
+    const jmin = Math.floor(jm / 60_000), js = Math.floor((jm % 60_000) / 1000);
     const total = Math.max(1, hud.favor.human + hud.favor.monster);
     this.tl.replaceChildren(
-      h('div', { class: 'clock' }, `${night ? '☾' : '☀'} Day ${hud.day} · ${fmtClock(hud.clockMs)}${hud.timescale !== 1 ? ` ×${hud.timescale}` : ''}`),
+      h('div', { class: 'clock' }, `${night ? '☾' : '☀'} Day ${hud.day} · ${fmtClock(hud.clockMs)}${hud.timescale !== GAME_TIMESCALE ? ` ×${hud.timescale}` : ''}`),
       h('div', { class: 'favor' }, h('span', { class: 'fh' }, `☀ ${hud.favor.human}`), h('span', { class: 'fbar' }, h('i', { style: `width:${(hud.favor.human / total) * 100}%` })), h('span', { class: 'fm' }, `${hud.favor.monster} ☾`)),
-      h('div', { class: 'muted-l' }, `Judgment in ${jh}h ${String(jmin).padStart(2, '0')}m`),
+      h('div', { class: 'muted-l' }, `Judgment in ${jmin}:${String(js).padStart(2, '0')}`),
     );
     const slain = 6 - hud.monstersAlive;
     this.tr.replaceChildren(

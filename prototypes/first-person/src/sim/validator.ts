@@ -3,7 +3,7 @@
 import { checkSource } from './ast-check';
 import { Island, type ModuleLoader, type SavedWorld } from './island';
 import { HOOKS, MODULE_ENTITY_BUDGET, MODULE_STATE_CAP, type FaultInfo, type ModuleDef, type ModuleRecord } from './module-runtime';
-import { DAY_MS, HOUR_MS, calDay, hourOf } from './clock';
+import { DAY_MS, GAME_TIMESCALE, HOUR_MS, MS_PER_REAL_TICK, calDay, hourOf } from './clock';
 import { SIZE } from './world';
 import type { Sim } from './sim';
 import { kill, applyDamage } from './combat';
@@ -12,6 +12,7 @@ import { resolveAway } from './offline';
 
 export const MAX_SOURCE_BYTES = 30 * 1024;
 export const FAST_MS_PER_TICK = 14_400; // a game day = 6000 ticks
+export const LIVE_MS_PER_TICK = MS_PER_REAL_TICK * GAME_TIMESCALE; // the game's own clock: a day = 4800 ticks
 export const SOAK_TICKS = 12_000;
 export const LIVE_TICKS = 6000;
 export const TEST_MAX_TICKS = 6000;
@@ -250,7 +251,7 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
   // 4. (B) live clock rate (catches per-tick effects tuned against the fast clock)
   try {
     const nf = faults.length;
-    const { island: b, mod: bm } = await clone(100, 22);
+    const { island: b, mod: bm } = await clone(LIVE_MS_PER_TICK, 22);
     runTicks(b, LIVE_TICKS, 'live-rate');
     const f2 = invariants(b.sim, bm, 'live');
     if (faults.length > nf) f2.push(`the candidate threw ${faults.length - nf} error(s) at the live clock rate`);
@@ -265,7 +266,7 @@ export async function validateCandidate(req: ValidationRequest, env: ValidatorEn
   // 5. (C) a day away (hooks run hour by hour in the resolver)
   try {
     const nf = faults.length;
-    const { island: c, mod: cm } = await clone(100, 9);
+    const { island: c, mod: cm } = await clone(LIVE_MS_PER_TICK, 9);
     resolveAway(c.sim, DAY_MS, DAY_MS);
     c.sim.drainOut();
     const f3 = invariants(c.sim, cm, 'away');

@@ -10,8 +10,8 @@ the player controls. Six monsters out of scripture and legend (Nephilim, fiery f
 marsh dragons, tomb ghouls, wild-ox demons, serpents) live alone in hidden lairs in six regions: Cedar Heights, the Olive
 Terraces, the Salt Flats, the Wilderness of Stones, the Ruins of the Anakim, and the High Place at the island's center,
 where Dagon's altar stands. Monsters hunt villagers and carry them to the High Place to sacrifice them; the champion
-hunts monsters, and drags the crippled ones home to burn on the altar of the Most High. Game time is real time: a game day
-is a real day; the player drops in a few times a day. The game ends when every monster or every villager is dead.
+hunts monsters, and drags the crippled ones home to burn on the altar of the Most High. Game time runs fast: a game day
+is 8 real minutes (4 of daylight, 4 of night). The game ends when every monster or every villager is dead.
 
 Two rival gods shape this young, unfinished world. Each midnight, the god whose followers sacrificed more favor that day
 adds ONE permanent creation, like the days of Genesis: a new creature, weather, sky, land, plant, body, or law of nature.
@@ -134,8 +134,8 @@ export default {
   gates, altars and lairs ±1, returning false).
 
 ## TIME: the most important thing to get right
-The game clock is real time. LIVE, one tick = 0.1 game seconds (a game day = 864,000 ticks). In validation, ticks can be
-up to 144× longer. So:
+The game clock is fast. LIVE, one tick = 0.1 real seconds = 18 game seconds (a game day = 4,800 ticks = 8 real minutes).
+In validation, ticks may be a different length (14,400 game ms). So:
 - NEVER express rates per tick or durations in ticks for game-time effects. Use onHour / onDawn / onDusk / onMidnight, or
   scale per-tick amounts with api.perHour(x) (= x × msPerTick / 3,600,000: the share of an hourly amount for one tick).
   Example: lose 3 HP per game hour inside the fog → in onTick every 10 ticks: api.ent.damage(e, api.perHour(3) * 10).

@@ -1,17 +1,17 @@
 // Keyboard + mouse input with pointer lock and rebindable keys (spec §3).
 export type ActionName =
   | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'inspect' | 'map'
-  | 'journal' | 'confirm';
+  | 'journal' | 'confirm' | 'camera';
 
 export const DEFAULT_BINDINGS: Record<ActionName, string> = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', jump: 'Space', dodge: 'KeyC', interact: 'KeyE',
-  finish: 'KeyF', torch: 'KeyT', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter',
+  finish: 'KeyF', torch: 'KeyT', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
 };
 
 export const ACTION_LABEL: Record<ActionName, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Strafe left', right: 'Strafe right', sprint: 'Sprint', jump: 'Jump', dodge: 'Dodge',
   interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', inspect: 'Inspect',
-  map: 'Map', journal: 'Journal', confirm: 'Dismiss banner',
+  map: 'Map', journal: 'Journal', confirm: 'Dismiss banner', camera: 'First / third person',
 };
 
 export interface Settings {
@@ -22,12 +22,14 @@ export interface Settings {
   fxVolume: number;
   shadows: 'off' | 'low' | 'high';
   bindings: Record<ActionName, string>;
+  /** over-the-shoulder camera instead of the champion's eyes */
+  thirdPerson: boolean;
 }
 
 const KEY = 'hmfp:settings';
 
 export function loadSettings(): Settings {
-  const d: Settings = { sensitivity: 2.2, invertY: false, fov: 75, volume: 0.8, fxVolume: 1, shadows: 'high', bindings: { ...DEFAULT_BINDINGS } };
+  const d: Settings = { sensitivity: 2.2, invertY: false, fov: 75, volume: 0.8, fxVolume: 1, shadows: 'high', bindings: { ...DEFAULT_BINDINGS }, thirdPerson: false };
   try {
     const s = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (s && typeof s === 'object') {
@@ -150,7 +152,7 @@ export class Controls {
     this.lastInput = performance.now();
     if (!e.repeat && action) {
       // UI toggles work with or without the lock
-      if (action === 'journal' || action === 'map' || action === 'confirm') {
+      if (action === 'journal' || action === 'map' || action === 'confirm' || action === 'camera') {
         this.onAction(action);
         return;
       }

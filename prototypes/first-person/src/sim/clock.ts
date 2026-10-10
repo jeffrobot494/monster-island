@@ -5,6 +5,8 @@ export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
 export const DAWN_HOUR = 6;
 export const DUSK_HOUR = 18;
+/** Game speed: a game day is 8 real minutes, 4 of daylight (06–18) and 4 of night. */
+export const GAME_TIMESCALE = 180;
 
 export interface TimeInfo {
   tick: number;

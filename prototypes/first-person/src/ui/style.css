@@ -189,3 +189,6 @@ kbd { display: inline-block; min-width: 22px; text-align: center; padding: 2px 6
 .settings-block input[type=range] { width: 160px; }
 .keybind { min-width: 90px; }
 .mobile-note { position: fixed; inset: 0; background: #0e1420; color: #f4e6c8; display: flex; align-items: center; justify-content: center; text-align: center; padding: 30px; font-family: var(--body-serif); font-size: 18px; z-index: 50; }
+
+.hud > .cam-toggle { pointer-events: auto; position: absolute; right: 18px; bottom: 18px; z-index: 5; background: rgba(14, 10, 8, 0.55); color: #f4e6c8; border: 1px solid rgba(201, 169, 106, 0.4); border-radius: 10px; padding: 7px 12px; font: 13px system-ui, -apple-system, 'Segoe UI', sans-serif; cursor: pointer; }
+.hud > .cam-toggle:hover { background: rgba(40, 28, 18, 0.8); }

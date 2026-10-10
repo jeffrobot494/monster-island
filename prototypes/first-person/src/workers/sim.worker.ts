@@ -2,7 +2,7 @@ import { harden, hostCreateBlobUrl, hostNow, hostPost, hostRevokeUrl, hostSetTim
 import { Island, importDefault, type SavedWorld } from '../sim/island';
 import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_MONSTER, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
 import type { FaultInfo, VisibleEffect } from '../sim/module-runtime';
-import { TICKS_PER_SECOND, HOUR_MS, fmtClock } from '../sim/clock';
+import { TICKS_PER_SECOND, HOUR_MS, MS_PER_REAL_TICK, fmtClock } from '../sim/clock';
 import type { Entity } from '../sim/types';
 import { visibleMonsters, championSight } from '../sim/vision';
 import { telegraphRadius, monsterActive, windupProgress } from '../sim/monster-ai';
@@ -432,7 +432,8 @@ function catchUp(clockNow: number, realMs: number) {
   const sim = island!.sim;
   if (sim.gameOver) return;
   const realGap = sim.lastRealMs ? Math.max(0, realMs - sim.lastRealMs) : 0;
-  const gapClock = realGap * sim.timescale;
+  // on a fast clock a long absence would span weeks of game days (and a judgment each): resolve at most one day
+  const gapClock = Math.min(realGap * sim.timescale, DAY_MS);
   void clockNow;
   if (gapClock <= sim.msPerTick * 2) return; // negative drift: the clock simply holds (R2)
   const ticks = Math.floor(gapClock / sim.msPerTick);
@@ -479,6 +480,9 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
           const world = JSON.parse(msg.save) as SavedWorld;
           const sources = Object.fromEntries(msg.modules.map((m) => [m.id, m.source]));
           island = await Island.load(world, sources, loader, runtimeOpts, msg.quarantine ?? []);
+          // the game speed is the client's to set: older saves ran on the real clock
+          island.sim.timescale = msg.timescale;
+          island.sim.msPerTick = MS_PER_REAL_TICK * msg.timescale;
         } else {
           island = Island.create(msg.seed, msg.clockMs, msg.timescale, runtimeOpts);
           island.sim.lastRealMs = msg.realMs;

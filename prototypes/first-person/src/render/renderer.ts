@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { Terrain } from './terrain';
 import { Structures } from './structures';
-import { Entities } from './entities';
+import { Entities, type ChampPose } from './entities';
 import { Particles, particleUniforms } from './particles';
 import { Sprites } from './sprites';
 import { Sky } from './sky';
@@ -160,7 +160,7 @@ export class Renderer {
     return { eye: this.camera.position, dir: this.dir };
   }
 
-  render(cam: CamPose, o: { champId: number | null; sightTiles: number; torch: boolean; fold: number; lairsHome: Set<number>; viewModel: boolean; moveSpeed: number; sprinting: boolean; blocking: boolean; dragging: boolean; roll?: number }) {
+  render(cam: CamPose, o: { champId: number | null; sightTiles: number; torch: boolean; fold: number; lairsHome: Set<number>; viewModel: boolean; moveSpeed: number; sprinting: boolean; blocking: boolean; dragging: boolean; roll?: number; champPose?: ChampPose | null }) {
     const dt = Math.min(0.1, this.clock.getDelta());
     const t = (this.t = this.clock.elapsedTime);
     this.camera.position.set(cam.x, cam.y, cam.z);
@@ -176,7 +176,7 @@ export class Renderer {
     particleUniforms.fogFar.value = fog.far;
     this.terrain.update(dt, t);
     this.structures.update(t, this.sky.night, o.fold, o.lairsHome);
-    this.ents.update(dt, t, this.eye, this.sky.night, o.champId);
+    this.ents.update(dt, t, this.eye, this.sky.night, o.champId, o.champPose ?? null);
     const pos = (id: number) => this.ents.positionOf(id);
     const h = (id: number) => this.ents.heightOf(id);
     this.particles.update(dt, pos, h, this.eye);
@@ -184,7 +184,9 @@ export class Renderer {
 
     // lights: torch on the camera; fires flicker, brighter at night
     const night = this.sky.night;
-    this.torch.position.copy(this.eye).add(new THREE.Vector3(Math.sin(cam.yaw) * 0.5 - Math.cos(cam.yaw) * 0.3, -0.25, Math.cos(cam.yaw) * 0.5 + Math.sin(cam.yaw) * 0.3));
+    const cp = o.champPose;
+    if (cp) this.torch.position.set(cp.x - Math.cos(cam.yaw) * 0.4, cp.y + 1.7, cp.z + Math.sin(cam.yaw) * 0.4);
+    else this.torch.position.copy(this.eye).add(new THREE.Vector3(Math.sin(cam.yaw) * 0.5 - Math.cos(cam.yaw) * 0.3, -0.25, Math.cos(cam.yaw) * 0.5 + Math.sin(cam.yaw) * 0.3));
     this.torch.intensity = o.torch ? (14 + Math.sin(t * 23) * 1.2 + Math.sin(t * 37) * 0.8) * (0.4 + 0.6 * night) : 0;
     this.fireAcc += dt;
     if (this.fireAcc > 0.12) {

@@ -63,6 +63,8 @@ function shapeMat(color: string, emissive: number, opacity: number) {
   return m;
 }
 
+export interface ChampPose { x: number; y: number; z: number; yaw: number }
+
 export class Entities {
   group = new THREE.Group();
   views = new Map<number, View>();
@@ -192,7 +194,10 @@ export class Entities {
   }
 
   /** Per frame: advance the render clock, interpolate, animate. eye = camera position (m). */
-  update(dt: number, t: number, eye: THREE.Vector3, night: number, champId: number | null) {
+  private poseLast = new THREE.Vector3();
+
+  /** Per frame. champPose (third person): draw the champion where the client predicts him, not where the sim last was. */
+  update(dt: number, t: number, eye: THREE.Vector3, night: number, champId: number | null, champPose: ChampPose | null = null) {
     // a smoothed sim clock: 10 ticks/s, pulled toward the newest tick
     this.tickClock += dt * 10;
     const err = this.latestTick - this.tickClock;
@@ -200,9 +205,16 @@ export class Entities {
     else this.tickClock += err * Math.min(1, dt * 2);
     this.renderTick = this.tickClock - 1.5;
     for (const v of this.views.values()) {
-      const moved = this.interp(v);
+      let moved = this.interp(v);
+      const posed = champPose !== null && v.id === champId;
+      if (posed) {
+        moved = Math.hypot(champPose.x - this.poseLast.x, champPose.z - this.poseLast.z);
+        this.poseLast.set(champPose.x, champPose.y, champPose.z);
+        v.pos.copy(this.poseLast);
+        v.yaw = champPose.yaw;
+      }
       v.speed = v.speed * 0.8 + (dt > 0 ? moved / dt : 0) * 0.2;
-      const hideChamp = (v.flags & F_CHAMPION) !== 0 && champId === v.id;
+      const hideChamp = (v.flags & F_CHAMPION) !== 0 && champId === v.id && !posed;
       const dist = v.pos.distanceTo(eye);
       v.root.visible = !hideChamp && dist < (v.rig ? 150 : 160);
       if (!v.root.visible) continue;

@@ -13,6 +13,7 @@ import { runValidation } from './god/validation-host';
 import type { SavedWorld } from './sim/island';
 import type { ChronicleEvent, CreationRecord, Zone } from './sim/types';
 import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_MONSTER, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
+import { GAME_TIMESCALE } from './sim/clock';
 import type { Alert } from './sim/sim';
 import type { CtrlReason } from './sim/champion';
 import { Controls, loadSettings, saveSettings, keyLabel, ACTION_LABEL, type ActionName } from './input/controls';
@@ -56,6 +57,7 @@ async function boot() {
   }
   const canvas = document.getElementById('scene') as HTMLCanvasElement;
   const settings = loadSettings();
+  if (params.get('third') === '1') settings.thirdPerson = true;
   const renderer = new Renderer(canvas);
   renderer.setFov(settings.fov);
   renderer.sky.setShadows(settings.shadows);
@@ -188,7 +190,7 @@ async function boot() {
     });
     return h('div', {},
       h('h3', { class: 'serif' }, 'How to play'),
-      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). Judgment falls at local midnight: the god with more favor reshapes the island. The world runs on real time, even while you read this.'),
+      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). A day lasts 8 minutes: 4 of daylight, 4 of night. Judgment falls at midnight: the god with more favor reshapes the island. The world keeps running, even while you read this.'),
       h('h3', { class: 'serif' }, 'Controls'),
       h('div', { class: 'settings-block' },
         range('Mouse sensitivity', 0.5, 6, 0.1, () => settings.sensitivity, (v) => (settings.sensitivity = v)),
@@ -252,6 +254,23 @@ async function boot() {
     controls.requestLock();
   };
   hudView.onPlay = () => lockGame();
+  hudView.onCamera = () => controls.onAction('camera');
+  /** Third person: pull the camera back over the champion's right shoulder, short of the ground. */
+  function shoulderCam(eye: { x: number; y: number; z: number; yaw: number; pitch: number }) {
+    const BACK = 4.2, SIDE = 0.7, UP = 0.35;
+    const cp = Math.cos(eye.pitch);
+    const fx = Math.sin(eye.yaw) * cp, fy = Math.sin(eye.pitch), fz = Math.cos(eye.yaw) * cp;
+    const px = eye.x - Math.cos(eye.yaw) * SIDE, py = eye.y + UP, pz = eye.z + Math.sin(eye.yaw) * SIDE;
+    let d = BACK;
+    for (let k = 0.5; k <= BACK; k += 0.25) {
+      const x = px - fx * k, y = py - fy * k, z = pz - fz * k;
+      if (y < renderer.terrain.y(x / M, z / M) + 0.4) {
+        d = Math.max(0.3, k - 0.25);
+        break;
+      }
+    }
+    return { x: px - fx * d, y: py - fy * d, z: pz - fz * d, yaw: eye.yaw, pitch: eye.pitch };
+  }
   canvas.addEventListener('click', () => {
     if (!controls.active) lockGame();
   });
@@ -286,6 +305,10 @@ async function boot() {
         map.toggle(true, { x: controller.x, z: controller.z });
       }
       updateLockUi();
+    } else if (a === 'camera') {
+      settings.thirdPerson = !settings.thirdPerson;
+      saveSettings(settings);
+      hudView.setCamera(settings.thirdPerson);
     } else if (a === 'confirm') {
       if (ui.isModalOpen()) {
         ui.closeModal();
@@ -547,15 +570,13 @@ async function boot() {
   const modulesFor = (w: SavedWorld | null) => (w?.manifest ?? []).filter((x) => sources[x.id] !== undefined).map((x) => ({ id: x.id, source: sources[x.id], status: x.status }));
 
   function startSim(quarantine: string[] = []) {
+    // a new island starts at 07:00 (or ?at=HH:MM), so the first day is a full one
     let clock = localNow();
-    const at = params.get('at');
-    if (at && !worldJson) {
-      const [hh, mm] = at.split(':').map(Number);
-      clock = clock - (clock % 86_400_000) + ((hh || 0) * 60 + (mm || 0)) * 60_000;
-    }
+    const [hh, mm] = (params.get('at') ?? '07:00').split(':').map(Number);
+    if (!worldJson) clock = clock - (clock % 86_400_000) + ((hh || 0) * 60 + (mm || 0)) * 60_000;
     sim.start({
       save: worldJson, seed, modules: modulesFor(world), clockMs: clock, realMs: Date.now(),
-      timescale: Math.max(1, Number(params.get('timescale')) || 1), quarantine, reveal: params.has('reveal'), invincible: devMode && params.has('god'),
+      timescale: Math.max(1, Number(params.get('timescale')) || GAME_TIMESCALE), quarantine, reveal: params.has('reveal'), invincible: devMode && params.has('god'),
       skip: devMode ? Number(params.get('skip')) || 0 : 0,
     });
   }
@@ -718,6 +739,7 @@ async function boot() {
     // camera
     let cam: { x: number; y: number; z: number; yaw: number; pitch: number };
     let roll = 0;
+    let champPose: { x: number; y: number; z: number; yaw: number } | null = null;
     if (ctrlReason === 'dead') {
       // spectator fly-cam (F31)
       const [dy, dp] = controls.readLook();
@@ -754,10 +776,15 @@ async function boot() {
       }
       cam = { x: controller.x * M, y: controller.eyeY, z: controller.z * M, yaw: controller.yaw, pitch: controller.pitch };
       if (ctrlReason === 'downed') roll = 0.35;
+      if (settings.thirdPerson) {
+        champPose = { x: cam.x, y: cam.y - EYE_H, z: cam.z, yaw: cam.yaw };
+        cam = shoulderCam(cam);
+        roll = 0;
+      }
     }
     renderer.render(cam, {
       champId: champId(), sightTiles: hud?.champion?.sight ?? 12, torch: !!hud?.champion?.torch, fold: hud?.fold ?? 0,
-      lairsHome: new Set(hud?.lairsHome ?? []), viewModel: ctrlReason === 'player' || ctrlReason === 'hold' || ctrlReason === 'autopilot',
+      lairsHome: new Set(hud?.lairsHome ?? []), viewModel: !champPose && (ctrlReason === 'player' || ctrlReason === 'hold' || ctrlReason === 'autopilot'), champPose,
       moveSpeed: controller.moveSpeed, sprinting: controller.sprinting, blocking: controller.blocking, dragging: !!hud?.champion?.dragging, roll,
     });
 

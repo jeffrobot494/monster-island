@@ -295,7 +295,7 @@ export function stepMonster(sim: Sim, m: Entity) {
     if (M.huntAt.length && M.huntAt[0] <= sim.clockMs) {
       M.huntAt.shift();
       M.ground = pickGround(sim, m);
-      M.huntUntil = sim.clockMs + 2 * HOUR_MS;
+      M.huntUntil = sim.clockMs + Math.max(2 * HOUR_MS, 120_000 * sim.timescale); // long enough to walk to the village on a fast clock
       M.prey = -1;
       setState(sim, m, 'hunt');
       return;
@@ -320,7 +320,7 @@ export function stepMonster(sim: Sim, m: Entity) {
       if (p && Math.hypot(p.x - m.x, p.z - m.z) < 7) {
         M.huntAt.shift(); // an opportunistic grab spends one of today's hunts
         M.prey = p.id;
-        M.huntUntil = sim.clockMs + HOUR_MS;
+        M.huntUntil = sim.clockMs + Math.max(HOUR_MS, 60_000 * sim.timescale);
         setState(sim, m, 'stalk');
       }
     }

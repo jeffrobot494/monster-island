@@ -4,7 +4,7 @@ import type { Action, Hud, InspectInfo, MonsterCard, VillagerInfo } from '../pro
 import type { ChronicleEvent, CreationRecord, Job } from '../sim/types';
 import type { AwaySummary } from '../sim/offline';
 import type { LiveCall, TraceEntry } from '../god/pipeline';
-import { fmtClock } from '../sim/clock';
+import { GAME_TIMESCALE, fmtClock } from '../sim/clock';
 import { JOBS } from '../sim/types';
 
 type Attrs = Record<string, string | boolean | ((ev: any) => void)>;
@@ -102,7 +102,7 @@ export class Ui {
   setHud(hud: Hud) {
     this.hud = hud;
     const night = hud.light < 0.5;
-    this.clock.textContent = `${night ? '☾' : '☀'} Day ${hud.day} · ${fmtClock(hud.clockMs)}${hud.timescale !== 1 ? ` ×${hud.timescale}` : ''}`;
+    this.clock.textContent = `${night ? '☾' : '☀'} Day ${hud.day} · ${fmtClock(hud.clockMs)}${hud.timescale !== GAME_TIMESCALE ? ` ×${hud.timescale}` : ''}`;
     const total = Math.max(1, hud.favor.human + hud.favor.monster);
     this.favor.innerHTML = '';
     this.favor.append(
