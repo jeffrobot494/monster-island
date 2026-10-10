@@ -20,7 +20,12 @@ export const CORE_TILES: TileTypeDef[] = [
   { id: 'road', height: 0.18, walkable: true, moveCost: 0.8, color: '#c8b48a' },
   { id: 'wall', height: 1.2, walkable: false, moveCost: Infinity, color: '#a8865a' },
   { id: 'shrine-floor', height: 0.6, walkable: true, moveCost: 1.0, color: '#d8ccb0' },
+  { id: 'house', height: 0.2, walkable: false, moveCost: Infinity, color: '#8a6a4a' },
+  { id: 'gate', height: 0.18, walkable: true, moveCost: 0.8, color: '#c8b48a' },
 ];
+
+/** Core structure tiles modules may not paint or erase (F34). */
+export const PROTECTED_TILES = new Set(['wall', 'house', 'gate']);
 
 /** Tiles whose surface height comes from the elevation map. */
 export const ELEV_TILES = new Set(['rock', 'shrine-floor']);
@@ -36,6 +41,8 @@ export class TileGrid {
   defs = new Map<string, TileTypeDef>();
   /** tile indices changed since the last drain */
   changed = new Set<number>();
+  /** tile indices whose ground heights must be re-derived (consumed by the sim) */
+  groundChanged = new Set<number>();
   /** bumped whenever tile types (defs) change → cost tables must rebuild */
   defsVersion = 0;
 
@@ -61,6 +68,7 @@ export class TileGrid {
     if (this.types[i] === type) return;
     this.types[i] = type;
     this.changed.add(i);
+    this.groundChanged.add(i);
   }
   def(type: string): TileTypeDef {
     return this.defs.get(type) ?? this.defs.get('grass')!;
@@ -91,6 +99,7 @@ export class TileGrid {
       if (this.types[i] === id) {
         this.types[i] = 'grass';
         this.changed.add(i);
+        this.groundChanged.add(i);
       }
     }
   }

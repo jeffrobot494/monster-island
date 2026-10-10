@@ -11,7 +11,9 @@ import { populate } from './populate';
 import { stepHuman, villageHour, villageMidnight, foodTick } from './village';
 import { stepMonster, monsterMidnight } from './monster-ai';
 import { stepCorpse, stepBurning, stepAnimal } from './combat';
-import { stepChampion, championDawn, checkSuccession, type Order } from './champion';
+import { stepChampion, championDawn, checkSuccession, processInputs, type ChampInput, type Order } from './champion';
+import { Ground } from './ground';
+import { bodyR } from './body';
 import { judgment } from './favor';
 import { updateVision } from './vision';
 
@@ -81,6 +83,14 @@ export interface Alert {
   until?: number; // tick
 }
 
+export interface SoundEvent {
+  kind: string;
+  x: number;
+  z: number;
+  /** body size, for pitch */
+  size?: number;
+}
+
 export interface GameStats {
   monsterKills: number;
   villagerDeaths: number;
@@ -147,8 +157,14 @@ export class Sim {
   missingSystems = ['Pain', 'Aging', 'Desire and birth', 'Cooking and the oven', 'Hunger', 'Sleep', 'Metalworking', 'Speech among monsters'];
   championId = -1;
   championPendingDawn = false;
-  /** the champion's current order */
+  /** the champion's current internal order (autopilot, dev scripts) */
   order: Order | null = null;
+  /** client input queued for the next tick (§9.3) */
+  inputs: ChampInput[] = [];
+  /** the result of the last interact/finish input, for the client */
+  actionError: string | null = null;
+  /** the shared ground height function (meters) */
+  ground: Ground = new Ground(this.grid);
   dragging = -1;
   gameOver: { winner: Faction; day: number } | null = null;
   stats: GameStats = { monsterKills: 0, villagerDeaths: 0, humanSacrifices: 0, monsterSacrifices: 0 };
@@ -163,7 +179,7 @@ export class Sim {
   /** cached per tick */
   light = 1;
 
-  out = { emitterOps: [] as EmitterOp[], emotes: [] as Emote[], events: [] as ChronicleEvent[], alerts: [] as Alert[], atmosphereDirty: false };
+  out = { emitterOps: [] as EmitterOp[], emotes: [] as Emote[], events: [] as ChronicleEvent[], alerts: [] as Alert[], atmosphereDirty: false, sounds: [] as SoundEvent[], toasts: [] as string[], hurt: 0 as number | undefined };
 
   constructor(seed: number) {
     this.seed = seed >>> 0;
@@ -201,6 +217,8 @@ export class Sim {
     this.timescale = timescale;
     this.msPerTick = MS_PER_REAL_TICK * timescale;
     this.layout = generateIsland(this.seed, this.grid);
+    this.ground.rebuild();
+    this.grid.groundChanged.clear();
     populate(this);
     this.light = this.computeLight();
     updateVision(this, true);
@@ -287,12 +305,34 @@ export class Sim {
   }
 
   emote(e: Entity, text: string, seconds: number, speech = false) {
+    if (e.id === this.championId) {
+      this.toast(text);
+      return;
+    }
     this.out.emotes.push({ ent: e.id, text, seconds, speech });
   }
 
+  /** A particle burst; y is meters above sea level (defaults to 1 m above the ground). */
   burst(emitter: string, x: number, z: number, y?: number) {
-    const ty = y ?? this.grid.height(Math.floor(x), Math.floor(z)) + 0.5;
+    const ty = y ?? this.ground.y(x, z) + 1;
     this.out.emitterOps.push({ op: 'burst', emitter, x, y: ty, z });
+  }
+
+  /** A burst anchored on an entity's body (F13): feet, center or head. */
+  burstOn(emitter: string, e: Entity, anchor: 'feet' | 'center' | 'head' = 'center') {
+    const h = (e.kind === 'human' ? 1.8 : 2.25 * e.scale * 0.8);
+    const k = anchor === 'feet' ? 0.1 : anchor === 'head' ? 0.9 : 0.55;
+    this.burst(emitter, e.x, e.z, this.ground.y(e.x, e.z) + h * k + e.lift);
+  }
+
+  /** A positional sound for the client (dropped there if out of earshot). */
+  sound(kind: string, x: number, z: number, size?: number) {
+    this.out.sounds.push({ kind, x, z, size });
+  }
+
+  /** A short message for the player (champion emotes become toasts, F23). */
+  toast(text: string) {
+    this.out.toasts.push(text);
   }
 
   attach(e: Entity, emitter: string) {
@@ -436,8 +476,72 @@ export class Sim {
       e.idleUntil = this.tick + 10;
       return false;
     }
-    e.path = { pts, i: 0, gx, gz };
+    e.path = { pts, i: 0, gx, gz, wp: this.smoothPath(e, pts) };
     return true;
+  }
+
+  /** String-pull a tile path (F27): skip waypoints when the straight line costs no more than the tiles it replaces. */
+  private smoothPath(e: Entity, pts: number[]): { x: number; z: number }[] {
+    const costs = this.costsFor(this.moveKey(e));
+    const cost = (i: number) => costs.get(this.grid.types[i]) ?? Infinity;
+    const center = (i: number) => ({ x: (i % SIZE) + 0.5, z: Math.floor(i / SIZE) + 0.5 });
+    const out: { x: number; z: number }[] = [];
+    let ax = e.x, az = e.z, k = 0;
+    while (k < pts.length) {
+      let best = k;
+      let maxCost = cost(pts[k]);
+      for (let j = k + 1; j < pts.length && j < k + 24; j++) {
+        maxCost = Math.max(maxCost, cost(pts[j]));
+        const c = center(pts[j]);
+        if (!this.lineOk(ax, az, c.x, c.z, costs, maxCost)) break;
+        best = j;
+      }
+      const c = center(pts[best]);
+      out.push(c);
+      ax = c.x;
+      az = c.z;
+      k = best + 1;
+    }
+    // spread the final stop inside its tile so workers don't stand on one spot
+    if (out.length) {
+      const last = out[out.length - 1];
+      const h = ((e.id * 2654435761) >>> 0) / 4294967296, h2 = ((e.id * 40503 + pts.length * 977) >>> 0) % 1000 / 1000;
+      last.x += (h - 0.5) * 0.7;
+      last.z += (h2 - 0.5) * 0.7;
+    }
+    return out;
+  }
+
+  /** Supercover walk of the segment's tiles: all must be passable at no more than maxCost. */
+  lineOk(x0: number, z0: number, x1: number, z1: number, costs: CostTable, maxCost: number): boolean {
+    let ix = Math.floor(x0), iz = Math.floor(z0);
+    const ex = Math.floor(x1), ez = Math.floor(z1);
+    const dx = x1 - x0, dz = z1 - z0;
+    const sx = Math.sign(dx), sz = Math.sign(dz);
+    const tdx = sx ? Math.abs(1 / dx) : Infinity, tdz = sz ? Math.abs(1 / dz) : Infinity;
+    let tx = sx ? (sx > 0 ? ix + 1 - x0 : x0 - ix) * tdx : Infinity;
+    let tz = sz ? (sz > 0 ? iz + 1 - z0 : z0 - iz) * tdz : Infinity;
+    for (let n = 0; n < 200; n++) {
+      const c = costs.get(this.grid.get(ix, iz)) ?? Infinity;
+      if (!Number.isFinite(c) || c > maxCost + 1e-6) return false;
+      if (ix === ex && iz === ez) return true;
+      if (Math.abs(tx - tz) < 1e-9) {
+        // passing exactly through a corner: both side cells must be clear
+        const a = costs.get(this.grid.get(ix + sx, iz)) ?? Infinity, b = costs.get(this.grid.get(ix, iz + sz)) ?? Infinity;
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+        ix += sx;
+        iz += sz;
+        tx += tdx;
+        tz += tdz;
+      } else if (tx < tz) {
+        ix += sx;
+        tx += tdx;
+      } else {
+        iz += sz;
+        tz += tdz;
+      }
+    }
+    return false;
   }
 
   stop(e: Entity) {
@@ -478,9 +582,17 @@ export class Sim {
     const costs = this.costsFor(this.moveKey(e));
     const tileCost = costs.get(this.grid.get(Math.floor(e.x), Math.floor(e.z))) ?? 1;
     let budget = speed / 10 / Math.min(3, Math.max(0.6, isFinite(tileCost) ? tileCost : 1));
-    while (budget > 0 && p.i < p.pts.length) {
-      const ti = p.pts[p.i];
-      const tx = (ti % SIZE) + 0.5, tz = Math.floor(ti / SIZE) + 0.5;
+    const n = p.wp ? p.wp.length : p.pts.length;
+    while (budget > 0 && p.i < n) {
+      let tx: number, tz: number;
+      if (p.wp) {
+        tx = p.wp[p.i].x;
+        tz = p.wp[p.i].z;
+      } else {
+        const ti = p.pts[p.i];
+        tx = (ti % SIZE) + 0.5;
+        tz = Math.floor(ti / SIZE) + 0.5;
+      }
       const dx = tx - e.x, dz = tz - e.z;
       const d = Math.hypot(dx, dz);
       if (d > 1e-6) e.yaw = Math.atan2(dx, dz);
@@ -495,7 +607,7 @@ export class Sim {
         budget = 0;
       }
     }
-    if (p.i >= p.pts.length) {
+    if (p.i >= n) {
       e.path = null;
       for (const l of this.listeners) l.onArrive?.(e);
     }
@@ -555,6 +667,11 @@ export class Sim {
     this.advanceClock(this.msPerTick);
     this.light = this.computeLight();
     this.processRepaths();
+    if (this.grid.groundChanged.size) {
+      this.ground.update(this.grid.groundChanged);
+      this.grid.groundChanged.clear();
+    }
+    processInputs(this);
     foodTick(this);
 
     for (const e of [...this.ents.values()]) {
@@ -580,6 +697,7 @@ export class Sim {
           if (e.owner && (e.path || e.want)) this.advancePath(e, this.stat(e, 'speed'));
       }
     }
+    if (this.tick % 2 === 0) this.separate();
     if (this.tick % 5 === 0) updateVision(this);
     if (this.championPendingDawn) checkSuccession(this);
     if (this.alarmUntil > this.tick && this.tick % 50 === 0) {
@@ -588,6 +706,65 @@ export class Sim {
     }
     for (const l of this.listeners) l.onTick?.();
     this.checkGameOver();
+  }
+
+  /** Push overlapping walkers apart (§5.7); the champion is an immovable obstacle here. */
+  private separate() {
+    const cells = new Map<number, Entity[]>();
+    const list: Entity[] = [];
+    for (const e of this.ents.values()) {
+      if (!e.inhabitant || e.hidden || e.carriedBy !== undefined || LOCKED_STATES.has(e.state) || e.state === 'sleep') continue;
+      list.push(e);
+      const k = Math.floor(e.x / 2) * 1000 + Math.floor(e.z / 2);
+      let c = cells.get(k);
+      if (!c) cells.set(k, (c = []));
+      c.push(e);
+    }
+    for (const a of list) {
+      const cx = Math.floor(a.x / 2), cz = Math.floor(a.z / 2);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const c = cells.get((cx + dx) * 1000 + cz + dz);
+        if (!c) continue;
+        for (const b of c) {
+          if (b.id <= a.id) continue;
+          const ddx = b.x - a.x, ddz = b.z - a.z;
+          const d = Math.hypot(ddx, ddz);
+          const min = bodyR(a) + bodyR(b);
+          if (d >= min || d < 1e-6) continue;
+          const over = Math.min(0.1, min - d);
+          const nx = ddx / d, nz = ddz / d;
+          const aChamp = a.id === this.championId, bChamp = b.id === this.championId;
+          const ka = aChamp ? 0 : bChamp ? 1 : 0.5, kb = bChamp ? 0 : aChamp ? 1 : 0.5;
+          this.nudge(a, -nx * over * ka, -nz * over * ka);
+          this.nudge(b, nx * over * kb, nz * over * kb);
+        }
+      }
+    }
+  }
+
+  private nudge(e: Entity, dx: number, dz: number) {
+    if (!dx && !dz) return;
+    const nx = e.x + dx, nz = e.z + dz;
+    if (this.walkableFor(e, nx, nz)) {
+      e.x = nx;
+      e.z = nz;
+    }
+  }
+
+  /** Champion move costs for the client controller (F19): 0 blocked, else round(cost × 20). */
+  champCost(): Uint8Array {
+    const out = new Uint8Array(SIZE * SIZE);
+    const c = this.champion();
+    const costs = this.costsFor(c ? this.moveKey(c) : 'human');
+    for (let i = 0; i < out.length; i++) {
+      const v = costs.get(this.grid.types[i]) ?? Infinity;
+      out[i] = Number.isFinite(v) ? Math.max(1, Math.min(255, Math.round(v * 20))) : 0;
+    }
+    if (c) {
+      const i = Math.floor(c.z) * SIZE + Math.floor(c.x);
+      if (!out[i]) out[i] = 20; // never trapped inside a new wall
+    }
+    return out;
   }
 
   /** Let a module behavior take over an inhabitant for this tick. */
@@ -636,7 +813,7 @@ export class Sim {
 
   drainOut() {
     const o = this.out;
-    this.out = { emitterOps: [], emotes: [], events: [], alerts: [], atmosphereDirty: false };
+    this.out = { emitterOps: [], emotes: [], events: [], alerts: [], atmosphereDirty: false, sounds: [], toasts: [], hurt: 0 };
     return o;
   }
 }

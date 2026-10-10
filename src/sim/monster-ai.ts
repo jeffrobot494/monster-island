@@ -7,9 +7,11 @@ import { applyDamage, armFactor, dropCarried, firstName, gainXp, heal, kill, leg
 import { rollRestless } from './populate';
 import { offerFavor } from './favor';
 import { SIZE } from './world';
+import { M as MPT } from './ground';
+import { bodyR, frontPoint, heightM, reachT } from './body';
+import { cs, releaseOnChampion } from './champion';
 
 const DOWNED_TICKS = 1200;
-const levelScale = (m: Entity) => Math.pow(1.05, m.level - 1);
 
 export function boldness(sim: Sim) {
   return Math.max(0, sim.day - 1);
@@ -114,7 +116,8 @@ export function roar(sim: Sim, m: Entity) {
   const M = m.monster!;
   if (sim.tick - M.roarAt < 100) return;
   M.roarAt = sim.tick;
-  sim.burst('roar', m.x, m.z, sim.grid.height(Math.floor(m.x), Math.floor(m.z)) + 0.8 * m.scale);
+  sim.burstOn('roar', m, 'head');
+  sim.sound('roar', m.x, m.z, m.scale);
   sim.emote(m, '💢', 1.5);
   for (const id of M.neighbors) {
     const n = sim.ents.get(id);
@@ -378,17 +381,21 @@ function hunt(sim: Sim, m: Entity) {
     else go(sim, m, g.x, g.z);
     return;
   }
-  // stalk and grab
-  const d = Math.hypot(prey.x - m.x, prey.z - m.z);
-  const reach = M.reach * levelScale(m) * 0.6 + 0.4;
+  // stalk and grab (meters: F3, F4)
+  const fp = frontPoint(m);
+  const d = Math.hypot(prey.x - fp.x, prey.z - fp.z);
+  const reach = reachT(m) + 0.5 / MPT;
   if (prey.kind === 'human' && prey.human!.job === 'guard' && prey.state !== 'downed') {
     m.target = prey.id;
     setState(sim, m, 'fight');
     return;
   }
-  if (d > reach) {
+  if (m.state !== 'grab' && d > reach) {
     m.state = 'stalk';
-    go(sim, m, prey.x, prey.z, 10);
+    if (Math.hypot(prey.x - m.x, prey.z - m.z) < 2 && sim.lineOk(m.x, m.z, prey.x, prey.z, sim.costsFor(sim.moveKey(m)), 99)) {
+      sim.stop(m);
+      sim.moveToward(m, prey.x, prey.z, monsterSpeed(sim, m));
+    } else go(sim, m, prey.x, prey.z, 10);
     return;
   }
   sim.stop(m);
@@ -396,10 +403,19 @@ function hunt(sim: Sim, m: Entity) {
   if (m.state !== 'grab') {
     m.state = 'grab';
     M.grabAt = sim.tick;
+    M.grabPos = { x: prey.x, z: prey.z };
     sim.emote(m, '❗', 1);
+    sim.sound('growl', m.x, m.z, m.scale);
     return;
   }
+  // the grab latches: the prey can't slip away during it (F4)
+  if (M.grabPos) {
+    prey.x = M.grabPos.x;
+    prey.z = M.grabPos.z;
+    sim.stop(prey);
+  }
   if (sim.tick - M.grabAt < 10) return;
+  M.grabPos = null;
   // captured
   m.carrying = prey.id;
   prey.carriedBy = m.id;
@@ -435,7 +451,7 @@ function carry(sim: Sim, m: Entity) {
   v.x = m.x;
   v.z = m.z;
   v.yaw = m.yaw;
-  v.lift = 0.7 * m.scale;
+  v.lift = heightM(m) * 0.5; // meters (F13)
   const A = sim.layout.highAltar;
   const c = sim.champion();
   if (v.kind === 'human') {
@@ -484,7 +500,7 @@ function sacrifice(sim: Sim, m: Entity) {
   const M = m.monster!;
   const v = m.carrying !== undefined ? sim.ents.get(m.carrying) : undefined;
   if (!v) return setState(sim, m, 'return');
-  v.lift = 0.9 + Math.sin(sim.tick * 0.3) * 0.05;
+  v.lift = 1.3 + Math.sin(sim.tick * 0.3) * 0.05;
   if (sim.tick % 40 === 0) sim.burst('dark-pillar', sim.layout.highAltar.x + 0.5, sim.layout.highAltar.z + 0.5);
   if (sim.tick < m.stateUntil) return;
   const value = Math.round(sim.maxHp(v) * (v.kind === 'animal' ? 0.25 : 1));
@@ -533,52 +549,81 @@ function nearestAnimal(sim: Sim, m: Entity, r: number): Entity | null {
   return best;
 }
 
-/** The attack loop with a telegraphed wind-up (R15). */
+/** The attack loop with a telegraphed wind-up (R15), in meters (F3, F7, F29). */
 function fight(sim: Sim, m: Entity, t: Entity) {
   const M = m.monster!;
   if (m.carrying !== undefined) dropCarried(sim, m);
   roar(sim, m);
-  const ls = levelScale(m);
-  const tr = 0.25 * t.scale;
-  const hitR = M.reach * ls * 1.25 * 0.6 + tr + 0.3;
-  const d = Math.hypot(t.x - m.x, t.z - m.z);
+  const hitR = telegraphRadius(m);
+  const fp = frontPoint(m);
+  const d = Math.hypot(t.x - fp.x, t.z - fp.z);
+  const isChamp = t.id === sim.championId;
   if (M.windup >= 0) {
-    m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
+    // turn toward the target (180°/s), then freeze the facing for the last 2 ticks
+    if (sim.tick - M.windup < 6) {
+      let dy = Math.atan2(t.x - m.x, t.z - m.z) - m.yaw;
+      while (dy > Math.PI) dy -= Math.PI * 2;
+      while (dy < -Math.PI) dy += Math.PI * 2;
+      m.yaw += Math.max(-0.314, Math.min(0.314, dy));
+    }
     if (sim.tick - M.windup < 8) return;
     M.windup = -1;
     M.attackReadyAt = sim.tick + 15;
-    if (d <= hitR) {
-      let dmg = M.dmg * sim.stat(m, 'strength') * armFactor(m);
-      if (isEnraged(sim, m)) dmg *= 1.25;
-      if (sigLost(m) && ['rahab', 'tannin', 'seir', 'reem'].includes(M.archetype)) dmg *= 0.7;
-      if (M.archetype === 'seir' && M.runFrom && Math.hypot(M.runFrom.x - m.x, M.runFrom.z - m.z) > 5) dmg *= 1.5;
-      M.runFrom = null;
+    M.strikeAt = sim.tick;
+    let dmg = M.dmg * sim.stat(m, 'strength') * armFactor(m);
+    if (isEnraged(sim, m)) dmg *= 1.25;
+    if (sigLost(m) && ['rahab', 'tannin', 'seir', 'reem'].includes(M.archetype)) dmg *= 0.7;
+    if (M.archetype === 'seir' && M.runFrom && Math.hypot(M.runFrom.x - m.x, M.runFrom.z - m.z) > 5) dmg *= 1.5;
+    M.runFrom = null;
+    if (isChamp) {
+      const res = releaseOnChampion(sim, m, t, hitR + bodyR(t));
+      const S = cs(sim);
+      if (res === 'hit') applyDamage(sim, t, dmg, { type: M.dmgType, sourceId: m.id });
+      else if (res === 'block') {
+        // the shield takes 75 %; no burn, no limb roll
+        applyDamage(sim, t, dmg * 0.25, { type: 'crush', zone: 'torso', sourceId: m.id });
+        S.combat.push({ kind: 'blocked', id: m.id, amount: Math.round(dmg * 0.75) });
+      } else {
+        sim.burst('whiff', fp.x + Math.sin(m.yaw) * reachT(m) * 0.6, fp.z + Math.cos(m.yaw) * reachT(m) * 0.6);
+        S.combat.push({ kind: 'dodged', id: m.id });
+      }
+    } else if (d <= hitR + bodyR(t) - 0.3 / MPT) {
       applyDamage(sim, t, dmg, { type: M.dmgType, sourceId: m.id });
-    } else {
-      sim.burst('whiff', m.x + Math.sin(m.yaw) * 0.8, m.z + Math.cos(m.yaw) * 0.8);
-      if (t.id === sim.championId) sim.emote(t, 'dodged!', 1, true);
-    }
+    } else sim.burst('whiff', fp.x + Math.sin(m.yaw) * reachT(m) * 0.6, fp.z + Math.cos(m.yaw) * reachT(m) * 0.6);
     return;
   }
-  if (d <= hitR - 0.15 && sim.tick >= M.attackReadyAt) {
+  const stop = Math.max(bodyR(m) + bodyR(t) + 0.1 / MPT, reachT(m) * 0.8);
+  if (d <= hitR - 0.4 / MPT && sim.tick >= M.attackReadyAt) {
     sim.stop(m);
     M.windup = sim.tick;
     m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
+    sim.sound('growl', m.x, m.z, m.scale);
     return;
   }
-  if (d > hitR - 0.3) {
+  if (d > stop) {
     if (!M.runFrom) M.runFrom = { x: m.x, z: m.z };
-    if (d < 3) {
+    if (Math.hypot(t.x - m.x, t.z - m.z) < 2 && sim.lineOk(m.x, m.z, t.x, t.z, sim.costsFor(sim.moveKey(m)), 99)) {
       sim.stop(m);
-      sim.moveToward(m, t.x, t.z, monsterSpeed(sim, m) * 1.1);
+      const k = Math.min(monsterSpeed(sim, m) * 1.1, (d - stop) * 10 + 0.05);
+      sim.moveToward(m, t.x, t.z, k);
     } else go(sim, m, t.x, t.z, 8);
+  } else {
+    sim.stop(m);
+    m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
   }
 }
 
 /** Telegraph radius as drawn by the renderer: equals the real hit radius. */
 export function telegraphRadius(m: Entity): number {
-  return m.monster!.reach * levelScale(m) * 1.25 * 0.6 + 0.3;
+  return reachT(m) + 0.3 / MPT; // tiles, from the front point
+}
+
+/** Wind-up progress 0..1 (for the ring and the HUD arc), or -1. */
+export function windupProgress(sim: Sim, m: Entity): number {
+  const w = m.monster?.windup ?? -1;
+  return w < 0 ? -1 : Math.min(1, (sim.tick - w) / 8);
 }
 
 void regionName;
 void SIZE;
+void heightM;

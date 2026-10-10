@@ -1,4 +1,5 @@
 // Village sim (§5): shifts, work sites and drift, food, sleep, flight, guards, the shofar, growth.
+import { axisDist, bodyR } from './body';
 import type { Sim } from './sim';
 import type { Entity, Job } from './types';
 import { DAY_MS, HOUR_MS, inWindow } from './clock';
@@ -92,6 +93,21 @@ function home(sim: Sim, e: Entity): Entity | undefined {
   return sim.ents.get(e.human!.homeId);
 }
 
+/** The walkable spot in front of a house's door (F24); houses themselves are solid tiles. */
+export function doorOf(sim: Sim, h: { x: number; z: number }): { x: number; z: number } {
+  const L = sim.layout;
+  const hx = Math.floor(h.x), hz = Math.floor(h.z);
+  const k = L.houses.findIndex((p) => p.x === hx && p.z === hz);
+  const d = k >= 0 && L.doors ? L.doors[k] : { x: hx, z: hz + 1 };
+  return { x: d.x + 0.5, z: d.z + 0.5 };
+}
+
+/** Where a villager walks to get home. */
+function homeDoor(sim: Sim, e: Entity): { x: number; z: number } | undefined {
+  const h = home(sim, e);
+  return h ? doorOf(sim, h) : undefined;
+}
+
 function enterHouse(sim: Sim, e: Entity, state: 'sleep' | 'hide') {
   const h = home(sim, e);
   if (h) { e.x = h.x; e.z = h.z; }
@@ -106,8 +122,10 @@ function leaveHouse(sim: Sim, e: Entity) {
   e.hidden = false;
   const h = home(sim, e);
   if (h) {
-    const n = sim.nearestWalkable(e, h.x, h.z + 1, 3);
-    if (n) { e.x = n.x + 0.5; e.z = n.z + 0.5; }
+    const d = doorOf(sim, h);
+    e.x = d.x;
+    e.z = d.z;
+    e.yaw = Math.atan2(d.x - h.x, d.z - h.z);
     updateHouseLight(sim, h);
   }
 }
@@ -120,8 +138,8 @@ export function updateHouseLight(sim: Sim, h: Entity) {
 }
 
 function atHome(sim: Sim, e: Entity) {
-  const h = home(sim, e);
-  return !!h && Math.hypot(e.x - h.x, e.z - h.z) < 1.3;
+  const d = homeDoor(sim, e);
+  return !!d && Math.hypot(e.x - d.x, e.z - d.z) < 0.8;
 }
 
 export function stepHuman(sim: Sim, e: Entity) {
@@ -169,7 +187,7 @@ export function stepHuman(sim: Sim, e: Entity) {
       sim.stop(e);
     } else {
       if (atHome(sim, e)) return enterHouse(sim, e, 'hide');
-      const h = home(sim, e);
+      const h = homeDoor(sim, e);
       if (h && !sim.moving(e)) sim.goTo(e, h.x, h.z);
       sim.advancePath(e, humanSpeed(sim, e));
       return;
@@ -182,8 +200,13 @@ export function stepHuman(sim: Sim, e: Entity) {
     const d = sim.ents.get(sim.dragging);
     if (c && d?.kind === 'monster' && Math.hypot(c.x - e.x, c.z - e.z) < 8) {
       e.state = 'help-drag';
-      const tx = c.x + Math.sin(e.id) * 1.2, tz = c.z + Math.cos(e.id) * 1.2;
-      if (Math.hypot(tx - e.x, tz - e.z) > 0.6) sim.moveToward(e, tx, tz, humanSpeed(sim, e) * 1.1);
+      // 1.5 m beside the rope, halfway between the champion and the body (F5)
+      const mx = (c.x + d.x) / 2, mz = (c.z + d.z) / 2;
+      const ax = c.x - d.x, az = c.z - d.z, al = Math.hypot(ax, az) || 1;
+      const side = e.id % 2 ? 1 : -1, back = ((e.id >> 1) % 3) * 0.12;
+      const tx = mx - (az / al) * side * (1.5 / 8) - (ax / al) * back, tz = mz + (ax / al) * side * (1.5 / 8) - (az / al) * back;
+      if (Math.hypot(tx - e.x, tz - e.z) > 0.05) sim.moveToward(e, tx, tz, Math.min(humanSpeed(sim, e) * 1.2, Math.hypot(tx - e.x, tz - e.z) * 10));
+      e.yaw = Math.atan2(c.x - e.x, c.z - e.z);
       return;
     }
   }
@@ -194,7 +217,7 @@ export function stepHuman(sim: Sim, e: Entity) {
     if (e.hidden) return;
     if (atHome(sim, e)) return enterHouse(sim, e, 'hide');
     e.state = 'go-home';
-    const h = home(sim, e);
+    const h = homeDoor(sim, e);
     if (h && !sim.moving(e)) sim.goTo(e, h.x, h.z);
     sim.advancePath(e, humanSpeed(sim, e));
     return;
@@ -236,7 +259,7 @@ export function stepHuman(sim: Sim, e: Entity) {
   }
   if (atHome(sim, e)) return enterHouse(sim, e, 'sleep');
   e.state = 'go-home';
-  const h = home(sim, e);
+  const h = homeDoor(sim, e);
   if (h && !sim.moving(e)) sim.goTo(e, h.x, h.z);
   sim.advancePath(e, humanSpeed(sim, e));
 }
@@ -244,7 +267,7 @@ export function stepHuman(sim: Sim, e: Entity) {
 function wander(sim: Sim, e: Entity) {
   e.state = 'idle';
   if (!sim.moving(e) && e.idleUntil < sim.tick) {
-    const h = home(sim, e) ?? e;
+    const h = homeDoor(sim, e) ?? e;
     const x = Math.floor(h.x + sim.rng.int(-4, 4)), z = Math.floor(h.z + sim.rng.int(-4, 4));
     if (sim.walkableFor(e, x, z)) sim.goTo(e, x, z);
     e.idleUntil = sim.tick + sim.rng.int(50, 200);
@@ -253,12 +276,17 @@ function wander(sim: Sim, e: Entity) {
 }
 
 function guardFight(sim: Sim, e: Entity, m: Entity) {
-  const reach = 1.4 + 0.25 * m.scale;
-  const d = Math.hypot(m.x - e.x, m.z - e.z);
+  const reach = 2.6 / 8; // spear, meters → tiles (§2)
+  const d = axisDist(m, e.x, e.z) - bodyR(m);
   e.yaw = Math.atan2(m.x - e.x, m.z - e.z);
   if (d > reach) {
-    if (!sim.moving(e) || sim.tick % 10 === 0) sim.goTo(e, m.x, m.z);
-    sim.advancePath(e, humanSpeed(sim, e));
+    if (Math.hypot(m.x - e.x, m.z - e.z) < 2) {
+      sim.stop(e);
+      sim.moveToward(e, m.x, m.z, Math.min(humanSpeed(sim, e), (d - reach * 0.8) * 10 + 0.05));
+    } else {
+      if (!sim.moving(e) || sim.tick % 10 === 0) sim.goTo(e, m.x, m.z);
+      sim.advancePath(e, humanSpeed(sim, e));
+    }
     return;
   }
   sim.stop(e);

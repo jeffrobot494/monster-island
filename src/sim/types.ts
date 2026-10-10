@@ -60,7 +60,9 @@ export type Stat = 'speed' | 'maxHp' | 'strength' | 'sight';
 export const STATS: readonly Stat[] = ['speed', 'maxHp', 'strength', 'sight'];
 
 export interface Path {
-  pts: number[]; // flattened tile indices
+  pts: number[]; // flattened tile indices (raw A*, used for invalidation, F27)
+  /** smoothed waypoints (tile coords); when present the walker follows these */
+  wp?: { x: number; z: number }[];
   i: number; // index of the next waypoint
   gx: number;
   gz: number;
@@ -93,6 +95,10 @@ export interface MonsterInfo {
   ground: { x: number; z: number } | null;
   prey: number;
   grabAt: number;
+  /** where the prey is pinned during a grab (F4) */
+  grabPos?: { x: number; z: number } | null;
+  /** tick of the last attack release (strike animation) */
+  strikeAt?: number;
   feedAt: number;
   satedUntil?: number; // clockMs: rests after a kill or sacrifice
   visit: { atHour: number; to: number; done: boolean } | null;

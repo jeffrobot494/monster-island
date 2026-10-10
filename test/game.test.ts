@@ -104,10 +104,10 @@ describe('capture loop', () => {
     while (sim.dragging !== m.id && t++ < 200) island.step();
     expect(m.state).toBe('bound');
     const A = sim.layout.villageAltar;
-    issueOrder(sim, { type: 'move', x: A.x + 0.5, z: A.z + 1.5 });
+    issueOrder(sim, { type: 'altar' });
     t = 0;
-    while (Math.hypot(c.x - A.x - 0.5, c.z - A.z - 0.5) > 2.4 && t++ < 20000) {
-      if (!sim.order) issueOrder(sim, { type: 'move', x: A.x + 0.5, z: A.z + 1.5 });
+    while (Math.hypot(c.x - A.x - 0.5, c.z - A.z - 0.5) > 0.6 && t++ < 20000) {
+      if (!sim.order) issueOrder(sim, { type: 'altar' });
       island.step();
     }
     expect(m.state).toBe('bound');
@@ -136,7 +136,7 @@ describe('judgment', () => {
     // a lamb at the altar
     const c = sim.champion()!;
     c.x = sim.layout.villageAltar.x + 0.5;
-    c.z = sim.layout.villageAltar.z + 1.5;
+    c.z = sim.layout.villageAltar.z + 0.6;
     expect(offerLamb(sim)).toBeNull();
     expect(sim.favor.human).toBe(40);
     expect(sim.fold).toBe(5);
@@ -179,7 +179,7 @@ describe('forbidden offering and win conditions', () => {
     const sim = make(9).sim;
     const c = sim.champion()!;
     c.x = sim.layout.villageAltar.x + 0.5;
-    c.z = sim.layout.villageAltar.z + 1.5;
+    c.z = sim.layout.villageAltar.z + 0.6;
     const v = sim.humans().find((h) => h.id !== c.id)!;
     const value = Math.round(sim.maxHp(v));
     expect(offerVillagerFn(sim, v.id)).toBeNull();

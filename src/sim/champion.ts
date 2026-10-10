@@ -1,10 +1,15 @@
-// The player's champion (§7, §13, R15–R21): orders, attacks, dash dodge, binding, dragging, regeneration, idle defense,
-// succession.
+// The player's champion in first person (spec §4–5, F6–F10, F31): pose messages from the client-side controller,
+// swings with a client-chosen target and zone, dodge i-frames, block, interact, finish, torch; hold and autopilot
+// modes when the player isn't driving; dragging along a breadcrumb trail; regeneration; succession.
 import type { Sim } from './sim';
-import type { Entity } from './types';
-import { applyDamage, armFactor, firstName, heal, legFactor, releaseDragged } from './combat';
+import type { Entity, Zone } from './types';
+import { applyDamage, armFactor, firstName, heal, legFactor, releaseDragged, kill, spawnSevered } from './combat';
 import { JOB_TINT } from './core-defs';
+import { doorOf } from './village';
+import { M } from './ground';
+import { axisDist, axisPoint, bearingOff, bodyR, frontPoint } from './body';
 
+/** Internal orders: used by autopilot and by dev/test scripts. */
 export type Order =
   | { type: 'move'; x: number; z: number }
   | { type: 'attack'; id: number; idle?: boolean }
@@ -14,81 +19,383 @@ export type Order =
   | { type: 'drop' }
   | { type: 'altar' };
 
+export type ChampInput =
+  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean }
+  | { type: 'swing'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
+  | { type: 'dodge' }
+  | { type: 'block'; on: boolean }
+  | { type: 'interact'; id: number | null }
+  | { type: 'finish'; id: number | null }
+  | { type: 'torch'; on: boolean }
+  | { type: 'lock'; on: boolean };
+
+export type CtrlReason = 'player' | 'hold' | 'autopilot' | 'downed' | 'captive' | 'dead';
+
+export interface CombatEvent {
+  kind: 'hit' | 'whiff' | 'blocked' | 'hurt' | 'dodged';
+  id?: number;
+  zone?: string;
+  x?: number;
+  z?: number;
+  killed?: boolean;
+  severed?: boolean;
+  downed?: boolean;
+  amount?: number;
+}
+
 const SUCCESSION_TICKS = 36_000; // 1 real hour (R21)
-const IDLE_TICKS = 3000; // 5 real minutes (R19)
-const ALTAR_R = 2.5;
+const IDLE_TICKS = 3000; // 5 real minutes (R19, F9)
+export const SWORD_M = 2.4;
+export const INTERACT_M = 3.0;
+const SPRINT_MS = 8.8;
+const CRAWL_MS = 0.8;
 
 interface ChampState {
-  lastOrder: number;
+  lastInput: number;
   lastThreat: number;
   swingReady: number;
-  dashReady: number;
   diedTick: number;
   altarNotified: boolean;
   weapon: { type: string; mul: number };
+  epoch: number;
+  locked: boolean;
+  blocking: boolean;
+  torch: boolean;
+  iframesUntil: number;
+  dodgeTick: number;
+  lastPoseTick: number;
+  pitch: number;
+  /** recent accepted poses for favorable release checks (F7) */
+  poses: { tick: number; x: number; z: number; yaw: number }[];
+  /** breadcrumb trail for dragging (F8), oldest first */
+  trail: { x: number; z: number }[];
+  reason: CtrlReason;
+  correction: { x: number; z: number; epoch: number } | null;
+  combat: CombatEvent[];
+  ambushed: number[];
 }
 
 export function cs(sim: Sim): ChampState {
   const s = sim as unknown as { champState?: ChampState };
-  return (s.champState ??= { lastOrder: 0, lastThreat: -9999, swingReady: 0, dashReady: 0, diedTick: 0, altarNotified: false, weapon: { type: 'slash', mul: 1 } });
+  return (s.champState ??= {
+    lastInput: 0, lastThreat: -9999, swingReady: 0, diedTick: 0, altarNotified: false, weapon: { type: 'slash', mul: 1 },
+    epoch: 1, locked: true, blocking: false, torch: false, iframesUntil: 0, dodgeTick: -99, lastPoseTick: 0, pitch: 0,
+    poses: [], trail: [], reason: 'player', correction: null, combat: [], ambushed: [],
+  });
 }
 
 export function champReach(t: Entity) {
-  return 1.3 + 0.25 * t.scale;
+  return SWORD_M / M + bodyR(t);
 }
 
+/** Who moves the champion right now. */
+export function ctrlReason(sim: Sim): CtrlReason {
+  const c = sim.champion();
+  if (!c) return 'dead';
+  if (c.state === 'captive' || c.carriedBy !== undefined) return 'captive';
+  if (c.state === 'downed') return 'downed';
+  if (sim.order) return 'autopilot';
+  if (!cs(sim).locked) return 'hold';
+  return 'player';
+}
+
+export function isPlayerCtrl(r: CtrlReason) {
+  return r === 'player' || r === 'downed';
+}
+
+/** Speed multiplier the client applies to walk/sprint (legs, stat mods, dragging). */
+export function champSpeedMul(sim: Sim): number {
+  const c = sim.champion();
+  if (!c) return 1;
+  return (sim.stat(c, 'speed') / 1.1) * legFactor(c) * dragFactor(sim, c);
+}
+
+function dragFactor(sim: Sim, c: Entity): number {
+  if (sim.dragging < 0) return 1;
+  const d = sim.ents.get(sim.dragging);
+  if (!d) return 1;
+  let helpers = 0;
+  for (const h of sim.ents.values()) if (h.state === 'help-drag' && Math.hypot(h.x - d.x, h.z - d.z) < 4.8 / M + bodyR(d)) helpers++;
+  void c;
+  const heavy = d.kind === 'monster' || (d.corpse && d.corpse.maxHp > 100);
+  return heavy ? Math.min(0.85, 0.4 + 0.15 * Math.min(3, helpers)) : 0.8;
+}
+
+/** Dev/test: give the champion an internal order (it runs in sim mode). */
 export function issueOrder(sim: Sim, o: Order) {
   const c = sim.champion();
   if (!c || c.state === 'downed' || c.state === 'captive') return;
   const S = cs(sim);
-  S.lastOrder = sim.tick;
+  S.lastInput = sim.tick;
   if (o.type === 'drop') {
-    if (sim.dragging >= 0) {
-      releaseDragged(sim);
-      sim.log('You let go.', 1);
-    }
+    if (sim.dragging >= 0) releaseDragged(sim);
     return;
-  }
-  // dash dodge: a move order while something is winding up on you (R15)
-  if (o.type === 'move' && sim.tick >= S.dashReady) {
-    for (const m of sim.ents.values()) {
-      if (m.kind !== 'monster' || m.target !== c.id || (m.monster!.windup ?? -1) < 0) continue;
-      if (Math.hypot(m.x - c.x, m.z - c.z) > 4) continue;
-      const dx = o.x - c.x, dz = o.z - c.z, d = Math.hypot(dx, dz) || 1;
-      const nx = c.x + (dx / d) * 1.2, nz = c.z + (dz / d) * 1.2;
-      if (sim.walkableFor(c, nx, nz)) {
-        c.x = nx;
-        c.z = nz;
-        S.dashReady = sim.tick + 20;
-        sim.burst('dust', c.x, c.z);
-        sim.stop(c);
-      }
-      break;
-    }
   }
   if (o.type === 'altar') S.altarNotified = false;
   sim.order = o;
   sim.stop(c);
 }
 
-function speed(sim: Sim, c: Entity) {
-  let s = sim.stat(c, 'speed') * legFactor(c);
-  if (sim.dragging >= 0) {
-    const d = sim.ents.get(sim.dragging);
-    if (d) {
-      let helpers = 0;
-      for (const h of sim.ents.values()) if (h.state === 'help-drag' && Math.hypot(h.x - c.x, h.z - c.z) < 3) helpers++;
-      const heavy = d.kind === 'monster' || (d.corpse && d.corpse.maxHp > 100);
-      s *= heavy ? Math.min(0.85, 0.4 + 0.15 * Math.min(3, helpers)) : 0.8;
+function correct(sim: Sim, c: Entity) {
+  const S = cs(sim);
+  S.epoch++;
+  S.correction = { x: c.x, z: c.z, epoch: S.epoch };
+}
+
+function pushTrail(S: ChampState, x: number, z: number) {
+  const t = S.trail;
+  const last = t[t.length - 1];
+  if (last && Math.hypot(last.x - x, last.z - z) < 0.05) return;
+  t.push({ x, z });
+  if (t.length > 80) t.shift();
+}
+
+/** Apply queued client input at the start of a tick, in arrival order (§9.3). */
+export function processInputs(sim: Sim) {
+  const S = cs(sim);
+  const list = sim.inputs;
+  sim.inputs = [];
+  const c = sim.champion();
+  for (const i of list) {
+    if (i.type === 'lock') {
+      S.locked = i.on;
+      if (i.on) S.lastInput = sim.tick;
+      else S.blocking = false;
+      continue;
+    }
+    if (i.type === 'torch') {
+      S.torch = i.on;
+      if (i.on) S.blocking = false;
+      continue;
+    }
+    if (!c) continue;
+    const reason = ctrlReason(sim);
+    if (i.type === 'pose') {
+      if (i.input) {
+        S.lastInput = sim.tick;
+        if (reason === 'autopilot' && sim.order) {
+          // the player takes the wheel back; the client snaps on the new epoch
+          sim.order = null;
+          sim.stop(c);
+          S.epoch++;
+          continue;
+        }
+      }
+      if (i.epoch !== S.epoch || !isPlayerCtrl(reason)) continue;
+      applyPose(sim, c, i);
+      continue;
+    }
+    S.lastInput = sim.tick;
+    if (reason !== 'player') continue;
+    switch (i.type) {
+      case 'swing': swing(sim, c, i); break;
+      case 'dodge':
+        S.iframesUntil = sim.tick + 3;
+        S.dodgeTick = sim.tick;
+        break;
+      case 'block':
+        S.blocking = i.on && !S.torch && sim.dragging < 0;
+        break;
+      case 'interact': sim.actionError = interact(sim, c, i.id); break;
+      case 'finish': sim.actionError = finish(sim, c, i.id); break;
     }
   }
-  return s;
+}
+
+function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number }) {
+  const S = cs(sim);
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.yaw)) return;
+  const downed = c.state === 'downed';
+  let max = downed ? CRAWL_MS : SPRINT_MS * Math.max(0.3, champSpeedMul(sim)) * 1.15;
+  if (sim.tick - S.dodgeTick <= 4) max += 17.5;
+  const elapsed = Math.min(0.25, Math.max(0.1, (sim.tick - S.lastPoseTick) * 0.1));
+  const d = Math.hypot(p.x - c.x, p.z - c.z);
+  const sameTile = Math.floor(p.x) === Math.floor(c.x) && Math.floor(p.z) === Math.floor(c.z);
+  const ok = (sameTile || sim.walkableFor(c, p.x, p.z)) && d <= (1.6 * max * elapsed) / M + 0.2;
+  S.lastPoseTick = sim.tick;
+  if (!ok) {
+    correct(sim, c);
+    return;
+  }
+  c.x = Math.min(127.99, Math.max(0, p.x));
+  c.z = Math.min(127.99, Math.max(0, p.z));
+  c.yaw = p.yaw;
+  S.pitch = p.pitch;
+  S.poses.push({ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw });
+  if (S.poses.length > 6) S.poses.shift();
+}
+
+function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; zone: Zone | null }) {
+  const S = cs(sim);
+  // the client paces swings at 0.6 s; allow a tick of jitter
+  if (c.state === 'downed' || sim.dragging >= 0 || sim.tick < S.swingReady - 1) return;
+  S.swingReady = sim.tick + 6;
+  S.blocking = false;
+  const ok = (t: Entity | undefined): t is Entity => {
+    if (!t || t.hp <= 0 || !sim.ents.has(t.id)) return false;
+    const hittable = t.kind === 'monster' ? t.state !== 'downed' && t.state !== 'bound' : t.tags.includes('hittable');
+    if (!hittable || t.hidden) return false;
+    const p = axisPoint(t, c.x, c.z);
+    const dist = axisDist(t, c.x, c.z) - bodyR(t);
+    return dist <= (SWORD_M + 1.0) / M && bearingOff(i.yaw, c.x, c.z, p.x, p.z) <= (70 * Math.PI) / 180 + Math.atan2(bodyR(t), Math.max(0.05, Math.hypot(p.x - c.x, p.z - c.z)));
+  };
+  let t = i.targetId !== null ? sim.ents.get(i.targetId) : undefined;
+  let zone: Zone | undefined = i.zone ?? undefined;
+  if (!ok(t)) {
+    // fallback: nearest bearing within the ±50° arc and plain reach
+    t = undefined;
+    zone = undefined;
+    let best = Infinity;
+    for (const m of sim.ents.values()) {
+      if (m.kind !== 'monster' || !ok(m)) continue;
+      const p = axisPoint(m, c.x, c.z);
+      const off = bearingOff(i.yaw, c.x, c.z, p.x, p.z);
+      if (off > (50 * Math.PI) / 180 || axisDist(m, c.x, c.z) - bodyR(m) > SWORD_M / M) continue;
+      if (off < best) { best = off; t = m; }
+    }
+  }
+  if (!t) {
+    S.combat.push({ kind: 'whiff' });
+    return;
+  }
+  if (zone && t.zones && !t.zones[zone]) zone = undefined;
+  let dmg = 12 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c) * S.weapon.mul;
+  if (zone === 'head') dmg *= 1.5;
+  let mul = 1;
+  if (t.monster && t.state === 'rest' && !S.ambushed.includes(t.id)) {
+    mul = 2;
+    S.ambushed.push(t.id);
+    sim.toast(`You catch ${t.monster.seen ? firstName(t) : 'it'} resting in its lair. Double damage!`);
+  }
+  if (t.monster && t.state !== 'downed') t.target = c.id;
+  const r = applyDamage(sim, t, dmg, { type: S.weapon.type, sourceId: c.id, mul, zone });
+  if (t.monster && sim.ents.has(t.id) && t.state === 'rest') t.state = 'fight';
+  S.combat.push({ kind: 'hit', id: t.id, zone: r.zone, x: t.x, z: t.z, killed: r.killed, severed: r.severed, downed: r.downed, amount: Math.round(r.dealt) });
+}
+
+function near(c: Entity, t: Entity, m = INTERACT_M) {
+  return axisDist(t, c.x, c.z) - bodyR(t) <= m / M;
+}
+
+function bind(sim: Sim, c: Entity, t: Entity) {
+  const S = cs(sim);
+  if (sim.dragging >= 0 && sim.dragging !== t.id) releaseDragged(sim);
+  if (t.kind === 'monster') {
+    if (t.state !== 'bound') sim.log(`You bind ${t.name}. Drag it home to the altar.`, 2, 'core', 'bind');
+    t.state = 'bound';
+    t.stateUntil = 0;
+    t.roll = 1;
+    sim.stop(t);
+  }
+  sim.dragging = t.id;
+  S.blocking = false;
+  S.altarNotified = false;
+  S.trail = [{ x: t.x, z: t.z }, { x: c.x, z: c.z }];
+  sim.sound('bind', t.x, t.z);
+}
+
+function interact(sim: Sim, c: Entity, id: number | null): string | null {
+  if (sim.dragging >= 0) {
+    releaseDragged(sim);
+    sim.toast('You let go.');
+    return null;
+  }
+  const t = id !== null ? sim.ents.get(id) : undefined;
+  if (!t) return null;
+  if ((t.kind === 'monster' && (t.state === 'downed' || t.state === 'bound')) || t.kind === 'corpse') {
+    if (!near(c, t)) return 'Too far away.';
+    bind(sim, c, t);
+    return null;
+  }
+  if (t.kind === 'human' && t.id !== c.id && !t.hidden) {
+    const lines = (t.human?.bio ?? '').split('. ').filter(Boolean);
+    sim.emote(t, lines.length ? lines[sim.rng.int(0, lines.length - 1)].replace(/\.?$/, '.') : '…', 3, true);
+  }
+  return null;
+}
+
+function finish(sim: Sim, c: Entity, id: number | null): string | null {
+  const t = id !== null ? sim.ents.get(id) : undefined;
+  if (!t || t.kind !== 'monster' || (t.state !== 'downed' && t.state !== 'bound')) return 'Nothing to finish.';
+  if (!near(c, t)) return 'Too far away.';
+  if (sim.dragging === t.id) releaseDragged(sim);
+  if (t.zones?.head) t.zones.head.state = 'severed';
+  spawnSevered(sim, t, 'head');
+  cs(sim).combat.push({ kind: 'hit', id: t.id, zone: 'head', x: t.x, z: t.z, killed: true, severed: true });
+  kill(sim, t, { amount: 999, type: 'slash', zone: 'head', sourceId: c.id, sourceKind: 'human', deathType: 'dismembered' });
+  return null;
+}
+
+/** Monster release against the champion (F7, F29): i-frames, the most favorable recent pose, block. */
+export function releaseOnChampion(sim: Sim, m: Entity, c: Entity, hitR: number): 'iframe' | 'miss' | 'block' | 'hit' {
+  const S = cs(sim);
+  if (sim.tick <= S.iframesUntil) return 'iframe';
+  const fp = frontPoint(m);
+  const arc = (50 * Math.PI) / 180;
+  const recent = S.poses.filter((p) => sim.tick - p.tick <= 2);
+  const cands = recent.length && isPlayerCtrl(S.reason) ? recent : [{ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw }];
+  for (const p of cands) {
+    const out = Math.hypot(p.x - fp.x, p.z - fp.z) > hitR;
+    const behind = bearingOff(m.yaw, m.x, m.z, p.x, p.z) > arc + Math.atan2(bodyR(c), Math.max(0.05, Math.hypot(p.x - m.x, p.z - m.z)));
+    if (out || behind) return 'miss';
+  }
+  if (S.blocking && bearingOff(c.yaw, c.x, c.z, m.x, m.z) <= (60 * Math.PI) / 180) return 'block';
+  return 'hit';
+}
+
+function placeDragged(sim: Sim, c: Entity) {
+  const S = cs(sim);
+  const d = sim.ents.get(sim.dragging);
+  if (!d) {
+    sim.dragging = -1;
+    return;
+  }
+  // walk back along the trail by 1.5 m + body radius (F8)
+  let need = 1.5 / M + bodyR(d) + 0.3 / M;
+  let px = c.x, pz = c.z;
+  let found = false;
+  for (let k = S.trail.length - 1; k >= 0; k--) {
+    const q = S.trail[k];
+    const seg = Math.hypot(px - q.x, pz - q.z);
+    if (seg >= need) {
+      const f = need / seg;
+      px += (q.x - px) * f;
+      pz += (q.z - pz) * f;
+      found = true;
+      break;
+    }
+    need -= seg;
+    px = q.x;
+    pz = q.z;
+  }
+  if (!found && S.trail.length) {
+    px = S.trail[0].x;
+    pz = S.trail[0].z;
+  }
+  d.x += (px - d.x) * 0.5;
+  d.z += (pz - d.z) * 0.5;
+  if (Math.hypot(c.x - d.x, c.z - d.z) > 0.01) d.yaw = Math.atan2(c.x - d.x, c.z - d.z);
+  while (S.trail.length > 2 && Math.hypot(S.trail[0].x - d.x, S.trail[0].z - d.z) > 3) S.trail.shift();
+  const A = sim.layout.villageAltar;
+  if (Math.hypot(A.x + 0.5 - c.x, A.z + 0.5 - c.z) < 4 / M + 0.3) {
+    if (!S.altarNotified) {
+      S.altarNotified = true;
+      sim.alert({ kind: 'altar', text: 'At the altar. Press E on it to make the offering.' });
+    }
+  } else S.altarNotified = false;
 }
 
 export function stepChampion(sim: Sim, c: Entity) {
   const S = cs(sim);
-  if (c.state === 'captive') return;
+  const prev = S.reason;
+  if (c.state === 'captive') {
+    S.reason = 'captive';
+    return;
+  }
   if (c.state === 'downed') {
+    S.reason = 'downed';
+    if (!isPlayerCtrl(prev)) S.epoch++;
+    pushTrail(S, c.x, c.z);
     if (sim.tick - (c.human?.downedAt ?? 0) > 300) {
       c.state = 'idle';
       c.roll = 0;
@@ -98,61 +405,67 @@ export function stepChampion(sim: Sim, c: Entity) {
   }
   // regeneration out of danger (R16)
   for (const m of sim.ents.values()) {
-    if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - c.x, m.z - c.z) < 15) {
+    if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && m.state !== 'rest' && Math.hypot(m.x - c.x, m.z - c.z) < 15) {
       S.lastThreat = sim.tick;
       break;
     }
   }
   if (sim.tick - S.lastThreat > 100 && c.hp < sim.maxHp(c)) heal(sim, c, sim.maxHp(c) * 0.002);
 
-  // the dragged body follows one tile behind
-  if (sim.dragging >= 0) {
-    const d = sim.ents.get(sim.dragging);
-    if (!d) sim.dragging = -1;
-    else {
-      const bx = c.x - Math.sin(c.yaw) * 1.0, bz = c.z - Math.cos(c.yaw) * 1.0;
-      if (Math.hypot(bx - d.x, bz - d.z) > 0.05) {
-        d.x += (bx - d.x) * 0.3;
-        d.z += (bz - d.z) * 0.3;
-      }
-      d.yaw = c.yaw;
-      const A = sim.layout.villageAltar;
-      if (Math.hypot(A.x + 0.5 - c.x, A.z + 0.5 - c.z) < ALTAR_R) {
-        if (!S.altarNotified) {
-          S.altarNotified = true;
-          sim.alert({ kind: 'altar', text: 'At the altar.' });
-        }
-      } else S.altarNotified = false;
-    }
-  }
-
-  let o = sim.order;
-  // idle defense (R19)
-  if (!o && sim.tick - S.lastOrder > IDLE_TICKS) {
+  // idle defense: autopilot after 5 minutes without input (R19, F9)
+  if (!sim.order && sim.tick - S.lastInput > IDLE_TICKS) {
     const V = sim.layout.village;
     let threat: Entity | null = null;
     for (const m of sim.ents.values()) if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius - 1) threat = m;
-    if (threat) o = { type: 'attack', id: threat.id, idle: true };
-    else if (Math.hypot(c.x - V.x, c.z - V.z) > 4) o = { type: 'move', x: V.x + 0.5, z: V.z + 1.5 };
-    if (o) sim.order = o;
+    if (threat) sim.order = { type: 'attack', id: threat.id, idle: true };
+    else if (Math.hypot(c.x - V.x, c.z - V.z) > 4) sim.order = { type: 'move', x: V.x + 0.5, z: V.z + 1.5 };
   }
-  if (!o) {
-    c.state = sim.dragging >= 0 ? 'drag' : 'idle';
-    return;
+  const reason = ctrlReason(sim);
+  S.reason = reason;
+  if (isPlayerCtrl(reason) && !isPlayerCtrl(prev)) S.epoch++;
+  if (reason === 'hold') holdGround(sim, c);
+  else if (reason === 'autopilot') runOrder(sim, c);
+  else c.state = sim.dragging >= 0 ? 'drag' : 'idle';
+  pushTrail(S, c.x, c.z);
+  if (sim.dragging >= 0) placeDragged(sim, c);
+}
+
+/** Pointer lock lost: stand and swing at whatever attacks you (F10). */
+function holdGround(sim: Sim, c: Entity) {
+  const S = cs(sim);
+  c.state = sim.dragging >= 0 ? 'drag' : 'idle';
+  let foe: Entity | null = null, bd = Infinity;
+  for (const m of sim.ents.values()) {
+    if (m.kind !== 'monster' || m.target !== c.id || m.state === 'downed' || m.state === 'bound') continue;
+    const d = axisDist(m, c.x, c.z) - bodyR(m);
+    if (d < bd) { bd = d; foe = m; }
   }
+  if (!foe || bd > SWORD_M / M) return;
+  if (sim.dragging >= 0) releaseDragged(sim);
+  c.state = 'fight';
+  const p = axisPoint(foe, c.x, c.z);
+  c.yaw = Math.atan2(p.x - c.x, p.z - c.z);
+  if (sim.tick >= S.swingReady) swing(sim, c, { yaw: c.yaw, targetId: foe.id, zone: null });
+}
+
+function speed(sim: Sim, c: Entity) {
+  return sim.stat(c, 'speed') * legFactor(c) * dragFactor(sim, c);
+}
+
+function runOrder(sim: Sim, c: Entity) {
+  const S = cs(sim);
+  const o = sim.order!;
   const walk = (x: number, z: number) => {
-    if (!sim.moving(c)) {
-      if (!sim.goTo(c, x, z)) {
-        sim.order = null;
-        return;
-      }
+    if (!sim.moving(c) && !sim.goTo(c, x, z)) {
+      sim.order = null;
+      return;
     }
     sim.advancePath(c, speed(sim, c));
   };
   switch (o.type) {
     case 'move': {
       c.state = sim.dragging >= 0 ? 'drag' : 'walk';
-      if (Math.hypot(o.x - c.x, o.z - c.z) < 0.4 || (!sim.moving(c) && sim.order === o && c.path === null && Math.floor(c.x) === Math.floor(o.x) && Math.floor(c.z) === Math.floor(o.z))) {
+      if (Math.hypot(o.x - c.x, o.z - c.z) < 0.4) {
         sim.order = null;
         sim.stop(c);
         return;
@@ -168,13 +481,8 @@ export function stepChampion(sim: Sim, c: Entity) {
     case 'attack':
     case 'finish': {
       const t = sim.ents.get(o.id);
-      if (!t || t.kind !== 'monster' || t.state === 'bound') {
+      if (!t || t.kind !== 'monster' || (o.type === 'attack' && (t.state === 'bound' || t.state === 'downed'))) {
         sim.order = null;
-        return;
-      }
-      if (o.type === 'attack' && t.state === 'downed') {
-        sim.order = null;
-        sim.alert({ kind: 'info', text: `${firstName(t)} is down! Tap it to bind it, or press Finish.` });
         return;
       }
       const V = sim.layout.village;
@@ -184,23 +492,28 @@ export function stepChampion(sim: Sim, c: Entity) {
       }
       if (sim.dragging >= 0) releaseDragged(sim);
       c.state = 'fight';
-      const d = Math.hypot(t.x - c.x, t.z - c.z);
-      if (d > champReach(t)) {
-        if (!sim.moving(c) || sim.tick % 6 === 0) sim.goTo(c, t.x, t.z);
-        sim.advancePath(c, speed(sim, c));
+      const gapT = axisDist(t, c.x, c.z) - bodyR(t);
+      const want = o.type === 'finish' ? INTERACT_M / M * 0.8 : (SWORD_M / M) * 0.85;
+      if (gapT > want) {
+        if (gapT < 2) {
+          sim.stop(c);
+          const p = axisPoint(t, c.x, c.z);
+          sim.moveToward(c, p.x, p.z, speed(sim, c));
+        } else {
+          if (!sim.moving(c) || sim.tick % 6 === 0) sim.goTo(c, t.x, t.z);
+          sim.advancePath(c, speed(sim, c));
+        }
         return;
       }
       sim.stop(c);
-      c.yaw = Math.atan2(t.x - c.x, t.z - c.z);
-      if (sim.tick >= S.swingReady) {
-        S.swingReady = sim.tick + 7;
-        const dmg = 12 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c) * S.weapon.mul;
-        const ambush = t.state === 'rest' ? 2 : 1;
-        if (ambush > 1) sim.emote(c, 'Ambush!', 1, true);
-        if (t.monster && t.state !== 'downed') t.target = c.id;
-        applyDamage(sim, t, dmg, { type: S.weapon.type, sourceId: c.id, mul: ambush });
-        if (t.monster && t.state === 'rest') t.state = 'fight';
+      const p = axisPoint(t, c.x, c.z);
+      c.yaw = Math.atan2(p.x - c.x, p.z - c.z);
+      if (o.type === 'finish') {
+        finish(sim, c, t.id);
+        sim.order = null;
+        return;
       }
+      if (sim.tick >= S.swingReady) swing(sim, c, { yaw: c.yaw, targetId: t.id, zone: null });
       return;
     }
     case 'bind':
@@ -212,32 +525,37 @@ export function stepChampion(sim: Sim, c: Entity) {
         return;
       }
       c.state = 'walk';
-      if (Math.hypot(t.x - c.x, t.z - c.z) > 1.5) return walk(t.x, t.z);
-      sim.stop(c);
-      if (sim.dragging >= 0 && sim.dragging !== t.id) releaseDragged(sim);
-      if (t.kind === 'monster') {
-        if (t.state !== 'bound') sim.log(`You bind ${t.name}. Drag it home to the altar.`, 2, 'core', 'bind');
-        t.state = 'bound';
-        t.stateUntil = 0;
-        t.roll = 1;
-        sim.stop(t);
+      if (!near(c, t, INTERACT_M * 0.8)) {
+        if (axisDist(t, c.x, c.z) < 1.5) {
+          sim.stop(c);
+          sim.moveToward(c, t.x, t.z, speed(sim, c));
+          return;
+        }
+        return walk(t.x, t.z);
       }
-      sim.dragging = t.id;
-      S.altarNotified = false;
+      sim.stop(c);
+      bind(sim, c, t);
       sim.order = null;
       return;
     }
     case 'altar': {
       const A = sim.layout.villageAltar;
       c.state = 'walk';
-      if (Math.hypot(A.x + 0.5 - c.x, A.z + 0.5 - c.z) < ALTAR_R) {
+      if (Math.hypot(A.x + 0.5 - c.x, A.z + 0.5 - c.z) < 0.45) {
         sim.stop(c);
         sim.order = null;
         sim.alert({ kind: 'altar', text: 'At the altar.' });
         return;
       }
+      if (Math.hypot(A.x + 0.5 - c.x, A.z + 1.0 - c.z) < 1.2) {
+        sim.stop(c);
+        sim.moveToward(c, A.x + 0.5, A.z + 0.9, speed(sim, c));
+        return;
+      }
       return walk(A.x + 0.5, A.z + 1.5);
     }
+    case 'drop':
+      sim.order = null;
   }
 }
 
@@ -250,7 +568,9 @@ export function checkSuccession(sim: Sim) {
 }
 
 export function onChampionDied(sim: Sim) {
-  cs(sim).diedTick = sim.tick;
+  const S = cs(sim);
+  S.diedTick = sim.tick;
+  S.blocking = false;
   sim.dragging = -1;
 }
 
@@ -267,12 +587,25 @@ export function crown(sim: Sim) {
   c.shape = 'champion';
   c.tint = JOB_TINT.champion;
   c.base.speed = 1.1;
+  if (c.hidden) {
+    const h = sim.ents.get(c.human!.homeId);
+    if (h) {
+      const d = doorOf(sim, h);
+      c.x = d.x;
+      c.z = d.z;
+    }
+  }
   c.hidden = false;
   c.state = 'idle';
+  sim.stop(c);
   c.tags = c.tags.filter((t) => t !== 'elder');
   c.tags.push('champion');
   sim.order = null;
-  cs(sim).lastOrder = sim.tick;
+  const S = cs(sim);
+  S.lastInput = sim.tick;
+  S.epoch++;
+  S.trail = [];
+  S.poses = [];
   sim.log(`${c.name}, once a ${job}, takes up the bronze sword. The village has a new champion (level ${c.level}).`, 3, 'core', 'champion');
   sim.alert({ kind: 'champion', text: `${c.name} is your new champion.` });
 }

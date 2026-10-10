@@ -3,7 +3,7 @@ import { Sim } from './sim';
 import { SIZE } from './world';
 import type { Atmosphere, CreationRecord, CreationRequest, Entity, Faction } from './types';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 function rle<T>(arr: ArrayLike<T>): [T, number][] {
   const out: [T, number][] = [];
@@ -150,5 +150,14 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.stats = { ...s.stats };
   sim.light = sim.computeLight();
   sim.grid.changed.clear();
+  sim.ground.rebuild();
+  sim.grid.groundChanged.clear();
+  const S = (sim as any).champState;
+  if (S) {
+    S.combat = [];
+    S.correction = null;
+    S.poses = [];
+    S.ambushed ??= [];
+  }
   return sim;
 }

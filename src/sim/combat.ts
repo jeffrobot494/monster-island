@@ -93,7 +93,9 @@ export interface DamageOpts {
 }
 
 /** The one damage pipeline for everything with HP (core and modules). */
-export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts): { killed: boolean; downed: boolean; dealt: number } {
+export interface DamageResult { killed: boolean; downed: boolean; dealt: number; zone?: Zone; severed?: boolean }
+
+export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts): DamageResult {
   if (!sim.ents.has(t.id) || t.hp <= 0) return { killed: false, downed: false, dealt: 0 };
   const src = o.sourceId !== undefined ? sim.ents.get(o.sourceId) : undefined;
   let d = amount * (o.mul ?? 1);
@@ -110,6 +112,7 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
     }
   }
   if (!(d > 0)) return { killed: false, downed: false, dealt: 0 };
+  if (t.id === sim.championId && src && src.kind !== 'human') sim.out.hurt = (sim.out.hurt ?? 0) + d;
   const max = sim.maxHp(t);
   const before = t.hp;
   const isChamp = t.id === sim.championId;
@@ -142,7 +145,7 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
     t.burnUntil = sim.tick + 50;
     t.burnSource = o.sourceId;
     sim.attach(t, 'fire');
-  } else if (!QUIET.has(String(o.type)) && t.kind !== 'structure') sim.burst(d >= max * 0.15 ? 'blood-big' : 'blood', t.x, t.z, sim.grid.height(Math.floor(t.x), Math.floor(t.z)) + 0.4 * t.scale);
+  } else if (!QUIET.has(String(o.type)) && t.kind !== 'structure') sim.burstOn(d >= max * 0.15 ? 'blood-big' : 'blood', t, zone === 'head' ? 'head' : zone === 'legL' || zone === 'legR' ? 'feet' : 'center');
 
   // xp for dealing damage across factions
   const dealt = Math.min(before, d);
@@ -155,16 +158,16 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
   if (t.hp <= 0) {
     t.hp = 0;
     kill(sim, t, { ...info, deathType: o.deathType ?? chooseDeath(t, o, src, d, max, severed) });
-    return { killed: true, downed: false, dealt };
+    return { killed: true, downed: false, dealt, zone, severed: !!severed };
   }
   // downed: crossing 20 % from above
   if (t.inhabitant && t.state !== 'downed' && t.state !== 'bound' && t.state !== 'captive' && before > max * 0.2 && t.hp <= max * 0.2) {
     if (!(isChamp && sim.invincible)) {
       setDowned(sim, t);
-      return { killed: false, downed: true, dealt };
+      return { killed: false, downed: true, dealt, zone, severed: !!severed };
     }
   }
-  return { killed: false, downed: false, dealt };
+  return { killed: false, downed: false, dealt, zone, severed: !!severed };
 }
 
 export function setDowned(sim: Sim, t: Entity) {
@@ -180,6 +183,7 @@ export function setDowned(sim: Sim, t: Entity) {
     sim.alert({ kind: 'champion', text: 'You are beaten down! Crawl away before they drag you off.' });
   }
   sim.emote(t, '💫', 3);
+  if (t.kind === 'monster') sim.sound('roar', t.x, t.z, t.scale * 0.8);
 }
 
 function chooseDeath(t: Entity, o: DamageOpts, src: Entity | undefined, d: number, max: number, severed: Zone | null): DeathType {
@@ -318,9 +322,9 @@ function spawnCorpse(sim: Sim, e: Entity, maxHp: number, deathType: DeathType, i
     case 'torn': {
       const upper = make(e.kind === 'human' ? 'corpse-upper' : e.shape, e.kind === 'human' ? e.scale : e.scale * 0.6);
       upper.roll = e.kind === 'human' ? 0 : 1;
-      upper.anim = { type: 'fly', t: 8, dx: (ax / al) * 0.15, dz: (az / al) * 0.15 };
+      upper.anim = { type: 'fly', t: 8, dx: (ax / al) * 0.04, dz: (az / al) * 0.04 };
       const lower = sim.spawn({ kind: 'part', x: e.x, z: e.z, shape: e.kind === 'human' ? 'corpse-lower' : e.shape, tint: e.tint, scale: e.kind === 'human' ? e.scale : e.scale * 0.5 });
-      lower.anim = { type: 'fly', t: 8, dx: (-ax / al) * 0.15, dz: (-az / al) * 0.15 };
+      lower.anim = { type: 'fly', t: 8, dx: (-ax / al) * 0.04, dz: (-az / al) * 0.04 };
       lower.roll = e.kind === 'human' ? 0 : 1;
       lower.expireCalDay = day + 3;
       sim.burst('blood-big', e.x, e.z);
@@ -331,7 +335,7 @@ function spawnCorpse(sim: Sim, e: Entity, maxHp: number, deathType: DeathType, i
     case 'burned': {
       const c = make(e.shape, e.scale);
       c.roll = 0;
-      c.anim = { type: 'burnrun', t: 30, dx: (sim.rng.next() - 0.5) * 0.16, dz: (sim.rng.next() - 0.5) * 0.16 };
+      c.anim = { type: 'burnrun', t: 30, dx: (sim.rng.next() - 0.5) * 0.06, dz: (sim.rng.next() - 0.5) * 0.06 };
       sim.attach(c, 'fire');
       break;
     }
@@ -345,12 +349,12 @@ function spawnCorpse(sim: Sim, e: Entity, maxHp: number, deathType: DeathType, i
     case 'impaled': {
       const c = make(e.shape, e.scale);
       c.roll = 0;
-      c.anim = { type: 'impale', t: 40, dx: (ax / al) * 0.2, dz: (az / al) * 0.2 };
+      c.anim = { type: 'impale', t: 40, dx: (ax / al) * 0.04, dz: (az / al) * 0.04 };
       sim.burst('blood', e.x, e.z);
       break;
     }
     case 'dismembered': {
-      make(e.shape, e.scale).anim = { type: 'crawl', t: 20, dx: (ax / al) * 0.03, dz: (az / al) * 0.03 };
+      make(e.shape, e.scale).anim = { type: 'crawl', t: 20, dx: (ax / al) * 0.006, dz: (az / al) * 0.006 };
       sim.burst('blood-big', e.x, e.z);
       bloodPool(sim, e.x, e.z);
       break;
@@ -368,15 +372,15 @@ function spawnCorpse(sim: Sim, e: Entity, maxHp: number, deathType: DeathType, i
   }
 }
 
-function spawnSevered(sim: Sim, e: Entity, zone: Zone) {
-  let shape = 'part-limb';
+export function spawnSevered(sim: Sim, e: Entity, zone: Zone) {
+  let shape = zone === 'head' ? 'part-head' : 'part-limb';
   if (zone === 'sig' && e.monster) {
     const sig = ARCH[e.monster.archetype].sig;
     shape = sig.includes('wing') ? 'part-wing' : sig.includes('horn') ? 'part-horn' : 'part-limb';
   }
   const p = sim.spawn({ kind: 'part', x: e.x, z: e.z, shape, tint: e.kind === 'human' ? '#c8946a' : e.tint, scale: e.scale });
   const a = sim.rng.next() * Math.PI * 2;
-  p.anim = { type: 'fly', t: 10, dx: Math.cos(a) * 0.15, dz: Math.sin(a) * 0.15 };
+  p.anim = { type: 'fly', t: 10, dx: Math.cos(a) * 0.04, dz: Math.sin(a) * 0.04 };
   p.expireCalDay = calDay(sim.clockMs) + 4;
   p.yaw = a;
   sim.burst('blood-big', e.x, e.z);
@@ -407,14 +411,14 @@ export function stepCorpse(sim: Sim, e: Entity) {
   switch (a.type) {
     case 'fly':
       walk();
-      e.lift = Math.sin((a.t / 10) * Math.PI) * 0.5;
+      e.lift = Math.sin((a.t / 10) * Math.PI) * 1.2;
       break;
     case 'crawl':
       walk();
       break;
     case 'burnrun':
       walk();
-      if (a.t % 6 === 0) { a.dx = (sim.rng.next() - 0.5) * 0.16; a.dz = (sim.rng.next() - 0.5) * 0.16; }
+      if (a.t % 6 === 0) { a.dx = (sim.rng.next() - 0.5) * 0.06; a.dz = (sim.rng.next() - 0.5) * 0.06; }
       if (a.t <= 0) {
         e.roll = 1;
         e.tint = '#2a2420';
@@ -425,11 +429,11 @@ export function stepCorpse(sim: Sim, e: Entity) {
       }
       break;
     case 'impale':
-      if (a.t > 30) e.lift = (40 - a.t) * 0.12;
-      else if (a.t > 10) e.lift = 1.2;
+      if (a.t > 30) e.lift = (40 - a.t) * 0.2;
+      else if (a.t > 10) e.lift = 2.0;
       else {
         walk(1);
-        e.lift = Math.max(0, e.lift - 0.13);
+        e.lift = Math.max(0, e.lift - 0.2);
         e.roll = Math.min(1, e.roll + 0.1);
       }
       break;

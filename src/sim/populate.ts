@@ -1,4 +1,5 @@
 // Initial population (§5.1, §6): structures, villagers, the champion, monsters, wild animals.
+import { doorOf } from './village';
 import type { Sim } from './sim';
 import type { Entity, Job } from './types';
 import { makePerson } from './lore';
@@ -105,7 +106,8 @@ export function populate(sim: Sim) {
 
 export function spawnHuman(sim: Sim, job: Job, home: Entity, level: number, shift: 'day' | 'night'): Entity {
   const p = makePerson(sim.rng, JOB_LABEL[job]);
-  const e = sim.spawn({ kind: 'human', x: home.x, z: home.z + 0.8, shape: shapeForJob(job), tint: JOB_TINT[job], scale: 1 });
+  const door = doorOf(sim, home);
+  const e = sim.spawn({ kind: 'human', x: door.x, z: door.z, shape: shapeForJob(job), tint: JOB_TINT[job], scale: 1 });
   e.faction = 'human';
   e.inhabitant = true;
   e.name = p.name;

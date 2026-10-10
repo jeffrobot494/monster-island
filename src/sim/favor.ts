@@ -27,8 +27,9 @@ export function offeringValue(sim: Sim, e: Entity): number {
 
 function altarBurn(sim: Sim, value: number, faction: Faction) {
   const A = sim.layout.villageAltar;
-  sim.burst(faction === 'human' ? 'pillar' : 'dark-pillar', A.x + 0.5, A.z + 0.5, sim.grid.height(A.x, A.z) + 0.8);
-  sim.burst('fire', A.x + 0.5, A.z + 0.5, sim.grid.height(A.x, A.z) + 0.8);
+  sim.burst(faction === 'human' ? 'pillar' : 'dark-pillar', A.x + 0.5, A.z + 0.5, sim.ground.y(A.x + 0.5, A.z + 0.5) + 1.5);
+  sim.sound('offer', A.x + 0.5, A.z + 0.5);
+  sim.burst('fire', A.x + 0.5, A.z + 0.5, sim.ground.y(A.x + 0.5, A.z + 0.5) + 1.5);
   const alt = sim.byRole('village-altar');
   if (alt) sim.emote(alt, `+${value}`, 2.5);
 }
@@ -36,7 +37,7 @@ function altarBurn(sim: Sim, value: number, faction: Faction) {
 export function nearAltar(sim: Sim): boolean {
   const c = sim.champion();
   const A = sim.layout.villageAltar;
-  return !!c && Math.hypot(A.x + 0.5 - c.x, A.z + 0.5 - c.z) < 2.8;
+  return !!c && Math.hypot(A.x + 0.5 - c.x, A.z + 0.5 - c.z) < 4.5 / 8 + 0.15; // 4 m from the altar's edge (§2)
 }
 
 export function offerLamb(sim: Sim): string | null {

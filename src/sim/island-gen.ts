@@ -18,6 +18,8 @@ export interface IslandLayout {
   wallRadius: number;
   gates: P[]; // [inner (toward the island center), harbor]
   houses: P[];
+  /** walkable tile in front of each house's door (F24) */
+  doors: P[];
   villageAltar: P;
   fold: P;
   granary: P;
@@ -182,7 +184,11 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
       if (grid.inBounds(x, z)) T[I(x, z)] = type;
     }
   };
-  for (const g of gates) disk(g.x, g.z, 1.6, (x, z) => (T[I(x, z)] = 'road'));
+  for (const g of gates) disk(g.x, g.z, 1.6, (x, z, d) => {
+    // keep the wall ring closed except for the one gate tile (an 8 m gateway)
+    const dv = Math.hypot(x - village.x, z - village.z);
+    T[I(x, z)] = d < 0.5 ? 'gate' : dv >= wallR - 0.5 && dv < wallR + 0.5 ? 'wall' : 'road';
+  });
   line(gates[0], gates[1], 'road');
   // harbor: road from the outer gate out to the sea, then a short pier
   const out = { x: Math.cos(gateAng[1]), z: Math.sin(gateAng[1]) };
@@ -203,6 +209,20 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     if (T[I(h.x, h.z)] === 'road' || houses.some((o) => Math.hypot(o.x - h.x, o.z - h.z) < 2.2)) continue;
     houses.push(h);
   }
+  // houses are solid tiles; the door faces the village center (F24)
+  const doors: P[] = [];
+  for (const h of houses) T[I(h.x, h.z)] = 'house';
+  for (const h of houses) {
+    let best: P | null = null, bd = Infinity;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const d = { x: h.x + dx, z: h.z + dz };
+      const t = T[I(d.x, d.z)];
+      if (t === 'house' || t === 'wall' || isWater(t)) continue;
+      const dd = Math.hypot(d.x - village.x, d.z - village.z);
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    doors.push(best ?? { x: h.x, z: h.z + 1 });
+  }
   const perp = { x: -Math.sin(toCenter), z: Math.cos(toCenter) };
   const at = (along: number, side: number): P => ({
     x: Math.round(village.x + Math.cos(toCenter) * along + perp.x * side),
@@ -222,6 +242,17 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     grid.elev[i] = Math.max(0.6, Math.min(2.5, 0.6 + (k / 9) * 1.9));
   }
   const highAltar = { x: C, z: C };
+  // the road lines ran over the gateways; make sure each gateway opens in and out along a 4-connected axis
+  for (const g of gates) {
+    T[I(g.x, g.z)] = 'gate';
+    const ox = g.x - village.x, oz = g.z - village.z;
+    const ax = Math.abs(ox) >= Math.abs(oz) ? Math.sign(ox) : 0, az = ax ? 0 : Math.sign(oz);
+    for (const k of [1, -1]) {
+      const n = I(g.x + ax * k, g.z + az * k);
+      if (T[n] === 'wall') T[n] = 'gate';
+      else if (!grid.def(T[n]).walkable) T[n] = 'road';
+    }
+  }
 
   // 7. Lairs (55–80 % of the way from the center to each region's seed; the catacomb is beside the altar)
   const lairs: P[] = [{ x: -1, z: -1 }];
@@ -300,7 +331,7 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
   const oxen = randomIn([2, 5], 3);
 
   grid.changed.clear();
-  return { center: { x: C, z: C }, seeds, village, wallRadius: wallR, gates, houses, villageAltar, fold, granary, highAltar, lairs, guardPosts, goats, oxen };
+  return { center: { x: C, z: C }, seeds, village, wallRadius: wallR, gates, houses, doors, villageAltar, fold, granary, highAltar, lairs, guardPosts, goats, oxen };
 }
 
 /** Guarantee a walkable corridor from a to b along a straight line (unwalkable tiles become road or rock-stair). */

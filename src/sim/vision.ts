@@ -8,7 +8,8 @@ import { monsterActive } from './monster-ai';
 const visibleSets = new WeakMap<Sim, Set<number>>();
 
 export function championSight(sim: Sim, c: Entity) {
-  return (7 + (16 - 7) * sim.light) * sim.stat(c, 'sight');
+  const torch = sim.light < 0.5 && (sim as unknown as { champState?: { torch: boolean } }).champState?.torch ? 3 : 0;
+  return (7 + (16 - 7) * sim.light) * sim.stat(c, 'sight') + torch;
 }
 
 export function visibleMonsters(sim: Sim): Set<number> {

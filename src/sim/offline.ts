@@ -3,7 +3,7 @@ import type { Sim } from './sim';
 import type { Entity } from './types';
 import { DAY_MS, HOUR_MS } from './clock';
 import { SIZE } from './world';
-import { PRODUCTION, onShift, pickSite, productionMul } from './village';
+import { PRODUCTION, doorOf, onShift, pickSite, productionMul } from './village';
 import { boldness, isEnraged } from './monster-ai';
 import { applyDamage, firstName, gainXp, heal, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
@@ -127,8 +127,12 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
       h.state = 'work';
     } else {
       const home = sim.ents.get(H.homeId);
-      if (home) { h.x = home.x; h.z = home.z; }
       h.hidden = !onShift(sim, h);
+      if (home) {
+        const d = h.hidden ? home : doorOf(sim, home);
+        h.x = d.x;
+        h.z = d.z;
+      }
       h.state = h.hidden ? 'sleep' : 'idle';
     }
   }

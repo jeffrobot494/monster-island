@@ -2,11 +2,11 @@
 // a water plane, and instanced decoration per tile type. Units: meters; tile (x, z) → (x·8, z·8).
 import * as THREE from 'three';
 import type { TileTypeDef } from '../sim/types';
-import { Ground, M, WATER_Y } from '../sim/ground';
+import { Ground, M, WATER_Y, NV } from '../sim/ground';
 import { SIZE, TileGrid, CORE_TILES } from '../sim/world';
 
 const RES = 2; // vertices per tile
-const N = SIZE * RES + 1;
+const N = NV;
 
 function hash(i: number, salt = 0) {
   let h = Math.imul(i ^ (0x9e3779b9 + salt * 0x632be5ab), 0x85ebca6b);
@@ -170,7 +170,7 @@ export class Terrain {
     const x = i / RES, z = j / RES;
     const o = (j * N + i) * 3;
     this.pos[o] = x * M;
-    this.pos[o + 1] = this.ground.y(x, z);
+    this.pos[o + 1] = this.ground.v[j * N + i];
     this.pos[o + 2] = z * M;
     const gx = x - 0.5, gz = z - 0.5;
     const ix = Math.floor(gx), iz = Math.floor(gz);
@@ -199,16 +199,8 @@ export class Terrain {
   updateTiles(changes: [number, string][]) {
     if (!changes.length) return;
     for (const [i, t] of changes) this.grid.types[i] = t;
-    this.ground.update(changes.map(([i]) => i));
-    let x0 = SIZE, x1 = 0, z0 = SIZE, z1 = 0;
-    for (const [i] of changes) {
-      const x = i % SIZE, z = Math.floor(i / SIZE);
-      x0 = Math.min(x0, x - 3); x1 = Math.max(x1, x + 3);
-      z0 = Math.min(z0, z - 3); z1 = Math.max(z1, z + 3);
-    }
-    for (let j = Math.max(0, z0 * RES); j <= Math.min(N - 1, (z1 + 1) * RES); j++) {
-      for (let i = Math.max(0, x0 * RES); i <= Math.min(N - 1, (x1 + 1) * RES); i++) this.vertex(i, j);
-    }
+    const [i0, i1, j0, j1] = this.ground.update(changes.map(([i]) => i));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) this.vertex(i, j);
     this.finish();
     this.decorDirty = true;
   }

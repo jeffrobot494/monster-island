@@ -41,8 +41,8 @@ export class WorldMap {
       this.zoom = Math.max(1, Math.min(5, this.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
     }, { passive: false });
     this.canvas.addEventListener('mousedown', (e) => (this.drag = { x: e.clientX, y: e.clientY, px: this.panX, pz: this.panZ }));
-    addEventListener('mouseup', () => (this.drag = null));
-    addEventListener('mousemove', (e) => {
+    window.addEventListener('mouseup', () => (this.drag = null));
+    window.addEventListener('mousemove', (e) => {
       if (!this.drag || !this.open) return;
       const s = this.scale();
       this.panX = this.drag.px - (e.clientX - this.drag.x) / s;

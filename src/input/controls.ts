@@ -72,9 +72,9 @@ export class Controls {
   private dragging = false;
 
   constructor(private el: HTMLElement, public settings: Settings) {
-    addEventListener('keydown', (e) => this.keyDown(e));
-    addEventListener('keyup', (e) => this.keys.delete(e.code));
-    addEventListener('blur', () => {
+    window.addEventListener('keydown', (e) => this.keyDown(e));
+    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('blur', () => {
       this.keys.clear();
       this.mouseL = this.mouseR = false;
     });
@@ -98,13 +98,13 @@ export class Controls {
       }
       if (e.button === 2) this.mouseR = true;
     });
-    addEventListener('mouseup', (e) => {
+    window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseL = false;
       if (e.button === 2) this.mouseR = false;
       this.dragging = false;
     });
     el.addEventListener('contextmenu', (e) => e.preventDefault());
-    addEventListener('mousemove', (e) => {
+    window.addEventListener('mousemove', (e) => {
       if (!this.locked && !(this.noLock && this.dragging)) return;
       this.lastInput = performance.now();
       const k = this.settings.sensitivity / 1000;
