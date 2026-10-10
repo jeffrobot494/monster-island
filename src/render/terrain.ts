@@ -1,10 +1,12 @@
+// First-person terrain (spec §7.2–7.3): one heightmap mesh (a vertex every 4 m) from the shared ground function,
+// a water plane, and instanced decoration per tile type. Units: meters; tile (x, z) → (x·8, z·8).
 import * as THREE from 'three';
 import type { TileTypeDef } from '../sim/types';
+import { Ground, M, WATER_Y } from '../sim/ground';
+import { SIZE, TileGrid, CORE_TILES } from '../sim/world';
 
-const SIZE = 128;
-const CHUNK = 16;
-const BOTTOM = -1.6;
-const ELEV = new Set(['rock', 'shrine-floor']);
+const RES = 2; // vertices per tile
+const N = SIZE * RES + 1;
 
 function hash(i: number, salt = 0) {
   let h = Math.imul(i ^ (0x9e3779b9 + salt * 0x632be5ab), 0x85ebca6b);
@@ -13,258 +15,262 @@ function hash(i: number, salt = 0) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-/** Fog of war as a texture (R34): geometry never rebuilds when tiles are explored. */
-export class Fog {
-  data = new Uint8Array(SIZE * SIZE);
-  tex: THREE.DataTexture;
-  uniform: { value: THREE.DataTexture };
-  reveal = { value: 0 };
-  constructor() {
-    this.tex = new THREE.DataTexture(this.data, SIZE, SIZE, THREE.RedFormat, THREE.UnsignedByteType);
-    this.tex.magFilter = THREE.LinearFilter;
-    this.tex.minFilter = THREE.LinearFilter;
-    this.tex.needsUpdate = true;
-    this.uniform = { value: this.tex };
-  }
-  load(explored: Uint8Array) {
-    for (let i = 0; i < explored.length; i++) this.data[i] = explored[i] ? 255 : 0;
-    this.tex.needsUpdate = true;
-  }
-  mark(idx: number[]) {
-    if (!idx.length) return;
-    for (const i of idx) this.data[i] = 255;
-    this.tex.needsUpdate = true;
-  }
-  isExplored(x: number, z: number) {
-    x = Math.floor(x);
-    z = Math.floor(z);
-    if (x < 0 || z < 0 || x >= SIZE || z >= SIZE) return false;
-    return this.data[z * SIZE + x] > 0 || this.reveal.value > 0;
-  }
-  /** Patch a Lambert material so fragments outside explored tiles go dark. */
-  patch(mat: THREE.Material, instanced = false) {
-    mat.onBeforeCompile = (shader) => {
-      shader.uniforms.uFog = this.uniform;
-      shader.uniforms.uReveal = this.reveal;
-      const prior = (mat.userData.extraVertex as ((s: any) => void) | undefined);
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec2 vFogXZ;')
-        .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\n{ vec4 wp = modelMatrix * ${instanced ? 'instanceMatrix * ' : ''}vec4(transformed, 1.0); vFogXZ = wp.xz; }`);
-      shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D uFog;\nuniform float uReveal;\nvarying vec2 vFogXZ;')
-        .replace('#include <dithering_fragment>', '#include <dithering_fragment>\nfloat fogE = max(uReveal, texture2D(uFog, vFogXZ / 128.0).r);\ngl_FragColor.rgb = mix(vec3(0.035, 0.04, 0.06), gl_FragColor.rgb, smoothstep(0.15, 0.85, fogE));');
-      prior?.(shader);
-    };
-    mat.needsUpdate = true;
-  }
+const FLAT = new Set(['wall', 'house', 'gate']);
+
+interface DecorPart {
+  geo: THREE.BufferGeometry;
+  color: string;
+  /** center height and size relative to the instance's size (m) */
+  y: number;
+  sx: number;
+  sy: number;
+  shadow?: boolean;
 }
 
 interface DecorKind {
-  tile: string;
-  density: number;
-  geo: THREE.BufferGeometry;
-  colors: string[];
-  scale: [number, number];
-  y: number;
+  tiles: string[];
+  /** expected instances per tile */
+  perTile: number;
+  /** size range (m) */
+  size: [number, number];
+  parts: DecorPart[];
+  tint?: number; // ± brightness jitter
 }
+
+const cone = new THREE.ConeGeometry(0.5, 1, 7);
+const cyl = new THREE.CylinderGeometry(0.5, 0.5, 1, 6);
+const ico = new THREE.IcosahedronGeometry(0.5, 0);
+const box = new THREE.BoxGeometry(1, 1, 1);
+const blade = new THREE.ConeGeometry(0.5, 1, 3);
+
+const DECOR: DecorKind[] = [
+  { tiles: ['cedar'], perTile: 2.4, size: [12, 18], parts: [
+    { geo: cyl, color: '#4a3424', y: 0.12, sx: 0.04, sy: 0.25, shadow: true },
+    { geo: cone, color: '#1f4a2a', y: 0.38, sx: 0.42, sy: 0.38, shadow: true },
+    { geo: cone, color: '#24502e', y: 0.62, sx: 0.32, sy: 0.32, shadow: true },
+    { geo: cone, color: '#2a5a34', y: 0.84, sx: 0.2, sy: 0.3, shadow: true },
+  ] },
+  { tiles: ['olive'], perTile: 3.5, size: [4, 5.5], parts: [
+    { geo: cyl, color: '#5a4a3a', y: 0.18, sx: 0.08, sy: 0.36, shadow: true },
+    { geo: ico, color: '#7a8a5a', y: 0.6, sx: 0.8, sy: 0.55, shadow: true },
+    { geo: ico, color: '#6e8050', y: 0.75, sx: 0.55, sy: 0.4, shadow: true },
+  ] },
+  { tiles: ['vineyard'], perTile: 8, size: [1.2, 1.6], parts: [
+    { geo: cyl, color: '#5a4030', y: 0.5, sx: 0.05, sy: 1 },
+    { geo: ico, color: '#5e7a2e', y: 0.75, sx: 0.8, sy: 0.6 },
+  ] },
+  { tiles: ['wheat'], perTile: 14, size: [0.8, 1.15], tint: 0.12, parts: [{ geo: blade, color: '#d8b850', y: 0.5, sx: 0.5, sy: 1 }] },
+  { tiles: ['grass'], perTile: 2.5, size: [0.4, 0.8], tint: 0.15, parts: [{ geo: blade, color: '#7a9a40', y: 0.5, sx: 0.6, sy: 1 }] },
+  { tiles: ['scrub', 'wadi'], perTile: 1.6, size: [0.6, 1.4], tint: 0.12, parts: [{ geo: ico, color: '#8a8a52', y: 0.4, sx: 1.2, sy: 0.8 }] },
+  { tiles: ['rock', 'scrub'], perTile: 0.7, size: [1, 3.5], tint: 0.1, parts: [{ geo: ico, color: '#8e877c', y: 0.3, sx: 1.3, sy: 0.9, shadow: true }] },
+  { tiles: ['salt'], perTile: 0.16, size: [2, 5], parts: [{ geo: cyl, color: '#f4f0e6', y: 0.5, sx: 0.35, sy: 1, shadow: true }] },
+  { tiles: ['marsh'], perTile: 4, size: [1.2, 1.9], tint: 0.1, parts: [{ geo: blade, color: '#6a7a40', y: 0.5, sx: 0.25, sy: 1 }] },
+  { tiles: ['ruin-floor'], perTile: 1.2, size: [0.8, 2], tint: 0.06, parts: [{ geo: box, color: '#b0a288', y: 0.35, sx: 1.4, sy: 0.7, shadow: true }] },
+  { tiles: ['ruin-floor'], perTile: 0.2, size: [5, 9], parts: [{ geo: cyl, color: '#c0b498', y: 0.5, sx: 0.18, sy: 1, shadow: true }] },
+  { tiles: ['shrine-floor'], perTile: 0.15, size: [2.5, 3.5], parts: [{ geo: box, color: '#9a9284', y: 0.5, sx: 0.4, sy: 1, shadow: true }] },
+];
 
 export class Terrain {
   group = new THREE.Group();
-  types: string[] = [];
-  elev: Float32Array<ArrayBufferLike> = new Float32Array(SIZE * SIZE);
+  grid = new TileGrid();
+  ground: Ground;
   defs = new Map<string, TileTypeDef>();
-  fog = new Fog();
-  private chunks: (THREE.Mesh | null)[] = new Array((SIZE / CHUNK) ** 2).fill(null);
-  material: THREE.MeshLambertMaterial;
+  private geo: THREE.BufferGeometry;
+  private mesh: THREE.Mesh;
+  private colors: Float32Array;
+  private pos: Float32Array;
+  water: THREE.Mesh;
+  private decor = new THREE.Group();
+  private decorDirty = false;
+  private decorTimer = 0;
   private uTime = { value: 0 };
-  private decorMat: THREE.MeshLambertMaterial;
-  private decor: THREE.InstancedMesh[] = [];
-  private decorDirty = true;
-  private kinds: DecorKind[];
+  ready = false;
 
   constructor() {
-    this.material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-    this.material.userData.extraVertex = (shader: any) => {
-      shader.uniforms.uTime = this.uTime;
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute float aWave;\nuniform float uTime;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed.y += aWave * (sin(uTime * 1.6 + position.x * 0.9 + position.z * 0.7) * 0.035 + sin(uTime * 2.3 - position.x * 0.5 + position.z * 1.3) * 0.02);');
+    for (const d of CORE_TILES) this.defs.set(d.id, d);
+    this.ground = new Ground(this.grid);
+    this.geo = new THREE.BufferGeometry();
+    this.pos = new Float32Array(N * N * 3);
+    this.colors = new Float32Array(N * N * 3);
+    const idx = new Uint32Array((N - 1) * (N - 1) * 6);
+    let k = 0;
+    for (let j = 0; j < N - 1; j++) for (let i = 0; i < N - 1; i++) {
+      const a = j * N + i, b = a + 1, c = a + N, d = c + 1;
+      if ((i + j) & 1) { idx[k++] = a; idx[k++] = c; idx[k++] = b; idx[k++] = b; idx[k++] = c; idx[k++] = d; }
+      else { idx[k++] = a; idx[k++] = c; idx[k++] = d; idx[k++] = a; idx[k++] = d; idx[k++] = b; }
+    }
+    this.geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
+    this.geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+    this.mesh = new THREE.Mesh(this.geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.mesh.receiveShadow = true;
+    this.mesh.frustumCulled = false;
+    this.group.add(this.mesh);
+    const wmat = new THREE.MeshLambertMaterial({ color: '#2f6a96', transparent: true, opacity: 0.78 });
+    wmat.onBeforeCompile = (s) => {
+      s.uniforms.uTime = this.uTime;
+      s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvW = (modelMatrix * vec4(transformed, 1.0)).xz;');
+      s.fragmentShader = s.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uTime;\nvarying vec2 vW;')
+        .replace('#include <dithering_fragment>', '#include <dithering_fragment>\nfloat sh = sin(vW.x * 0.21 + uTime * 0.9) * sin(vW.y * 0.17 - uTime * 0.7) + sin((vW.x + vW.y) * 0.05 + uTime * 0.4);\ngl_FragColor.rgb *= 0.94 + 0.06 * sh;');
     };
-    this.fog.patch(this.material);
-    this.decorMat = new THREE.MeshLambertMaterial({ flatShading: true });
-    this.fog.patch(this.decorMat, true);
-    const sea = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), new THREE.MeshLambertMaterial({ color: '#1c4a74' }));
-    sea.rotation.x = -Math.PI / 2;
-    sea.position.set(SIZE / 2, -0.62, SIZE / 2);
-    this.group.add(sea);
-    const cone = new THREE.ConeGeometry(0.34, 1.2, 6).translate(0, 0.75, 0);
-    const cone2 = new THREE.ConeGeometry(0.26, 0.8, 6).translate(0, 1.3, 0);
-    const trunk = new THREE.CylinderGeometry(0.06, 0.08, 0.3, 5).translate(0, 0.15, 0);
-    this.kinds = [
-      { tile: 'cedar', density: 0.6, geo: mergeGeos([cone, cone2, trunk]), colors: ['#24482a', '#2a5530', '#1f3f26'], scale: [0.8, 1.3], y: 0 },
-      { tile: 'olive', density: 0.32, geo: mergeGeos([new THREE.IcosahedronGeometry(0.22, 0).scale(1, 0.75, 1).translate(0, 0.42, 0), new THREE.IcosahedronGeometry(0.16, 0).translate(0.12, 0.5, 0.06), new THREE.CylinderGeometry(0.035, 0.05, 0.3, 5).translate(0, 0.15, 0)]), colors: ['#5f7a3a', '#6a8240', '#56703a'], scale: [0.8, 1.15], y: 0 },
-      { tile: 'vineyard', density: 0.9, geo: new THREE.BoxGeometry(0.8, 0.22, 0.14).translate(0, 0.11, 0), colors: ['#5a6a2a', '#6a702e'], scale: [0.9, 1.1], y: 0 },
-      { tile: 'wheat', density: 0.5, geo: new THREE.ConeGeometry(0.12, 0.3, 4).translate(0, 0.15, 0), colors: ['#e8c860', '#d8b048'], scale: [0.8, 1.3], y: 0 },
-      { tile: 'salt', density: 0.035, geo: new THREE.CylinderGeometry(0.12, 0.16, 0.9, 6).translate(0, 0.45, 0), colors: ['#f4f0e4', '#e8e2d2'], scale: [0.7, 1.5], y: 0 },
-      { tile: 'ruin-floor', density: 0.14, geo: new THREE.BoxGeometry(0.45, 0.35, 0.3).translate(0, 0.17, 0), colors: ['#c8bca0', '#b0a488', '#d0c4a8'], scale: [0.7, 1.6], y: 0 },
-      { tile: 'marsh', density: 0.3, geo: new THREE.ConeGeometry(0.05, 0.5, 3).translate(0, 0.25, 0), colors: ['#5a7a4a', '#6a8a50'], scale: [0.7, 1.3], y: 0 },
-      { tile: 'rock', density: 0.12, geo: new THREE.DodecahedronGeometry(0.25, 0).translate(0, 0.1, 0), colors: ['#8a8278', '#7a7268'], scale: [0.6, 1.4], y: 0 },
-      { tile: 'scrub', density: 0.1, geo: new THREE.IcosahedronGeometry(0.12, 0).translate(0, 0.08, 0), colors: ['#7a8040', '#6a7038', '#8a7a50'], scale: [0.6, 1.2], y: 0 },
-    ];
+    this.water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000), wmat);
+    this.water.rotation.x = -Math.PI / 2;
+    this.water.position.set((SIZE * M) / 2, WATER_Y, (SIZE * M) / 2);
+    this.water.renderOrder = 1;
+    this.group.add(this.water);
+    this.group.add(this.decor);
   }
 
   setDefs(defs: TileTypeDef[]) {
-    this.defs = new Map(defs.map((d) => [d.id, d]));
-    if (this.types.length) this.rebuildAll();
-  }
-
-  load(types: string[], elev: Float32Array, explored: Uint8Array) {
-    this.types = types;
-    this.elev = elev;
-    this.fog.load(explored);
-    this.rebuildAll();
-  }
-
-  height(x: number, z: number): number {
-    if (x < 0 || z < 0 || x >= SIZE || z >= SIZE) return -0.6;
-    const i = z * SIZE + x;
-    const t = this.types[i];
-    const base = this.defs.get(t)?.height ?? 0.2;
-    if (ELEV.has(t)) return Math.max(base, this.elev[i]);
-    return base;
-  }
-
-  applyChanges(changes: [number, string][]) {
-    const dirty = new Set<number>();
-    for (const [i, t] of changes) {
-      this.types[i] = t;
-      const x = i % SIZE, z = Math.floor(i / SIZE);
-      for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const nx = x + dx, nz = z + dz;
-        if (nx < 0 || nz < 0 || nx >= SIZE || nz >= SIZE) continue;
-        dirty.add(Math.floor(nz / CHUNK) * (SIZE / CHUNK) + Math.floor(nx / CHUNK));
-      }
+    for (const d of defs) {
+      this.defs.set(d.id, d);
+      this.grid.defs.set(d.id, d);
     }
-    for (const c of dirty) this.buildChunk(c);
-    if (changes.length) this.decorDirty = true;
+    this.grid.defsVersion++;
+    if (this.ready) {
+      this.ground.rebuild();
+      this.rebuildAll();
+    }
   }
 
-  update(time: number) {
-    this.uTime.value = time;
-    if (this.decorDirty && this.types.length) this.buildDecor();
+  load(types: string[], elev: Float32Array) {
+    this.grid.types = [...types];
+    this.grid.elev = new Float32Array(elev);
+    this.ground.rebuild();
+    this.rebuildAll();
+    this.ready = true;
   }
 
   private rebuildAll() {
-    for (let c = 0; c < this.chunks.length; c++) this.buildChunk(c);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) this.vertex(i, j);
+    this.finish();
+    this.buildDecor();
+  }
+
+  private finish() {
+    (this.geo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    (this.geo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+    this.geo.computeVertexNormals();
+    this.geo.computeBoundingSphere();
+  }
+
+  private c = new THREE.Color();
+  private c2 = new THREE.Color();
+
+  private tileColor(tx: number, tz: number, out: THREE.Color) {
+    const t = this.grid.get(tx, tz);
+    if (FLAT.has(t)) return out.set('#b8a07a');
+    if (t === 'deep-water') return out.set('#3a5a5a');
+    if (t === 'shallow-water') return out.set('#bfae80');
+    return out.set(this.defs.get(t)?.color ?? '#9db35a');
+  }
+
+  private vertex(i: number, j: number) {
+    const x = i / RES, z = j / RES;
+    const o = (j * N + i) * 3;
+    this.pos[o] = x * M;
+    this.pos[o + 1] = this.ground.y(x, z);
+    this.pos[o + 2] = z * M;
+    const gx = x - 0.5, gz = z - 0.5;
+    const ix = Math.floor(gx), iz = Math.floor(gz);
+    const fx = gx - ix, fz = gz - iz;
+    let r = 0, g = 0, b = 0;
+    const add = (tx: number, tz: number, w: number) => {
+      this.tileColor(tx, tz, this.c2);
+      r += this.c2.r * w;
+      g += this.c2.g * w;
+      b += this.c2.b * w;
+    };
+    add(ix, iz, (1 - fx) * (1 - fz));
+    add(ix + 1, iz, fx * (1 - fz));
+    add(ix, iz + 1, (1 - fx) * fz);
+    add(ix + 1, iz + 1, fx * fz);
+    const n = 0.94 + hash(j * N + i, 7) * 0.12;
+    const gy = this.ground;
+    const slope = Math.abs(gy.y(x + 0.25, z) - gy.y(x - 0.25, z)) / 6 + Math.abs(gy.y(x, z + 0.25) - gy.y(x, z - 0.25)) / 6;
+    this.c.setRGB(r, g, b).lerp(this.c2.set('#8a8278'), Math.min(1, Math.max(0, slope - 0.4)));
+    this.colors[o] = this.c.r * n;
+    this.colors[o + 1] = this.c.g * n;
+    this.colors[o + 2] = this.c.b * n;
+  }
+
+  /** Changed tiles from the sim. */
+  updateTiles(changes: [number, string][]) {
+    if (!changes.length) return;
+    for (const [i, t] of changes) this.grid.types[i] = t;
+    this.ground.update(changes.map(([i]) => i));
+    let x0 = SIZE, x1 = 0, z0 = SIZE, z1 = 0;
+    for (const [i] of changes) {
+      const x = i % SIZE, z = Math.floor(i / SIZE);
+      x0 = Math.min(x0, x - 3); x1 = Math.max(x1, x + 3);
+      z0 = Math.min(z0, z - 3); z1 = Math.max(z1, z + 3);
+    }
+    for (let j = Math.max(0, z0 * RES); j <= Math.min(N - 1, (z1 + 1) * RES); j++) {
+      for (let i = Math.max(0, x0 * RES); i <= Math.min(N - 1, (x1 + 1) * RES); i++) this.vertex(i, j);
+    }
+    this.finish();
     this.decorDirty = true;
   }
 
   private buildDecor() {
-    this.decorDirty = false;
-    for (const m of this.decor) {
-      this.group.remove(m);
-      m.dispose();
+    for (const c of [...this.decor.children]) {
+      this.decor.remove(c);
+      (c as THREE.InstancedMesh).dispose?.();
     }
-    this.decor = [];
-    const mat4 = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
-    const color = new THREE.Color();
-    for (const k of this.kinds) {
-      const spots: number[] = [];
-      for (let i = 0; i < this.types.length; i++) if (this.types[i] === k.tile && hash(i, 7) < k.density) spots.push(i);
-      if (!spots.length) continue;
-      const mesh = new THREE.InstancedMesh(k.geo, this.decorMat, spots.length);
-      spots.forEach((i, n) => {
-        const x = i % SIZE, z = Math.floor(i / SIZE);
-        const s = k.scale[0] + (k.scale[1] - k.scale[0]) * hash(i, 3);
-        q.setFromAxisAngle(up, hash(i, 5) * Math.PI * 2);
-        const vine = k.tile === 'vineyard';
-        if (vine) q.setFromAxisAngle(up, Math.PI / 4);
-        mat4.compose(new THREE.Vector3(x + 0.5 + (vine ? 0 : (hash(i, 1) - 0.5) * 0.5), this.height(x, z) + k.y, z + 0.5 + (vine ? 0 : (hash(i, 2) - 0.5) * 0.5)), q, new THREE.Vector3(s, s, s));
-        mesh.setMatrixAt(n, mat4);
-        color.set(k.colors[Math.floor(hash(i, 9) * k.colors.length)]);
-        mesh.setColorAt(n, color);
-      });
-      mesh.castShadow = k.tile === 'cedar' || k.tile === 'olive';
-      mesh.receiveShadow = true;
-      this.decor.push(mesh);
-      this.group.add(mesh);
-    }
-  }
-
-  private buildChunk(c: number) {
-    const cx = (c % (SIZE / CHUNK)) * CHUNK, cz = Math.floor(c / (SIZE / CHUNK)) * CHUNK;
-    const pos: number[] = [], nor: number[] = [], col: number[] = [], wave: number[] = [];
-    const color = new THREE.Color();
-    const quad = (a: number[], b: number[], cc: number[], d: number[], n: number[], k: THREE.Color, w: number[]) => {
-      for (const [p, wi] of [[a, 0], [b, 1], [cc, 2], [a, 0], [cc, 2], [d, 3]] as [number[], number][]) {
-        pos.push(p[0], p[1], p[2]);
-        nor.push(n[0], n[1], n[2]);
-        col.push(k.r, k.g, k.b);
-        wave.push(w[wi]);
-      }
-    };
-    for (let z = cz; z < cz + CHUNK; z++) {
-      for (let x = cx; x < cx + CHUNK; x++) {
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+    const col = new THREE.Color();
+    for (const [ki, kind] of DECOR.entries()) {
+      const tiles = new Set(kind.tiles);
+      const inst: { x: number; z: number; y: number; size: number; rot: number; tint: number }[] = [];
+      for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
         const i = z * SIZE + x;
-        const t = this.types[i];
-        const def = this.defs.get(t);
-        const h = this.height(x, z);
-        const isWater = t.includes('water') || (def ? !def.walkable && h < 0 : false);
-        color.set(def?.color ?? '#ff00ff');
-        const j = (hash(i) - 0.5) * (isWater ? 0.03 : 0.035);
-        color.offsetHSL(0, 0, j);
-        const w = isWater ? 1 : 0;
-        quad([x, h, z + 1], [x + 1, h, z + 1], [x + 1, h, z], [x, h, z], [0, 1, 0], color, [w, w, w, w]);
-        const side = color.clone().multiplyScalar(isWater ? 0.85 : 0.7);
-        const sides: [number, number, number[][], number[]][] = [
-          [x, z + 1, [[x, 0, z + 1], [x + 1, 0, z + 1]], [0, 0, 1]],
-          [x, z - 1, [[x + 1, 0, z], [x, 0, z]], [0, 0, -1]],
-          [x + 1, z, [[x + 1, 0, z + 1], [x + 1, 0, z]], [1, 0, 0]],
-          [x - 1, z, [[x, 0, z], [x, 0, z + 1]], [-1, 0, 0]],
-        ];
-        for (const [nx, nz, [p0, p1], n] of sides) {
-          const nh = nx < 0 || nz < 0 || nx >= SIZE || nz >= SIZE ? BOTTOM : this.height(nx, nz);
-          if (nh >= h - 1e-4) continue;
-          const lo = Math.max(BOTTOM, nh);
-          quad([p0[0], lo, p0[2]], [p1[0], lo, p1[2]], [p1[0], h, p1[2]], [p0[0], h, p0[2]], n, side, [0, 0, w, w]);
+        if (!tiles.has(this.grid.types[i])) continue;
+        const count = Math.floor(kind.perTile) + (hash(i, 100 + ki) < kind.perTile % 1 ? 1 : 0);
+        for (let k = 0; k < count; k++) {
+          const h1 = hash(i * 31 + k, 200 + ki), h2 = hash(i * 31 + k, 300 + ki), h3 = hash(i * 31 + k, 400 + ki);
+          const px = x + 0.5 + (h1 - 0.5) * 0.9, pz = z + 0.5 + (h2 - 0.5) * 0.9;
+          inst.push({ x: px, z: pz, y: this.ground.y(px, pz), size: kind.size[0] + (kind.size[1] - kind.size[0]) * h3, rot: h1 * 6.283, tint: (kind.tint ?? 0.05) * (h2 * 2 - 1) });
         }
       }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    geo.setAttribute('aWave', new THREE.Float32BufferAttribute(wave, 1));
-    geo.computeBoundingSphere();
-    const old = this.chunks[c];
-    if (old) {
-      old.geometry.dispose();
-      old.geometry = geo;
-    } else {
-      const m = new THREE.Mesh(geo, this.material);
-      m.receiveShadow = true;
-      this.chunks[c] = m;
-      this.group.add(m);
+      if (!inst.length) continue;
+      for (const part of kind.parts) {
+        const im = new THREE.InstancedMesh(part.geo, new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true }), inst.length);
+        im.castShadow = !!part.shadow;
+        im.receiveShadow = true;
+        for (const [n, it] of inst.entries()) {
+          q.setFromAxisAngle(up, it.rot);
+          s.set(part.sx * it.size, part.sy * it.size, part.sx * it.size);
+          p.set(it.x * M, it.y + part.y * it.size - 0.1, it.z * M);
+          m4.compose(p, q, s);
+          im.setMatrixAt(n, m4);
+          im.setColorAt(n, col.set(part.color).multiplyScalar(1 + it.tint));
+        }
+        im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        im.computeBoundingSphere();
+        this.decor.add(im);
+      }
     }
   }
-}
 
-function mergeGeos(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const parts = geos.map((g) => g.toNonIndexed());
-  let n = 0;
-  for (const g of parts) n += g.attributes.position.count;
-  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3);
-  let o = 0;
-  for (const g of parts) {
-    g.computeVertexNormals();
-    pos.set(g.attributes.position.array as Float32Array, o * 3);
-    nor.set(g.attributes.normal.array as Float32Array, o * 3);
-    o += g.attributes.position.count;
+  update(dt: number, t: number) {
+    this.uTime.value = t;
+    if (this.decorDirty) {
+      this.decorTimer += dt;
+      if (this.decorTimer > 1) {
+        this.decorDirty = false;
+        this.decorTimer = 0;
+        this.buildDecor();
+      }
+    }
   }
-  const out = new THREE.BufferGeometry();
-  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-  return out;
+
+  y(x: number, z: number) {
+    return this.ground.y(x, z);
+  }
+
+  tileAt(x: number, z: number): string {
+    return this.grid.get(Math.floor(x), Math.floor(z));
+  }
 }
