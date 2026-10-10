@@ -73,8 +73,8 @@ export class Structures {
       else if (ty === 'house') houses.push({ x, z });
     }
     if (walls.length) {
-      const im = new THREE.InstancedMesh(BOX, mat('#b09068'), walls.length);
-      const cren = new THREE.InstancedMesh(BOX, mat('#a08060'), walls.length * 4);
+      const im = new THREE.InstancedMesh(BOX, mat('#c8aa7c'), walls.length);
+      const cren = new THREE.InstancedMesh(BOX, mat('#b8986c'), walls.length * 4);
       const m4 = new THREE.Matrix4();
       let c = 0;
       for (const [i, w] of walls.entries()) {
@@ -105,8 +105,8 @@ export class Structures {
       const grp = new THREE.Group();
       grp.position.set((g.x + 0.5) * M, gy, (g.z + 0.5) * M);
       grp.rotation.y = yaw;
-      put(grp, BOX, '#9a8a70', [1.6, 6, 1.6], [3.4, 3, 0]);
-      put(grp, BOX, '#9a8a70', [1.6, 6, 1.6], [-3.4, 3, 0]);
+      put(grp, BOX, '#bca88a', [1.6, 6, 1.6], [3.4, 3, 0]);
+      put(grp, BOX, '#bca88a', [1.6, 6, 1.6], [-3.4, 3, 0]);
       put(grp, BOX, '#6a4a2a', [8.4, 0.8, 1.2], [0, 6.2, 0]);
       this.group.add(grp);
     }
@@ -117,10 +117,10 @@ export class Structures {
       grp.position.set((h.x + 0.5) * M, gy, (h.z + 0.5) * M);
       grp.rotation.y = Math.atan2(V.x - h.x, V.z - h.z);
       const hh = 3.2 + (((h.x * 7 + h.z * 13) % 5) / 5) * 0.8;
-      put(grp, BOX, '#d6b88c', [6.4, hh, 6.4], [0, hh / 2, 0]);
+      put(grp, BOX, '#e0c49a', [6.4, hh, 6.4], [0, hh / 2, 0]);
       put(grp, BOX, '#8a6a4a', [6.8, 0.3, 6.8], [0, hh + 0.15, 0]);
-      put(grp, BOX, '#b8956a', [6.8, 0.5, 0.3], [0, hh + 0.5, 3.25]);
-      put(grp, BOX, '#b8956a', [6.8, 0.5, 0.3], [0, hh + 0.5, -3.25]);
+      put(grp, BOX, '#c8a476', [6.8, 0.5, 0.3], [0, hh + 0.5, 3.25]);
+      put(grp, BOX, '#c8a476', [6.8, 0.5, 0.3], [0, hh + 0.5, -3.25]);
       put(grp, BOX, '#2a1c12', [1.1, 2.0, 0.1], [0.8, 1.0, 3.21]);
       put(grp, BOX, '#3a2a1c', [0.6, 0.5, 0.1], [-1.6, 2.0, 3.21]);
       if ((h.x + h.z) % 3 === 0) put(grp, BOX, '#c0a070', [2, 1.2, 2], [-1.6, hh + 0.75, -1.6]);

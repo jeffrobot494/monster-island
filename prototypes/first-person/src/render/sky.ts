@@ -2,17 +2,22 @@
 import * as THREE from 'three';
 import type { Atmosphere } from '../sim/types';
 
-// [hour, zenith, horizon, sun color, sun intensity, ambient intensity]
-const KEYS: [number, string, string, string, number, number][] = [
-  [0, '#05070f', '#141a2e', '#8090d0', 0.12, 0.16],
-  [4.5, '#070a16', '#1a2038', '#8090d0', 0.12, 0.16],
-  [6, '#3a4a78', '#f0a070', '#ffb07a', 0.7, 0.42],
-  [7.5, '#5a92cc', '#d6e6ee', '#fff1d6', 1.6, 0.85],
-  [16.5, '#5a90c8', '#d4e4ec', '#fff1d6', 1.6, 0.85],
-  [18, '#3a4a80', '#f08a50', '#ff8a4a', 0.8, 0.44],
-  [19.5, '#12163a', '#3a2c50', '#8088d0', 0.25, 0.22],
-  [21, '#070a18', '#161c34', '#8090d0', 0.12, 0.16],
-  [24, '#05070f', '#141a2e', '#8090d0', 0.12, 0.16],
+// The palette follows media/concept-art/world-mood: teal skies over golden land, long amber evenings with a pink
+// band at dusk, and a deep blue (not black) night.
+// [hour, zenith, horizon, sun color, sun intensity, ambient intensity, cloud cover 0..1]
+const KEYS: [number, string, string, string, number, number, number][] = [
+  [0, '#081428', '#1d3554', '#7f9ccc', 0.16, 0.24, 0.35],
+  [4.5, '#081428', '#1d3554', '#7f9ccc', 0.16, 0.24, 0.35],
+  [5.5, '#1c3858', '#806c84', '#a090c0', 0.25, 0.3, 0.4],
+  [6.4, '#3c6278', '#f2a674', '#ffb070', 0.85, 0.46, 0.5],
+  [8, '#3f8490', '#e4d2a6', '#ffe2aa', 1.45, 0.66, 0.4],
+  [12, '#3a8a98', '#d6d8b8', '#fff0d2', 1.6, 0.7, 0.3],
+  [15.5, '#3c8290', '#e2cc9a', '#ffe2a2', 1.55, 0.68, 0.4],
+  [17.3, '#3e6e80', '#f2b062', '#ffb25a', 1.35, 0.58, 0.55],
+  [18.4, '#34587a', '#f08a58', '#ff8a4a', 0.9, 0.46, 0.6],
+  [19.4, '#22406a', '#d47a88', '#d08aa0', 0.36, 0.32, 0.5],
+  [20.5, '#10213e', '#2c4a70', '#8098d0', 0.16, 0.24, 0.4],
+  [24, '#081428', '#1d3554', '#7f9ccc', 0.16, 0.24, 0.35],
 ];
 
 export class Sky {
@@ -21,7 +26,17 @@ export class Sky {
   atmosphere: Atmosphere = {};
   night = 0;
   dome: THREE.Mesh;
-  private uni = { top: { value: new THREE.Color() }, bottom: { value: new THREE.Color() }, stars: { value: 0 } };
+  private uni = {
+    top: { value: new THREE.Color() },
+    bottom: { value: new THREE.Color() },
+    sunDir: { value: new THREE.Vector3(0, 1, 0) },
+    sunCol: { value: new THREE.Color() },
+    glow: { value: 1 },
+    cloudLit: { value: new THREE.Color() },
+    cloudShade: { value: new THREE.Color() },
+    cover: { value: 0.4 },
+    time: { value: 0 },
+  };
   private sunDisc: THREE.Mesh;
   private moonDisc: THREE.Mesh;
   private stars: THREE.Points;
@@ -46,13 +61,40 @@ export class Sky {
       depthWrite: false,
       fog: false,
       vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: 'uniform vec3 top; uniform vec3 bottom; varying vec3 vP; void main(){ float h = clamp(vP.y * 1.6 + 0.08, 0.0, 1.0); gl_FragColor = vec4(mix(bottom, top, pow(h, 0.7)), 1.0); }',
+      // gradient + sun glow + a painted cloud layer (fbm on a plane above the eye)
+      fragmentShader: `
+        uniform vec3 top; uniform vec3 bottom; uniform vec3 sunDir; uniform vec3 sunCol; uniform float glow;
+        uniform vec3 cloudLit; uniform vec3 cloudShade; uniform float cover; uniform float time;
+        varying vec3 vP;
+        float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
+        float fbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * vn(p); p = p * 2.03 + 17.1; a *= 0.5; } return s; }
+        void main(){
+          vec3 d = normalize(vP);
+          float h = clamp(d.y * 1.6 + 0.08, 0.0, 1.0);
+          vec3 col = mix(bottom, top, pow(h, 0.75));
+          float sd = max(dot(d, sunDir), 0.0);
+          // warm bloom around the sun that spreads along the horizon
+          float band = exp(-abs(d.y) * 7.0);
+          col += sunCol * glow * (pow(sd, 8.0) * 0.22 + pow(sd, 60.0) * 0.5 + band * pow(sd, 2.0) * 0.25);
+          if (d.y > 0.0) {
+            vec2 uv = d.xz / (d.y + 0.12) * 1.3 + vec2(time * 0.004, time * 0.0015);
+            float n = fbm(uv);
+            float c = smoothstep(1.0 - cover, 1.0 - cover + 0.22, n) * smoothstep(0.0, 0.18, d.y);
+            float lit = clamp((fbm(uv + sunDir.xz * 0.12) - n) * 6.0 + 0.5, 0.0, 1.0);
+            vec3 cc = mix(cloudShade, cloudLit, lit * 0.8 + pow(sd, 3.0) * 0.4);
+            col = mix(col, cc, c * 0.92);
+          }
+          gl_FragColor = vec4(col, 1.0);
+          #include <colorspace_fragment>
+        }`,
     });
     this.dome = new THREE.Mesh(new THREE.SphereGeometry(1300, 24, 12), mat);
     this.dome.renderOrder = -10;
     this.dome.frustumCulled = false;
     scene.add(this.dome);
-    this.sunDisc = new THREE.Mesh(new THREE.CircleGeometry(30, 20), new THREE.MeshBasicMaterial({ color: '#fff6d8', fog: false, depthWrite: false }));
+    this.sunDisc = new THREE.Mesh(new THREE.CircleGeometry(46, 28), new THREE.MeshBasicMaterial({ color: '#fff6d8', fog: false, depthWrite: false }));
     this.moonDisc = new THREE.Mesh(new THREE.CircleGeometry(22, 20), new THREE.MeshBasicMaterial({ color: '#e8ecf4', fog: false, depthWrite: false }));
     this.sunDisc.renderOrder = this.moonDisc.renderOrder = -9;
     scene.add(this.sunDisc, this.moonDisc);
@@ -92,6 +134,7 @@ export class Sky {
     const sunC = this.c1.set(a[3]).lerp(this.c2.set(b[3]), f).clone();
     let sunI = a[4] + (b[4] - a[4]) * f;
     let amb = a[5] + (b[5] - a[5]) * f;
+    let cover = a[6] + (b[6] - a[6]) * f;
     const clockLight = hour >= 7 && hour <= 17 ? 1 : hour >= 19 || hour <= 5 ? 0 : hour < 7 ? (hour - 5) / 2 : (19 - hour) / 2;
     const extra = light - clockLight;
     if (Math.abs(extra) > 0.02) {
@@ -113,24 +156,26 @@ export class Sky {
       top.lerp(w, 0.5);
       hor.lerp(w, 0.6);
       sunI *= 0.65;
+      cover = Math.min(0.85, cover + 0.35);
     }
     this.uni.top.value.copy(top);
     this.uni.bottom.value.copy(hor);
-    this.uni.stars.value = this.night;
     (this.scene.background as THREE.Color).copy(hor);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(at.fogColor ? this.c2.set(at.fogColor) : hor);
     // visibility: the champion's sight at night, far by day (spec §6)
-    let far = this.sightM * 1.15 + (900 - this.sightM * 1.15) * Math.pow(light, 1.5);
+    // by day a warm haze swallows the far hills, layering the island like the paintings
+    let far = this.sightM * 1.15 + (620 - this.sightM * 1.15) * Math.pow(light, 1.5);
     if (at.weather === 'fog') far *= 0.35;
     if (at.fogDensity) far *= Math.max(0.2, 1 - at.fogDensity * 8);
     fog.far = far;
-    fog.near = Math.min(far * 0.25, 60);
+    fog.near = Math.min(far * 0.12, 40);
     this.sun.color.copy(sunC);
     this.sun.intensity = sunI;
     this.ambient.intensity = amb;
-    this.ambient.color.copy(top).lerp(this.c2.set('#ffffff'), 0.6);
-    this.ambient.groundColor.set('#8a8068').multiplyScalar(0.45 + 0.55 * light);
+    // cool teal fill in the shadows against the warm sun
+    this.ambient.color.copy(top).lerp(hor, 0.2).lerp(this.c2.set('#ffffff'), 0.15);
+    this.ambient.groundColor.set('#9a7a50').multiplyScalar(0.45 + 0.55 * light);
     // sun or moon direction; the shadow-casting light follows the eye
     const day = hour >= 6 && hour < 18;
     const phase = day ? (hour - 6) / 12 : ((hour + 6) % 24) / 12;
@@ -151,6 +196,15 @@ export class Sky {
     this.moonDisc.lookAt(eye);
     this.moonDisc.visible = !day;
     void sdir;
-    (this.sunDisc.material as THREE.MeshBasicMaterial).color.copy(sunC).lerp(this.c2.set('#ffffff'), 0.5);
+    (this.sunDisc.material as THREE.MeshBasicMaterial).color.copy(sunC).lerp(this.c2.set('#fff4d0'), 0.6);
+    const u = this.uni;
+    u.sunDir.value.copy(dir); // the moon's glow at night
+    u.sunCol.value.copy(sunC);
+    u.glow.value = day ? Math.min(1, sunI) : 0.25;
+    u.cover.value = cover;
+    u.time.value = performance.now() / 1000;
+    // clouds catch the sun's color on their lit side; shadowed sides lean toward the zenith
+    u.cloudLit.value.copy(hor).lerp(sunC, 0.55).lerp(this.c2.set('#ffffff'), day ? 0.3 : 0.05);
+    u.cloudShade.value.copy(top).lerp(hor, 0.45).multiplyScalar(day ? 0.95 : 0.8);
   }
 }

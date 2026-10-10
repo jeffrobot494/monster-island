@@ -15,6 +15,15 @@ function hash(i: number, salt = 0) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+function patch(x: number, z: number) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  let fx = x - ix, fz = z - iz;
+  fx = fx * fx * (3 - 2 * fx);
+  fz = fz * fz * (3 - 2 * fz);
+  const h = (a: number, b: number) => hash(((a & 1023) << 10) | (b & 1023), 11);
+  return (h(ix, iz) * (1 - fx) + h(ix + 1, iz) * fx) * (1 - fz) + (h(ix, iz + 1) * (1 - fx) + h(ix + 1, iz + 1) * fx) * fz;
+}
+
 const FLAT = new Set(['wall', 'house', 'gate']);
 
 interface DecorPart {
@@ -25,6 +34,8 @@ interface DecorPart {
   sx: number;
   sy: number;
   shadow?: boolean;
+  /** thin blades lit like the ground */
+  flat?: boolean;
 }
 
 interface DecorKind {
@@ -43,34 +54,72 @@ const cone = new THREE.ConeGeometry(0.5, 1, 7);
 const cyl = new THREE.CylinderGeometry(0.5, 0.5, 1, 6);
 const ico = new THREE.IcosahedronGeometry(0.5, 0);
 const box = new THREE.BoxGeometry(1, 1, 1);
-const blade = new THREE.ConeGeometry(0.5, 1, 3);
 
+/** A tuft of thin leaning blades, unit height, with upward normals so it shades like the ground it grows from. */
+function tuftGeometry(n: number) {
+  const pos: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = (k / n) * Math.PI * 2 + k * 0.7, r = 0.12 + (k % 3) * 0.08, lean = 0.25 + (k % 2) * 0.2;
+    const cx = Math.cos(a) * r, cz = Math.sin(a) * r, w = 0.045;
+    const px = -Math.sin(a) * w, pz = Math.cos(a) * w;
+    const h = 0.75 + ((k * 37) % 5) * 0.06;
+    const tip = [cx + Math.cos(a) * lean, h - 0.5, cz + Math.sin(a) * lean];
+    // both windings, so each side is front-facing and keeps its upward normal
+    pos.push(cx - px, -0.5, cz - pz, cx + px, -0.5, cz + pz, ...tip, cx + px, -0.5, cz + pz, cx - px, -0.5, cz - pz, ...tip);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(pos.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  return g;
+}
+const tuft = tuftGeometry(7);
+const reeds = tuftGeometry(5);
+
+// Colors follow media/concept-art/world-mood: blue-green olives with dark gnarled trunks, black-green cypress
+// spires, sun-bleached golden grass and pale limestone.
 const DECOR: DecorKind[] = [
   { tiles: ['cedar'], perTile: 2.4, size: [12, 18], collide: (z) => z * 0.025, parts: [
-    { geo: cyl, color: '#4a3424', y: 0.12, sx: 0.04, sy: 0.25, shadow: true },
-    { geo: cone, color: '#1f4a2a', y: 0.38, sx: 0.42, sy: 0.38, shadow: true },
-    { geo: cone, color: '#24502e', y: 0.62, sx: 0.32, sy: 0.32, shadow: true },
-    { geo: cone, color: '#2a5a34', y: 0.84, sx: 0.2, sy: 0.3, shadow: true },
+    { geo: cyl, color: '#3a2820', y: 0.1, sx: 0.035, sy: 0.2, shadow: true },
+    { geo: cone, color: '#1e3a2c', y: 0.42, sx: 0.2, sy: 0.6, shadow: true },
+    { geo: cone, color: '#24443a', y: 0.7, sx: 0.14, sy: 0.5, shadow: true },
   ] },
   { tiles: ['olive'], perTile: 3.5, size: [4, 5.5], collide: (z) => z * 0.05, parts: [
-    { geo: cyl, color: '#5a4a3a', y: 0.18, sx: 0.08, sy: 0.36, shadow: true },
-    { geo: ico, color: '#7a8a5a', y: 0.6, sx: 0.8, sy: 0.55, shadow: true },
-    { geo: ico, color: '#6e8050', y: 0.75, sx: 0.55, sy: 0.4, shadow: true },
+    { geo: cyl, color: '#3e2a22', y: 0.18, sx: 0.08, sy: 0.36, shadow: true },
+    { geo: ico, color: '#4e7064', y: 0.6, sx: 0.85, sy: 0.55, shadow: true },
+    { geo: ico, color: '#5a7e6e', y: 0.76, sx: 0.58, sy: 0.4, shadow: true },
   ] },
   { tiles: ['vineyard'], perTile: 8, size: [1.0, 1.3], parts: [
-    { geo: cyl, color: '#5a4030', y: 0.5, sx: 0.05, sy: 1 },
-    { geo: ico, color: '#5e7a2e', y: 0.7, sx: 0.8, sy: 0.5 },
+    { geo: cyl, color: '#4a3226', y: 0.5, sx: 0.05, sy: 1 },
+    { geo: ico, color: '#5e7448', y: 0.7, sx: 0.8, sy: 0.5 },
   ] },
-  { tiles: ['wheat'], perTile: 14, size: [0.8, 1.15], tint: 0.12, parts: [{ geo: blade, color: '#d8b850', y: 0.5, sx: 0.5, sy: 1 }] },
-  { tiles: ['grass'], perTile: 3, size: [0.25, 0.5], tint: 0.15, parts: [{ geo: blade, color: '#9ab858', y: 0.5, sx: 1.2, sy: 1 }] },
-  { tiles: ['scrub', 'wadi'], perTile: 1.6, size: [0.6, 1.4], tint: 0.12, parts: [{ geo: ico, color: '#8a8a52', y: 0.4, sx: 1.2, sy: 0.8 }] },
-  { tiles: ['rock', 'scrub'], perTile: 0.7, size: [1, 3.5], tint: 0.1, collide: (z) => (z > 1.6 ? z * 0.55 : 0), parts: [{ geo: ico, color: '#8e877c', y: 0.3, sx: 1.3, sy: 0.9, shadow: true }] },
+  { tiles: ['wheat'], perTile: 18, size: [0.9, 1.3], tint: 0.14, parts: [{ geo: tuft, color: '#e2aa4c', y: 0.5, sx: 0.7, sy: 1, flat: true }] },
+  { tiles: ['grass', 'scrub'], perTile: 16, size: [0.5, 1.1], tint: 0.22, parts: [{ geo: tuft, color: '#d4a656', y: 0.5, sx: 1, sy: 1, flat: true }] },
+  { tiles: ['scrub', 'wadi', 'grass'], perTile: 0.9, size: [0.6, 1.5], tint: 0.12, parts: [{ geo: ico, color: '#56705a', y: 0.4, sx: 1.2, sy: 0.75 }] },
+  { tiles: ['rock', 'scrub'], perTile: 0.7, size: [1, 3.5], tint: 0.1, collide: (z) => (z > 1.6 ? z * 0.55 : 0), parts: [{ geo: ico, color: '#d6cdbd', y: 0.3, sx: 1.3, sy: 0.9, shadow: true }] },
   { tiles: ['salt'], perTile: 0.16, size: [2, 5], collide: (z) => z * 0.17, parts: [{ geo: cyl, color: '#f4f0e6', y: 0.5, sx: 0.35, sy: 1, shadow: true }] },
-  { tiles: ['marsh'], perTile: 4, size: [1.2, 1.9], tint: 0.1, parts: [{ geo: blade, color: '#6a7a40', y: 0.5, sx: 0.25, sy: 1 }] },
-  { tiles: ['ruin-floor'], perTile: 1.2, size: [0.8, 2], tint: 0.06, parts: [{ geo: box, color: '#b0a288', y: 0.35, sx: 1.4, sy: 0.7, shadow: true }] },
-  { tiles: ['ruin-floor'], perTile: 0.2, size: [5, 9], collide: (z) => z * 0.09, parts: [{ geo: cyl, color: '#c0b498', y: 0.5, sx: 0.18, sy: 1, shadow: true }] },
-  { tiles: ['shrine-floor'], perTile: 0.15, size: [2.5, 3.5], parts: [{ geo: box, color: '#9a9284', y: 0.5, sx: 0.4, sy: 1, shadow: true }] },
+  { tiles: ['marsh'], perTile: 6, size: [1.2, 2.1], tint: 0.12, parts: [{ geo: reeds, color: '#bc8c4a', y: 0.5, sx: 0.5, sy: 1, flat: true }] },
+  { tiles: ['ruin-floor'], perTile: 1.2, size: [0.8, 2], tint: 0.06, parts: [{ geo: box, color: '#d2c6aa', y: 0.35, sx: 1.4, sy: 0.7, shadow: true }] },
+  { tiles: ['ruin-floor'], perTile: 0.2, size: [5, 9], collide: (z) => z * 0.09, parts: [{ geo: cyl, color: '#dcd0b4', y: 0.5, sx: 0.18, sy: 1, shadow: true }] },
+  { tiles: ['shrine-floor'], perTile: 0.15, size: [2.5, 3.5], parts: [{ geo: box, color: '#a8a090', y: 0.5, sx: 0.4, sy: 1, shadow: true }] },
 ];
+
+/** Ground colors for the first-person view (the sim's tile colors stay as the map's). */
+const GROUND: Record<string, string> = {
+  sand: '#e8d6a8',
+  grass: '#c29c50',
+  scrub: '#b09254',
+  wheat: '#d2a04a',
+  olive: '#9c8a4e',
+  vineyard: '#94804a',
+  cedar: '#7a6e48',
+  rock: '#cfc4b0',
+  wadi: '#c6a06e',
+  salt: '#ece6d6',
+  marsh: '#8a845a',
+  'ruin-floor': '#cbbea2',
+  road: '#d6c8a6',
+  'shrine-floor': '#ddd2b8',
+};
 
 export class Terrain {
   group = new THREE.Group();
@@ -111,7 +160,7 @@ export class Terrain {
     this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false;
     this.group.add(this.mesh);
-    const wmat = new THREE.MeshLambertMaterial({ color: '#2f6a96', transparent: true, opacity: 0.78 });
+    const wmat = new THREE.MeshLambertMaterial({ color: '#3ad2c2', transparent: true, opacity: 0.74 });
     wmat.onBeforeCompile = (s) => {
       s.uniforms.uTime = this.uTime;
       s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvW = (modelMatrix * vec4(transformed, 1.0)).xz;');
@@ -165,10 +214,10 @@ export class Terrain {
 
   private tileColor(tx: number, tz: number, out: THREE.Color) {
     const t = this.grid.get(tx, tz);
-    if (FLAT.has(t)) return out.set('#b8a07a');
-    if (t === 'deep-water') return out.set('#3a5a5a');
-    if (t === 'shallow-water') return out.set('#bfae80');
-    return out.set(this.defs.get(t)?.color ?? '#9db35a');
+    if (FLAT.has(t)) return out.set('#c8ae84');
+    if (t === 'deep-water') return out.set('#1c8a8e');
+    if (t === 'shallow-water') return out.set('#e0dcb0');
+    return out.set(GROUND[t] ?? this.defs.get(t)?.color ?? '#b89448');
   }
 
   private vertex(i: number, j: number) {
@@ -191,10 +240,15 @@ export class Terrain {
     add(ix + 1, iz, fx * (1 - fz));
     add(ix, iz + 1, (1 - fx) * fz);
     add(ix + 1, iz + 1, fx * fz);
-    const n = 0.94 + hash(j * N + i, 7) * 0.12;
+    const p = patch(x / 3.5, z / 3.5) * 0.65 + patch(x / 1.2 + 40, z / 1.2) * 0.35;
+    const n = 0.97 + hash(j * N + i, 7) * 0.06;
     const gy = this.ground;
     const slope = Math.abs(gy.y(x + 0.25, z) - gy.y(x - 0.25, z)) / 6 + Math.abs(gy.y(x, z + 0.25) - gy.y(x, z - 0.25)) / 6;
-    this.c.setRGB(r, g, b).lerp(this.c2.set('#8a8278'), Math.min(1, Math.max(0, slope - 0.4)));
+    this.c.setRGB(r, g, b);
+    // sun-bleached and shadowed patches, as in the paintings' fields
+    if (p > 0.55) this.c.lerp(this.c2.set('#e4cf98'), (p - 0.55) * 1.3);
+    else if (p < 0.4) this.c.lerp(this.c2.set('#8a6a36'), (0.4 - p) * 1.1);
+    this.c.lerp(this.c2.set('#c4b8a4'), Math.min(1, Math.max(0, slope - 0.4)));
     this.colors[o] = this.c.r * n;
     this.colors[o + 1] = this.c.g * n;
     this.colors[o + 2] = this.c.b * n;
@@ -246,7 +300,7 @@ export class Terrain {
         }
       }
       for (const part of kind.parts) {
-        const im = new THREE.InstancedMesh(part.geo, new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true }), inst.length);
+        const im = new THREE.InstancedMesh(part.geo, new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: !part.flat }), inst.length);
         im.castShadow = !!part.shadow;
         im.receiveShadow = true;
         for (const [n, it] of inst.entries()) {
