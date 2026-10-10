@@ -33,6 +33,29 @@ Install it and log in to get a real god; without it, the game falls back to a ma
 On Windows, keep the clone on the WSL (Linux) filesystem, not under `C:\`: Vite's file watching and `npm install`
 are much slower across the Windows mount.
 
+## Browsing the files from Windows (WSL)
+
+Windows can open WSL files at `\\wsl.localhost\<distro>\home\<you>` (e.g. `\\wsl.localhost\Ubuntu\home\jeffr`),
+or through **Linux** at the bottom of File Explorer's sidebar. On some machines Explorer shows the folder for an instant
+and then jumps back to `C:\`. The fix is to map WSL to a drive letter, which Explorer treats like any other drive.
+
+1. Find your distro's name: in PowerShell, run `wsl -l -v` (usually `Ubuntu`).
+2. Map it to a free letter, here `W:` (in PowerShell or a Command Prompt, not as administrator):
+
+   ```
+   net use W: \\wsl.localhost\Ubuntu /persistent:yes
+   ```
+
+   On older Windows 10 builds, use `\\wsl$\Ubuntu` instead.
+3. Open **This PC → W:**, then `home\<your Linux user>\monster-island`. Right-click the folder → **Pin to Quick access**.
+
+The drive only works while WSL is running. If `W:` shows a red X after a reboot, open an Ubuntu terminal once, then
+click the drive again. From inside WSL, `explorer.exe .` opens Explorer on the current folder. To remove the mapping:
+`net use W: /delete`.
+
+Editing the files from Windows is fine, but run `npm`, `git` and the dev server inside WSL. VS Code works best
+connected to WSL: run `code .` from an Ubuntu terminal in the project folder.
+
 ## History
 
 This repository started as the original `monster-island` prototype alone. Its earlier history is under `prototypes/monster-island/`;
