@@ -29,7 +29,8 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | Shift | sprint (uses stamina) |
 | Left click | swing the sword. **Where you aim picks the wound**: head (×1.5), arms, legs, or the monster's signature limb (club arm, horns, wings, jaws…) |
 | Right mouse (hold) | raise the shield: blocks 75 % of a blow from the front, costs stamina |
-| Space | dodge: a quick dash with a moment of invulnerability |
+| Space | jump (costs a little stamina; no jumping while dragging) |
+| C | dodge: a quick dash with a moment of invulnerability |
 | E | interact: bind a downed monster, drag a body, let go, open the altar, talk |
 | F | finish a downed monster |
 | T | torch on/off (it takes your shield hand) |
@@ -44,7 +45,7 @@ champion holds his ground and strikes back at anything attacking him.
 
 - **Find lairs.** They're hidden in the hills; walk within 40 m of one to mark it on your map and compass. A monster
   caught resting in its lair takes double damage from your first blow.
-- **Fight.** A red ring on the ground (and a red arc at the screen edge) means a blow is coming in 0.8 s: dodge out of
+- **Fight.** A red ring on the ground (and a red arc at the screen edge) means a blow is coming in 0.8 s: dodge (C) out of
   it, step behind the beast, or take it on your shield. Cripple legs to slow a monster, cripple its signature limb to
   blunt its special.
 - **Capture.** At 20 % HP a monster collapses (yellow ring). Press **E** to bind it and walk it home: it follows on a

@@ -108,6 +108,11 @@ async function boot() {
   const controller = new ChampionController(controls, renderer.terrain.ground, (m) => sim.post(m as never));
   renderer.terrain.onColliders = () => (controller.decorSolids = renderer.terrain.colliders);
   controller.onStep = () => audio.play('step', undefined, { surface: renderer.terrain.tileAt(controller.x, controller.z) });
+  controller.onLand = (impact) => {
+    controller.onStep();
+    renderer.view.land(impact);
+    if (impact > 5) renderer.particles.burst('dust', controller.x * M, controller.eyeY - EYE_H + 0.1, controller.z * M);
+  };
   let hud: Hud | null = null;
   let chronicleDirty = false;
   let saveWaiters: ((w: string) => void)[] = [];
@@ -183,7 +188,7 @@ async function boot() {
     });
     return h('div', {},
       h('h3', { class: 'serif' }, 'How to play'),
-      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (Space) or raise your shield (right mouse). Judgment falls at local midnight: the god with more favor reshapes the island. The world runs on real time, even while you read this.'),
+      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). Judgment falls at local midnight: the god with more favor reshapes the island. The world runs on real time, even while you read this.'),
       h('h3', { class: 'serif' }, 'Controls'),
       h('div', { class: 'settings-block' },
         range('Mouse sensitivity', 0.5, 6, 0.1, () => settings.sensitivity, (v) => (settings.sensitivity = v)),
@@ -672,6 +677,7 @@ async function boot() {
     const busy = screenOpen();
     // one-shot actions
     if (controls.active && !busy) {
+      if (controls.take('jump')) controller.tryJump(now);
       if (controls.take('dodge') && controller.tryDodge(now)) {
         renderer.view.dodge();
         renderer.particles.burst('dust', controller.x * M, controller.eyeY - EYE_H + 0.2, controller.z * M);
@@ -730,6 +736,7 @@ async function boot() {
         for (const k of half > 0 ? [-half, half] : [0]) controller.solids.push({ x: v.pos.x / M + Math.sin(v.yaw) * k, z: v.pos.z / M + Math.cos(v.yaw) * k, r });
       });
       controller.update(fdt, now);
+      renderer.view.vy = controller.air ? controller.vy : 0;
       if (controller.ctrl === 'sim' && hud?.champion) {
         const cv = renderer.ents.views.get(hud.champion.id);
         if (cv) {

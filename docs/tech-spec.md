@@ -22,7 +22,7 @@ need. Where the design is silent, this spec picks the **simplest thing that play
 | Platform | Desktop browsers (Chrome, Edge, Firefox), keyboard and mouse, pointer lock, at least 1280 × 720. Phones and touch are **not supported**: a notice is shown instead. |
 | Units | The sim keeps its 128 × 128 grid of 8 m tiles, with positions in tile units. The renderer works in **meters** (1 tile = 8 m). Shape units stay "1 unit ≈ a human's height" and render as **1.8 m**. Every physical constant that a person can see up close (reach, rings, dash, bind range, drag spacing) is re-specified in meters (§2). |
 | Champion movement | **Client-authoritative.** The main thread moves the champion at frame rate (WASD, mouse look, collision with unwalkable tiles) and sends its pose to the sim 20 times a second. The sim validates the pose and uses it. Whenever the player can't act (downed, carried, dead, autopilot), the sim takes control and the camera follows the sim. |
-| Combat **[gap]** | Melee with the mouse: **left click swings** the bronze sword along a 100° arc in front of you. **The height you aim at picks the hit zone** (head, torso, arm, leg, signature limb). **Right mouse raises the shield** (−75 % frontal damage, costs stamina). **Space dodges** (a 3.5 m dash with 0.3 s of invulnerability). Monster attacks keep the 0.8 s wind-up, now shown by the monster's wind-up pose, a growl from its position, and the red ground ring. Stamina gates sprinting, swinging, dodging and blocking. |
+| Combat **[gap]** | Melee with the mouse: **left click swings** the bronze sword along a 100° arc in front of you. **The height you aim at picks the hit zone** (head, torso, arm, leg, signature limb). **Right mouse raises the shield** (−75 % frontal damage, costs stamina). **C dodges** (Space jumps) (a 3.5 m dash with 0.3 s of invulnerability). Monster attacks keep the 0.8 s wind-up, now shown by the monster's wind-up pose, a growl from its position, and the red ground ring. Stamina gates sprinting, swinging, dodging and blocking. |
 | Capture | Look at a downed monster and press **E** to bind it, then walk it home: it follows on a rope 1.5 m behind you. **F** finishes it. **E** at the altar opens the altar. |
 | Torch | **T** swaps the shield for a torch. At night the torch lights about 18 m and widens your sight, but you can't block while you hold it. |
 | Exploration | The 3D world is always fully drawn: there is no black fog, and darkness and distance fog do the hiding. The world **map** (M) keeps the fog of war, and lairs are "found" (marked on the map, chronicled) within 5 tiles, as before. |
@@ -114,7 +114,8 @@ matters for a second desktop on the LAN.
 | Mouse | Look (pointer lock). Pitch is clamped to ±85°. |
 | W A S D | Move (relative to the camera's yaw) |
 | Shift (hold) | Sprint |
-| Space | Dodge (a dash in the direction you are moving, or backwards if you are standing still) |
+| Space | Jump (client-only: a ~0.85 m hop, 8 stamina, momentum kept in the air; not while dragging, downed or mid-dodge; the sim never sees height) |
+| C | Dodge (a dash in the direction you are moving, or backwards if you are standing still). Was Space until jump was added; saved bindings migrate |
 | Left mouse | Swing the sword (hold to keep swinging when the cooldown allows) |
 | Right mouse (hold) | Raise the shield |
 | E | Interact with what the crosshair targets (§3.3) |

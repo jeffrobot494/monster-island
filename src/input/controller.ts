@@ -9,6 +9,8 @@ export const EYE_H = 1.65;
 const R = 0.35 / M; // body radius in tiles
 const WALK = 4.5, SPRINT = 8.8; // m/s
 const ACCEL = 30, FRICTION = 12;
+const GRAVITY = 22, JUMP_V = 6.2; // m/s², m/s: a ~0.85 m hop, ~0.55 s in the air
+const AIR_CONTROL = 2.5; // how quickly you can steer in the air (1/s)
 
 export interface Solid { x: number; z: number; r: number } // tiles
 
@@ -27,6 +29,11 @@ export class ChampionController {
   swingReady = 0;
   dodgeReady = 0;
   dodgeT = -1;
+  /** jumping: feet height (m, absolute) and vertical speed (m/s); client-only, the sim never sees it */
+  air = false;
+  feetY = 0;
+  vy = 0;
+  onLand: (impact: number) => void = () => {};
   private dodgeDx = 0;
   private dodgeDz = 0;
   blocking = false;
@@ -101,10 +108,23 @@ export class ChampionController {
     this.x = x;
     this.z = z;
     this.vx = this.vz = 0;
+    this.air = false;
+    this.vy = 0;
+  }
+
+  tryJump(now: number): boolean {
+    if (this.ctrl !== 'player' || this.air || this.view !== 'normal' || this.dragging || this.dodgeT >= 0) return false;
+    if (!this.spend(8)) return false;
+    this.air = true;
+    this.feetY = this.ground.y(this.x, this.z);
+    this.vy = JUMP_V;
+    this.inputSince = true;
+    void now;
+    return true;
   }
 
   tryDodge(now: number): boolean {
-    if (this.ctrl !== 'player' || now < this.dodgeReady || this.dragging) return false;
+    if (this.ctrl !== 'player' || now < this.dodgeReady || this.dragging || this.air) return false;
     if (!this.spend(25)) return false;
     this.dodgeReady = now + 0.5;
     let fx = 0, fz = 0;
@@ -174,7 +194,8 @@ export class ChampionController {
       const top = crawl ? 0.75 / M : ((this.sprinting ? SPRINT : WALK) * this.speedMul * this.terrainFactor(this.x, this.z)) / M; // tiles/s
       const tx = wx * top, tz = wz * top;
       // accelerate toward the target velocity, with friction when idle
-      const k = Math.min(1, (l > 0 ? ACCEL / Math.max(0.1, top * M) : FRICTION) * dt);
+      // in the air you keep your momentum and can only steer a little
+      const k = this.air ? (l > 0 ? Math.min(1, AIR_CONTROL * dt) : 0) : Math.min(1, (l > 0 ? ACCEL / Math.max(0.1, top * M) : FRICTION) * dt);
       this.vx += (tx - this.vx) * k;
       this.vz += (tz - this.vz) * k;
       let mx = this.vx * dt, mz = this.vz * dt;
@@ -193,7 +214,7 @@ export class ChampionController {
         this.inputSince = false;
       }
       // footsteps
-      this.stepAcc += this.moveSpeed * dt;
+      if (!this.air) this.stepAcc += this.moveSpeed * dt;
       const stride = this.sprinting ? 2.4 : 1.6;
       if (this.stepAcc > stride) {
         this.stepAcc = 0;
@@ -203,15 +224,30 @@ export class ChampionController {
       this.moveSpeed = 0;
       this.sprinting = false;
       this.dodgeT = -1;
+      this.air = false;
+    }
+    const gy = this.ground.y(this.x, this.z);
+    if (this.air) {
+      this.vy -= GRAVITY * dt;
+      this.feetY += this.vy * dt;
+      if (this.feetY <= gy) {
+        const impact = -this.vy;
+        this.air = false;
+        this.vy = 0;
+        // a little knee-bend on landing; the eye smoothing below springs back up
+        this.smoothEye = gy + EYE_H - Math.min(0.18, Math.max(0, impact) * 0.02);
+        this.onLand(impact);
+      }
     }
     // eye height
-    let target = this.ground.y(this.x, this.z) + EYE_H;
+    let target = gy + EYE_H;
     if (this.view === 'downed') target = this.ground.y(this.x, this.z) + 0.45;
     if (this.view === 'carried') target = this.ground.y(this.x, this.z) + 1.4 + this.lift * 0.5;
-    const bobA = this.moveSpeed > 0.5 ? (this.sprinting ? 0.08 : 0.04) : 0;
+    const bobA = this.moveSpeed > 0.5 && !this.air ? (this.sprinting ? 0.08 : 0.04) : 0;
     this.bobT += dt * (this.sprinting ? 12 : 8);
     const bob = Math.sin(this.bobT) * bobA;
-    this.smoothEye += (target - this.smoothEye) * Math.min(1, dt * 12);
+    if (this.air) this.smoothEye = this.feetY + EYE_H;
+    else this.smoothEye += (target - this.smoothEye) * Math.min(1, dt * 12);
     if (Math.abs(target - this.smoothEye) > 3) this.smoothEye = target;
     this.eyeY = this.smoothEye + bob;
   }

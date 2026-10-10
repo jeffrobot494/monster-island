@@ -16,6 +16,8 @@ import { SIZE } from '../src/sim/world';
 import { HOUR_MS } from '../src/sim/clock';
 import type { Entity } from '../src/sim/types';
 import { now, START } from './helpers';
+import { ChampionController, EYE_H } from '../src/input/controller';
+import type { Controls } from '../src/input/controls';
 
 const make = (seed = 1, ts = 1) => Island.create(seed, START, ts, { now });
 const M = 8;
@@ -154,6 +156,45 @@ describe('poses and epochs', () => {
     feed(island, { type: 'pose', x: away.x, z: away.z, yaw: 0, pitch: 0, epoch: before, input: true });
     island.step();
     expect(Math.hypot(c.x - home.x, c.z - home.z)).toBeLessThan(0.5);
+  });
+});
+
+describe('jump', () => {
+  it('a hop clears ~0.85 m, keeps momentum, lands, and costs stamina; no jumping while dragging or mid-air', () => {
+    const island = make(1);
+    const ground = island.sim.ground;
+    const held = new Set<string>(['forward']);
+    const controls = { down: (a: string) => held.has(a), readLook: () => [0, 0] } as unknown as Controls;
+    const sent: unknown[] = [];
+    const c = new ChampionController(controls, ground, (m) => sent.push(m));
+    c.walk.fill(20);
+    c.ctrl = 'player';
+    const v = island.sim.layout.village;
+    c.snap(v.x + 0.5, v.z + 0.5);
+    let t = 0;
+    const step = (n: number) => { for (let i = 0; i < n; i++) { t += 1 / 60; c.update(1 / 60, t); } };
+    step(60); // reach walking speed
+    const speed = Math.hypot(c.vx, c.vz);
+    let landed = 0;
+    c.onLand = () => landed++;
+    expect(c.tryJump(t)).toBe(true);
+    expect(c.stamina).toBeLessThan(100);
+    expect(c.tryJump(t)).toBe(false); // no double jump
+    expect(c.tryDodge(t)).toBe(false); // no dodge in the air
+    let peak = 0;
+    held.clear(); // let go of W: momentum carries on
+    for (let i = 0; i < 120 && c.air; i++) {
+      step(1);
+      peak = Math.max(peak, c.feetY - ground.y(c.x, c.z));
+    }
+    expect(landed).toBe(1);
+    expect(peak).toBeGreaterThan(0.7);
+    expect(peak).toBeLessThan(1.1);
+    expect(Math.hypot(c.vx, c.vz)).toBeGreaterThan(speed * 0.95);
+    step(30);
+    expect(c.eyeY).toBeCloseTo(ground.y(c.x, c.z) + EYE_H, 1);
+    c.dragging = true;
+    expect(c.tryJump(t + 5)).toBe(false);
   });
 });
 

@@ -1,15 +1,15 @@
 // Keyboard + mouse input with pointer lock and rebindable keys (spec §3).
 export type ActionName =
-  | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'dodge' | 'interact' | 'finish' | 'torch' | 'inspect' | 'map'
+  | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'inspect' | 'map'
   | 'journal' | 'confirm';
 
 export const DEFAULT_BINDINGS: Record<ActionName, string> = {
-  forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', dodge: 'Space', interact: 'KeyE',
+  forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', jump: 'Space', dodge: 'KeyC', interact: 'KeyE',
   finish: 'KeyF', torch: 'KeyT', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter',
 };
 
 export const ACTION_LABEL: Record<ActionName, string> = {
-  forward: 'Move forward', back: 'Move back', left: 'Strafe left', right: 'Strafe right', sprint: 'Sprint', dodge: 'Dodge',
+  forward: 'Move forward', back: 'Move back', left: 'Strafe left', right: 'Strafe right', sprint: 'Sprint', jump: 'Jump', dodge: 'Dodge',
   interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', inspect: 'Inspect',
   map: 'Map', journal: 'Journal', confirm: 'Dismiss banner',
 };
@@ -30,7 +30,12 @@ export function loadSettings(): Settings {
   const d: Settings = { sensitivity: 2.2, invertY: false, fov: 75, volume: 0.8, fxVolume: 1, shadows: 'high', bindings: { ...DEFAULT_BINDINGS } };
   try {
     const s = JSON.parse(localStorage.getItem(KEY) ?? 'null');
-    if (s && typeof s === 'object') return { ...d, ...s, bindings: { ...d.bindings, ...(s.bindings ?? {}) } };
+    if (s && typeof s === 'object') {
+      const b = { ...d.bindings, ...(s.bindings ?? {}) };
+      // settings saved before jump existed had Space on dodge
+      if (!s.bindings?.jump && b.dodge === 'Space') b.dodge = DEFAULT_BINDINGS.dodge;
+      return { ...d, ...s, bindings: b };
+    }
   } catch {
     /* storage unavailable */
   }

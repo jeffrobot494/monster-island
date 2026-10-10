@@ -25,6 +25,10 @@ export class ViewModel {
   private dodgeT = -1;
   private blockK = 0;
   private hurtT = -1;
+  private landT = -1;
+  private landK = 0;
+  /** the champion's vertical speed (m/s): the arms lag behind a jump */
+  vy = 0;
   private bobT = 0;
   torchOn = false;
   dragging = false;
@@ -99,6 +103,10 @@ export class ViewModel {
   hurt() {
     this.hurtT = 0;
   }
+  land(impact: number) {
+    this.landT = 0;
+    this.landK = Math.min(1, impact / 7);
+  }
 
   /** Where the torch flame is, in view space (for the light). */
   update(dt: number, t: number, moveSpeed: number, sprinting: boolean, blocking: boolean, lightLevel: number) {
@@ -111,7 +119,15 @@ export class ViewModel {
     const moving = moveSpeed > 0.5;
     this.bobT += dt * (moving ? (sprinting ? 13 : 8.5) : 1.5);
     const bobA = moving ? (sprinting ? 0.022 : 0.012) : 0.004;
-    const bx = Math.sin(this.bobT * 0.5) * bobA, by = -Math.abs(Math.cos(this.bobT * 0.5)) * bobA;
+    const bx = Math.sin(this.bobT * 0.5) * bobA;
+    let by = -Math.abs(Math.cos(this.bobT * 0.5)) * bobA;
+    // arms trail a jump (up when falling, down when rising), then dip on landing
+    by += Math.max(-0.04, Math.min(0.04, -this.vy * 0.006));
+    if (this.landT >= 0) {
+      this.landT += dt / 0.25;
+      if (this.landT >= 1) this.landT = -1;
+      else by -= Math.sin(this.landT * Math.PI) * 0.05 * this.landK;
+    }
     // right arm and sword
     let rx = 0, ry = 0, rz = 0, px = 0.34 + bx, py = -0.34 + by, pz = -0.5;
     if (this.swingT >= 0) {

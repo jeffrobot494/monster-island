@@ -23,7 +23,7 @@ export interface TargetInfo {
 }
 
 const HINTS: Record<string, string> = {
-  windup: 'A red ring means a blow is coming. Space: dodge out of it · Right mouse: raise your shield.',
+  windup: 'A red ring means a blow is coming. C: dodge out of it · Right mouse: raise your shield.',
   downed: 'It is down! E: bind it and drag it home alive · F: finish it.',
   night: 'Night falls. T: light a torch (it takes your shield hand).',
   drag: 'Drag it to the altar in the village square, then press E on the altar to offer it.',
@@ -91,6 +91,7 @@ export class HudView {
         row(keyLabel(b.sprint), 'sprint'),
         row('Left click', 'swing — aim high for the head, low for the legs'),
         row('Right mouse', 'shield'),
+        row(keyLabel(b.jump), 'jump'),
         row(keyLabel(b.dodge), 'dodge'),
         row(keyLabel(b.interact), 'bind · drag · drop · altar'),
         row(keyLabel(b.finish), 'finish a downed monster'),
