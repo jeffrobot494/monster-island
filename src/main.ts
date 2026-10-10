@@ -793,8 +793,12 @@ async function boot() {
       if (map.open) {
         const kindOf = (icon: string): MapMarker['kind'] => (icon === '⌂' ? 'village' : icon === '🔥' ? 'altar' : icon === '▲' ? 'high' : icon === '☠' ? 'lair' : icon === '✝' ? 'lair-dead' : icon === '!' ? 'scream' : 'creation');
         const mm: MapMarker[] = marks.map((m) => ({ x: m.x, z: m.z, kind: kindOf(m.icon), label: m.icon === '☠' || m.icon === '✝' ? m.label : undefined }));
+        // only what you can actually see right now
+        const sight = (hud?.champion?.sight ?? 10) * M;
         renderer.ents.each((v) => {
           if (v.id === champId()) return;
+          const d = Math.hypot(v.pos.x - controller.x * M, v.pos.z - controller.z * M);
+          if (d > sight) return;
           if (v.flags & F_MONSTER && !(v.flags & F_CORPSE)) mm.push({ x: v.pos.x / M, z: v.pos.z / M, kind: 'monster' });
           else if (v.flags & F_HUMAN) mm.push({ x: v.pos.x / M, z: v.pos.z / M, kind: 'villager' });
         });
