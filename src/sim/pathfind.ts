@@ -60,7 +60,7 @@ const DIRS: [number, number, number][] = [
  * [] if already there, or null if unreachable. The start tile is allowed to be unwalkable
  * (so stranded entities can walk out).
  */
-export function findPath(grid: TileGrid, costs: CostTable, sx: number, sz: number, gx: number, gz: number, maxNodes = 4096): number[] | null {
+export function findPath(grid: TileGrid, costs: CostTable, sx: number, sz: number, gx: number, gz: number, maxNodes = 16000): number[] | null {
   if (!grid.inBounds(gx, gz)) return null;
   const cost = (i: number) => costs.get(grid.types[i]) ?? Infinity;
   const goal = gz * SIZE + gx;
@@ -96,7 +96,7 @@ export function findPath(grid: TileGrid, costs: CostTable, sx: number, sz: numbe
       g[ni] = ng;
       from[ni] = cur;
       const h = Math.hypot(nx - gx, nz - gz);
-      open.push(ni, ng + h);
+      open.push(ni, ng + h * 1.15);
     }
   }
   if (seen[goal] !== stamp) return null;

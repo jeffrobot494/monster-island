@@ -1,24 +1,26 @@
+// The core simulation: entities, the game clock, movement, the tick. Systems live in village.ts, monster-ai.ts,
+// combat.ts, champion.ts, favor.ts, vision.ts; this file owns state and the per-tick order.
 import { Rng, hashSeed } from './rng';
-import { DUSK_TICK, TICKS_PER_DAY, timeInfo, type TimeInfo } from './time';
+import { DAY_MS, HOUR_MS, MS_PER_REAL_TICK, baseLight, calDay, hourOf, isNightHour, type TimeInfo } from './clock';
 import { SIZE, TileGrid } from './world';
 import { generateIsland, type IslandLayout } from './island-gen';
 import { findPath, type CostTable } from './pathfind';
-import { CORE_SHAPES, CORE_EMITTERS } from './core-defs';
-import { makeName } from './names';
-import type { Atmosphere, ChronicleEvent, EmitterDef, Entity, Faction, ShapeDef, Stat } from './types';
+import { CORE_EMITTERS, CORE_SHAPES } from './core-defs';
+import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Entity, Faction, ShapeDef, Stat } from './types';
+import { populate } from './populate';
+import { stepHuman, villageHour, villageMidnight, foodTick } from './village';
+import { stepMonster, monsterMidnight } from './monster-ai';
+import { stepCorpse, stepBurning, stepAnimal } from './combat';
+import { stepChampion, championDawn, type Order } from './champion';
+import { judgment } from './favor';
+import { updateVision } from './vision';
 
-export const FACTIONS: Record<Faction, { count: number; maxHp: number; speed: number; strength: number; scale: number; cap: number; house: string; capacity: number }> = {
-  monster: { count: 6, maxHp: 100, speed: 2.2, strength: 10, scale: 1.4, cap: 12, house: 'hut', capacity: 2 },
-  human: { count: 14, maxHp: 40, speed: 2.6, strength: 3, scale: 0.9, cap: 28, house: 'cottage', capacity: 4 },
-};
+export const ENTITY_CAP = 600;
+export const MAX_REPATHS_PER_TICK = 8;
+/** Module behaviors must score above this to take an inhabitant away from its core AI for a tick. */
+export const CORE_BASELINE = 50;
+export const LOCKED_STATES = new Set(['captive', 'downed', 'bound', 'carry', 'sacrifice', 'dead']);
 
-export const CORE_BEHAVIORS = ['sleep', 'go-home', 'seek-food', 'wander'] as const;
-export const BERRY_RESTORES = 35;
-export const MUSHROOM_RESTORES = 25;
-export const MAX_REPATHS_PER_TICK = 30;
-export const ENTITY_CAP = 450;
-
-/** A behavior contributed by a module (wrapped by the module runtime for faults/attribution). */
 export interface BehaviorEntry {
   id: string;
   owner: string;
@@ -27,29 +29,36 @@ export interface BehaviorEntry {
   act(e: Entity): void;
 }
 
+export interface DamageInfo {
+  amount: number;
+  type: string;
+  targetKind: string;
+  targetFaction?: Faction;
+  sourceKind: string;
+  sourceFaction?: Faction;
+}
+
+export interface DeathInfo {
+  amount: number;
+  type: string;
+  zone?: string;
+  sourceId: number;
+  sourceKind: string;
+  deathType?: string;
+}
+
 export interface SimListener {
+  onTick?(): void;
+  onHour?(): void;
   onDawn?(): void;
   onDusk?(): void;
-  onTick?(): void;
+  onMidnight?(): void;
   onSpawn?(e: Entity): void;
-  onDeath?(e: Entity): void;
-  onEat?(e: Entity, food: Entity): void;
+  onDeath?(e: Entity, info: DeathInfo): void;
+  onDamage?(e: Entity, info: DeathInfo): void;
+  onSacrifice?(info: { faction: Faction; altar: 'village' | 'high'; victimKind: string; favor: number }): void;
+  onCapture?(monster: Entity, victim: Entity): void;
   onArrive?(e: Entity): void;
-}
-
-export interface FoodKind {
-  restores: number;
-  eatableBy?: Faction[];
-  owner: string;
-}
-
-export interface DayStats {
-  day: number;
-  births: number;
-  deaths: number;
-  ate: Record<Faction, number>;
-  slept: Record<Faction, number>;
-  behaviorTicks: Record<string, number>;
 }
 
 export type EmitterOp =
@@ -64,8 +73,19 @@ export interface Emote {
   speech: boolean;
 }
 
-function emptyDayStats(day: number): DayStats {
-  return { day, births: 0, deaths: 0, ate: { monster: 0, human: 0 }, slept: { monster: 0, human: 0 }, behaviorTicks: {} };
+export interface Alert {
+  kind: 'scream' | 'missing' | 'shofar' | 'judgment' | 'lair' | 'death' | 'info' | 'champion' | 'forbidden' | 'gameover';
+  text: string;
+  /** entity to point at (scream) */
+  ent?: number;
+  until?: number; // tick
+}
+
+export interface GameStats {
+  monsterKills: number;
+  villagerDeaths: number;
+  humanSacrifices: number;
+  monsterSacrifices: number;
 }
 
 export class Sim {
@@ -77,66 +97,107 @@ export class Sim {
   ents = new Map<number, Entity>();
   nextId = 1;
 
+  // clock
+  clockMs = 0;
+  msPerTick = MS_PER_REAL_TICK;
+  timescale = 1;
+  createdClock = 0;
+  lastRealMs = 0;
+
+  // visuals / defs
   shapes = new Map<string, ShapeDef>();
   emitters = new Map<string, EmitterDef>();
   defsVersion = 0;
   attached = new Map<number, Set<string>>();
   atmosphere: Atmosphere = {};
 
+  // modules
   behaviors: BehaviorEntry[] = [];
   ruleFns: { owner: string; fn: (kind: string, tile: string) => number | undefined }[] = [];
-  foodKinds = new Map<string, FoodKind>();
+  damageRules: { owner: string; fn: (info: DamageInfo) => number | undefined }[] = [];
   listeners: SimListener[] = [];
 
+  // paths
   costTables = new Map<string, CostTable>();
   private costVersion = -1;
   rulesVersion = 0;
   repathQueue: number[] = [];
   repathsThisTick = 0;
 
-  dayStats: DayStats = emptyDayStats(0);
-  history: DayStats[] = [];
+  // game state
+  explored = new Uint8Array(SIZE * SIZE);
+  exploredChanged: number[] = [];
+  stock = new Float32Array(SIZE * SIZE).fill(1);
+  food = 300;
+  foodCap = 500;
+  timber = 0;
+  fold = 6;
+  favor: Record<Faction, number> = { human: 0, monster: 0 };
+  prayer = '';
+  alarmUntil = 0;
+  alarmCooldownUntil = 0;
+  pendingCreations: CreationRequest[] = [];
+  domainHistory: Record<Faction, { night: number; domain: string }[]> = { human: [], monster: [] };
+  nightIndex = 0;
+  creations: CreationRecord[] = [];
+  missingSystems = ['Pain', 'Aging', 'Desire and birth', 'Cooking and the oven', 'Hunger', 'Sleep', 'Metalworking', 'Speech among monsters'];
+  championId = -1;
+  championPendingDawn = false;
+  /** the champion's current order */
+  order: Order | null = null;
+  dragging = -1;
+  gameOver: { winner: Faction; day: number } | null = null;
+  stats: GameStats = { monsterKills: 0, villagerDeaths: 0, humanSacrifices: 0, monsterSacrifices: 0 };
 
-  // per-tick output buffers, drained by the worker
-  out = { emitterOps: [] as EmitterOp[], emotes: [] as Emote[], events: [] as ChronicleEvent[], atmosphereDirty: false };
+  /** off in validator clones: no creation requests are queued */
+  judgmentEnabled = true;
+  /** dev: the champion cannot drop below 1 HP */
+  invincible = false;
+  /** dev: no fog of war */
+  revealAll = false;
+
+  /** cached per tick */
+  light = 1;
+
+  out = { emitterOps: [] as EmitterOp[], emotes: [] as Emote[], events: [] as ChronicleEvent[], alerts: [] as Alert[], atmosphereDirty: false };
 
   constructor(seed: number) {
     this.seed = seed >>> 0;
     this.rng = new Rng(hashSeed(this.seed, 'sim'));
     for (const [id, s] of Object.entries(CORE_SHAPES)) this.shapes.set(id, s);
     for (const [id, e] of Object.entries(CORE_EMITTERS)) this.emitters.set(id, e);
-    this.foodKinds.set('mushroom', { restores: MUSHROOM_RESTORES, owner: '' });
   }
 
   get time(): TimeInfo {
-    return timeInfo(this.tick);
+    const hour = hourOf(this.clockMs);
+    return {
+      tick: this.tick, clockMs: this.clockMs, day: this.day, hour, isNight: isNightHour(hour), msPerTick: this.msPerTick, light: this.light,
+    };
   }
 
-  /** Create a fresh island from the seed. */
-  generate() {
+  get day(): number {
+    return calDay(this.clockMs) - calDay(this.createdClock) + 1;
+  }
+
+  get hour(): number {
+    return hourOf(this.clockMs);
+  }
+
+  computeLight(): number {
+    const L = baseLight(this.hour);
+    const a = this.atmosphere;
+    return Math.max(0, Math.min(1, L * (1 - (a.darkness ?? 0)) + (a.light ?? 0) * (1 - L)));
+  }
+
+  /** Create a fresh island. clockMs is local wall time (see clock.ts). */
+  generate(clockMs: number, timescale = 1) {
+    this.clockMs = this.createdClock = clockMs;
+    this.timescale = timescale;
+    this.msPerTick = MS_PER_REAL_TICK * timescale;
     this.layout = generateIsland(this.seed, this.grid);
-    const L = this.layout;
-    this.spawn({ kind: 'shrine', x: L.shrine.x + 0.5, z: L.shrine.z + 0.5, shape: 'shrine' });
-    for (const b of L.bushes) {
-      const e = this.spawn({ kind: 'berry-bush', x: b.x + 0.5, z: b.z + 0.5, shape: 'berry-bush-3' });
-      e.berries = 3;
-      e.growAt = this.tick + 300;
-    }
-    const houses: Record<Faction, Entity[]> = { monster: [], human: [] };
-    for (const [faction, spots] of [['monster', L.huts], ['human', L.cottages]] as const) {
-      const F = FACTIONS[faction];
-      for (const p of spots) {
-        const h = this.spawn({ kind: 'house', x: p.x + 0.5, z: p.z + 0.5, shape: F.house });
-        h.faction = faction;
-        h.capacity = F.capacity;
-        h.yaw = this.rng.next() * Math.PI * 2;
-        houses[faction].push(h);
-      }
-      for (let k = 0; k < F.count; k++) {
-        const home = houses[faction][k % houses[faction].length];
-        this.spawnInhabitant(faction, home);
-      }
-    }
+    populate(this);
+    this.light = this.computeLight();
+    updateVision(this, true);
     this.out.events.length = 0;
   }
 
@@ -145,35 +206,13 @@ export class Sim {
   spawn(o: { kind: string; x: number; z: number; shape: string; tint?: string; scale?: number; tags?: string[]; owner?: string }): Entity {
     const e: Entity = {
       id: this.nextId++, kind: o.kind, inhabitant: false, x: o.x, z: o.z, yaw: 0,
-      hp: 1, hunger: 0, base: { speed: 2, maxHp: 1, strength: 0, hungerRate: 0 }, mods: {},
-      homeId: -1, behavior: '', tags: [...(o.tags ?? [])], tagOwners: {}, shape: o.shape,
-      tint: o.tint ?? '#ffffff', scale: o.scale ?? 1, hidden: false, owner: o.owner ?? '',
-      path: null, want: null, idleUntil: 0, target: -1, targetSince: 0, suppressed: {}, data: {},
+      hp: 1, base: { speed: 1, maxHp: 1, strength: 1, sight: 1 }, mods: {}, level: 1, xp: 0,
+      state: '', stateUntil: 0, target: -1, tags: [...(o.tags ?? [])], tagOwners: {}, shape: o.shape,
+      tint: o.tint ?? '#ffffff', scale: o.scale ?? 1, lift: 0, roll: 0, squash: 1, hidden: false, owner: o.owner ?? '',
+      path: null, want: null, idleUntil: 0, data: {},
     };
     for (const t of e.tags) e.tagOwners[t] = e.owner;
     this.ents.set(e.id, e);
-    return e;
-  }
-
-  spawnInhabitant(faction: Faction, home: Entity, newborn = false): Entity {
-    const F = FACTIONS[faction];
-    const tint = faction === 'monster'
-      ? this.rng.pick(['#8e5bb5', '#5b9e6e', '#c0593f', '#4f7fbf', '#b58a3a', '#7a6a5a'])!
-      : this.rng.pick(['#d9a066', '#c47e57', '#8d5a3b', '#e3b98a', '#a8714a'])!;
-    const e = this.spawn({ kind: faction, x: home.x, z: home.z + 0.9, shape: faction, tint, scale: newborn ? F.scale * 0.75 : F.scale });
-    if (!this.walkableFor(faction, Math.floor(e.x), Math.floor(e.z))) {
-      e.z = home.z;
-    }
-    e.faction = faction;
-    e.inhabitant = true;
-    e.name = makeName(this.rng, faction);
-    e.base = { speed: F.speed, maxHp: F.maxHp, strength: F.strength, hungerRate: 1 };
-    e.hp = F.maxHp;
-    e.hunger = 20;
-    e.homeId = home.id;
-    e.behavior = 'wander';
-    e.yaw = this.rng.next() * Math.PI * 2;
-    for (const l of this.listeners) l.onSpawn?.(e);
     return e;
   }
 
@@ -184,21 +223,7 @@ export class Sim {
       for (const em of this.attached.get(e.id)!) this.out.emitterOps.push({ op: 'detach', ent: e.id, emitter: em });
       this.attached.delete(e.id);
     }
-    if (e.reservedBy !== undefined) {
-      const r = this.ents.get(e.reservedBy);
-      if (r && r.target === e.id) r.target = -1;
-    }
-  }
-
-  kill(e: Entity, cause: string) {
-    if (!e.inhabitant || !this.ents.has(e.id)) return;
-    for (const l of this.listeners) l.onDeath?.(e);
-    this.remove(e);
-    const g = this.spawn({ kind: 'gravestone', x: e.x, z: e.z, shape: 'gravestone' });
-    g.diedAt = this.tick;
-    g.name = e.name;
-    this.dayStats.deaths++;
-    this.log(`${e.name} the ${e.faction} died (${cause}).`, 2, 'core', 'death');
+    if (this.dragging === e.id) this.dragging = -1;
   }
 
   stat(e: Entity, s: Stat): number {
@@ -212,29 +237,56 @@ export class Sim {
       }
       v = v * mul + add;
     }
-    return Math.max(0, v);
+    return Math.max(s === 'maxHp' ? 1 : 0, v);
   }
 
-  inhabitants(faction?: Faction): Entity[] {
+  maxHp(e: Entity): number {
+    return this.stat(e, 'maxHp');
+  }
+
+  humans(): Entity[] {
     const out: Entity[] = [];
-    for (const e of this.ents.values()) if (e.inhabitant && (!faction || e.faction === faction)) out.push(e);
+    for (const e of this.ents.values()) if (e.kind === 'human') out.push(e);
     return out;
   }
 
-  /** Entity count toward the global cap (gravestones excluded). */
+  monsters(): Entity[] {
+    const out: Entity[] = [];
+    for (const e of this.ents.values()) if (e.kind === 'monster') out.push(e);
+    return out;
+  }
+
+  champion(): Entity | undefined {
+    const c = this.ents.get(this.championId);
+    return c && c.kind === 'human' ? c : undefined;
+  }
+
+  byRole(role: string): Entity | undefined {
+    for (const e of this.ents.values()) if (e.role === role) return e;
+    return undefined;
+  }
+
   entityCount(): number {
     let n = 0;
-    for (const e of this.ents.values()) if (e.kind !== 'gravestone') n++;
+    for (const e of this.ents.values()) if (e.kind !== 'blood') n++;
     return n;
   }
 
   log(text: string, importance = 1, source = 'core', kind?: string) {
-    const t = this.time;
-    this.out.events.push({ tick: t.tick, day: t.day, text, importance, source, kind });
+    this.out.events.push({ tick: this.tick, clockMs: this.clockMs, day: this.day, text, importance, source, kind });
+  }
+
+  alert(a: Alert) {
+    this.out.alerts.push(a);
   }
 
   emote(e: Entity, text: string, seconds: number, speech = false) {
     this.out.emotes.push({ ent: e.id, text, seconds, speech });
+  }
+
+  burst(emitter: string, x: number, z: number, y?: number) {
+    const ty = y ?? this.grid.height(Math.floor(x), Math.floor(z)) + 0.5;
+    this.out.emitterOps.push({ op: 'burst', emitter, x, y: ty, z });
   }
 
   attach(e: Entity, emitter: string) {
@@ -260,32 +312,48 @@ export class Sim {
 
   // ---------- movement & paths ----------
 
-  costsFor(kind: string): CostTable {
+  /** Movement class used for cost tables and rules.moveCost. */
+  moveKey(e: Entity): string {
+    if (e.monster) return `monster:${e.monster.archetype}`;
+    return e.kind;
+  }
+
+  costsFor(key: string): CostTable {
     const v = this.grid.defsVersion * 100000 + this.rulesVersion;
     if (v !== this.costVersion) {
       this.costTables.clear();
       this.costVersion = v;
     }
-    let t = this.costTables.get(kind);
+    let t = this.costTables.get(key);
     if (!t) {
       t = new Map();
+      const plain = key.split(':')[0];
+      const arch = key.startsWith('monster:') ? key.slice(8) : '';
+      const flies = arch === 'saraph';
+      const swims = arch === 'rahab';
       for (const [id, d] of this.grid.defs) {
         let blocked = false, best: number | undefined;
         for (const r of this.ruleFns) {
-          let c: number | undefined;
-          try {
-            c = r.fn(kind, id);
-          } catch {
-            c = undefined;
+          for (const k of plain === key ? [key] : [key, plain]) {
+            let c: number | undefined;
+            try {
+              c = r.fn(k, id);
+            } catch {
+              c = undefined;
+            }
+            if (typeof c !== 'number' || Number.isNaN(c) || c < 0) continue;
+            if (c === Infinity) blocked = true;
+            else if (best === undefined || c > best) best = c;
+            break;
           }
-          if (typeof c !== 'number' || Number.isNaN(c) || c < 0) continue;
-          if (c === Infinity) blocked = true;
-          else if (best === undefined || c > best) best = c;
         }
-        const base = d.walkable ? d.moveCost : Infinity;
+        let base = d.walkable ? d.moveCost : Infinity;
+        if (flies) base = id === 'deep-water' ? 2 : 1;
+        if (swims && id === 'shallow-water') base = 1.3;
+        if (plain === 'animal' && id === 'road') base = 3;
         t.set(id, blocked ? Infinity : best !== undefined ? Math.max(0.05, best) : base);
       }
-      this.costTables.set(kind, t);
+      this.costTables.set(key, t);
     }
     return t;
   }
@@ -295,35 +363,33 @@ export class Sim {
     for (const e of this.ents.values()) if (e.path) this.requeue(e);
   }
 
-  walkableFor(kind: string, x: number, z: number): boolean {
+  walkableFor(e: Entity | string, x: number, z: number): boolean {
+    x = Math.floor(x);
+    z = Math.floor(z);
     if (!this.grid.inBounds(x, z)) return false;
-    return isFinite(this.costsFor(kind).get(this.grid.get(x, z)) ?? Infinity);
+    const key = typeof e === 'string' ? e : this.moveKey(e);
+    return isFinite(this.costsFor(key).get(this.grid.get(x, z)) ?? Infinity);
   }
 
-  /** A tile changed type: requeue every path that crosses it. */
+  /** Nearest tile walkable for e within r of (x, z), or null. */
+  nearestWalkable(e: Entity | string, x: number, z: number, r = 4): { x: number; z: number } | null {
+    const cx = Math.floor(x), cz = Math.floor(z);
+    if (this.walkableFor(e, cx, cz)) return { x: cx, z: cz };
+    for (let d = 1; d <= r; d++) {
+      let best: { x: number; z: number } | null = null, bd = Infinity;
+      for (let dz = -d; dz <= d; dz++) for (let dx = -d; dx <= d; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== d) continue;
+        if (!this.walkableFor(e, cx + dx, cz + dz)) continue;
+        const dd = dx * dx + dz * dz;
+        if (dd < bd) { bd = dd; best = { x: cx + dx, z: cz + dz }; }
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
   tileChanged(i: number) {
     for (const e of this.ents.values()) if (e.path && e.path.pts.includes(i)) this.requeue(e);
-  }
-
-  /** Move an inhabitant standing on a tile it can't walk on to the nearest walkable tile. */
-  private unstrand(e: Entity) {
-    const cx = Math.floor(e.x), cz = Math.floor(e.z);
-    for (let r = 1; r <= 8; r++) {
-      let best: [number, number] | null = null, bd = Infinity;
-      for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        if (!this.walkableFor(e.kind, cx + dx, cz + dz)) continue;
-        const d = dx * dx + dz * dz;
-        if (d < bd) { bd = d; best = [cx + dx, cz + dz]; }
-      }
-      if (best) {
-        e.x = best[0] + 0.5;
-        e.z = best[1] + 0.5;
-        this.stop(e);
-        this.out.emitterOps.push({ op: 'burst', emitter: 'puff', x: e.x, y: this.grid.height(best[0], best[1]) + 0.3, z: e.z });
-        return;
-      }
-    }
   }
 
   requeue(e: Entity) {
@@ -332,12 +398,18 @@ export class Sim {
     if (!this.repathQueue.includes(e.id)) this.repathQueue.push(e.id);
   }
 
-  /** Path entity to a tile. Computes now if within the tick's budget, else queues. */
+  /** Path entity to a tile. Computes now if within the tick's budget, else queues. False if the goal is unwalkable. */
   goTo(e: Entity, gx: number, gz: number): boolean {
     gx = Math.floor(gx);
     gz = Math.floor(gz);
     if ((e.path && e.path.gx === gx && e.path.gz === gz) || (e.want && e.want.gx === gx && e.want.gz === gz)) return true;
-    if (!this.walkableFor(e.kind, gx, gz)) return false;
+    if (!this.walkableFor(e, gx, gz)) {
+      const n = this.nearestWalkable(e, gx, gz, 3);
+      if (!n) return false;
+      gx = n.x;
+      gz = n.z;
+      if ((e.path && e.path.gx === gx && e.path.gz === gz) || (e.want && e.want.gx === gx && e.want.gz === gz)) return true;
+    }
     if (this.repathsThisTick < MAX_REPATHS_PER_TICK) return this.computePath(e, gx, gz);
     e.want = { gx, gz };
     if (!this.repathQueue.includes(e.id)) this.repathQueue.push(e.id);
@@ -347,26 +419,14 @@ export class Sim {
   private computePath(e: Entity, gx: number, gz: number): boolean {
     this.repathsThisTick++;
     e.want = null;
-    const pts = findPath(this.grid, this.costsFor(e.kind), Math.floor(e.x), Math.floor(e.z), gx, gz);
+    const pts = findPath(this.grid, this.costsFor(this.moveKey(e)), Math.floor(e.x), Math.floor(e.z), gx, gz);
     if (!pts) {
       e.path = null;
-      this.onPathFailed(e);
+      e.idleUntil = this.tick + 10;
       return false;
     }
     e.path = { pts, i: 0, gx, gz };
     return true;
-  }
-
-  private onPathFailed(e: Entity) {
-    if (e.target >= 0) {
-      const f = this.ents.get(e.target);
-      if (f) {
-        f.reservedBy = -2;
-        f.reservedUntil = this.tick + 200;
-      }
-      e.target = -1;
-    }
-    e.idleUntil = this.tick + 10;
   }
 
   stop(e: Entity) {
@@ -383,9 +443,14 @@ export class Sim {
     }
   }
 
-  /** Straight-line step at e's speed, no pathing. */
-  moveToward(e: Entity, x: number, z: number) {
-    const step = this.stat(e, 'speed') / 10;
+  /** True while e is walking a path or waiting for one. */
+  moving(e: Entity): boolean {
+    return !!(e.path || e.want);
+  }
+
+  /** Straight-line step at speed (tiles/s), no pathing. */
+  moveToward(e: Entity, x: number, z: number, speed: number) {
+    const step = speed / 10;
     const dx = x - e.x, dz = z - e.z;
     const d = Math.hypot(dx, dz);
     if (d < 1e-6) return;
@@ -395,12 +460,13 @@ export class Sim {
     e.yaw = Math.atan2(dx, dz);
   }
 
-  private advancePath(e: Entity) {
+  /** Advance e along its path at `speed` tiles/s (terrain cost slows it). */
+  advancePath(e: Entity, speed: number) {
     const p = e.path;
     if (!p) return;
-    const costs = this.costsFor(e.kind);
+    const costs = this.costsFor(this.moveKey(e));
     const tileCost = costs.get(this.grid.get(Math.floor(e.x), Math.floor(e.z))) ?? 1;
-    let budget = this.stat(e, 'speed') / 10 / Math.min(4, Math.max(0.5, isFinite(tileCost) ? tileCost : 1));
+    let budget = speed / 10 / Math.min(3, Math.max(0.6, isFinite(tileCost) ? tileCost : 1));
     while (budget > 0 && p.i < p.pts.length) {
       const ti = p.pts[p.i];
       const tx = (ti % SIZE) + 0.5, tz = Math.floor(ti / SIZE) + 0.5;
@@ -421,322 +487,138 @@ export class Sim {
     if (p.i >= p.pts.length) {
       e.path = null;
       for (const l of this.listeners) l.onArrive?.(e);
-      this.onArriveCore(e);
     }
   }
 
-  // ---------- food ----------
-
-  isFood(f: Entity, eater: Entity): number {
-    if (f.kind === 'berry-bush') return (f.berries ?? 0) > 0 ? BERRY_RESTORES : 0;
-    const k = this.foodKinds.get(f.kind);
-    if (!k) return 0;
-    if (k.eatableBy && eater.faction && !k.eatableBy.includes(eater.faction)) return 0;
-    return k.restores;
+  dist(a: { x: number; z: number }, b: { x: number; z: number }): number {
+    return Math.hypot(a.x - b.x, a.z - b.z);
   }
 
-  private available(f: Entity, eater: Entity) {
-    if (f.reservedBy === undefined || f.reservedBy === eater.id) return true;
-    if ((f.reservedUntil ?? 0) <= this.tick) return true;
-    if (f.reservedBy >= 0) {
-      const r = this.ents.get(f.reservedBy);
-      if (!r || r.target !== f.id || r.behavior !== 'seek-food') return true;
-    }
-    return false;
-  }
+  // ---------- clock ----------
 
-  nearestFood(e: Entity, maxR: number): Entity | null {
-    let best: Entity | null = null, bd = maxR * maxR;
-    for (const f of this.ents.values()) {
-      if (f.inhabitant || !this.isFood(f, e) || !this.available(f, e)) continue;
-      const d = (f.x - e.x) ** 2 + (f.z - e.z) ** 2;
-      if (d <= bd) {
-        bd = d;
-        best = f;
-      }
-    }
-    return best;
-  }
-
-  feed(e: Entity, n: number) {
-    e.hunger = Math.max(0, Math.min(100, e.hunger - n));
-  }
-
-  private eat(e: Entity, f: Entity) {
-    const restores = this.isFood(f, e);
-    if (!restores) return;
-    this.feed(e, restores);
-    if (e.faction) this.dayStats.ate[e.faction]++;
-    if (f.kind === 'berry-bush') {
-      f.berries = (f.berries ?? 1) - 1;
-      f.shape = `berry-bush-${f.berries}`;
-      if (f.growAt === undefined || f.growAt < this.tick) f.growAt = this.tick + 300;
-      f.reservedBy = undefined;
-    }
-    for (const l of this.listeners) l.onEat?.(e, f);
-    if (f.kind !== 'berry-bush') this.remove(f);
-    this.emote(e, '😋', 1.5);
-  }
-
-  // ---------- behaviors ----------
-
-  home(e: Entity): Entity | undefined {
-    return this.ents.get(e.homeId);
-  }
-
-  atHome(e: Entity): boolean {
-    const h = this.home(e);
-    return !!h && Math.abs(e.x - h.x) < 0.8 && Math.abs(e.z - h.z) < 0.8;
-  }
-
-  isSuppressed(e: Entity, id: string) {
-    const u = e.suppressed[id];
-    if (u === undefined) return false;
-    if (u <= this.tick) {
-      delete e.suppressed[id];
-      return false;
-    }
-    return true;
-  }
-
-  private coreScore(e: Entity, id: string, t: TimeInfo): number {
-    switch (id) {
-      case 'sleep':
-        return t.isNight && (e.behavior === 'sleep' || this.atHome(e)) ? 100 : 0;
-      case 'go-home':
-        return t.isNight && this.home(e) ? 90 : 0;
-      case 'seek-food':
-        if (e.hunger <= 30) return 0;
-        if (e.behavior === 'seek-food' && e.target >= 0 && this.ents.has(e.target)) return e.hunger;
-        return this.nearestFood(e, 10) ? e.hunger : 0;
-      case 'wander':
-        return 10;
-    }
-    return 0;
-  }
-
-  private chooseBehavior(e: Entity, t: TimeInfo) {
-    let bestId = '', best = -1;
-    let bestEntry: BehaviorEntry | null = null;
-    for (const id of CORE_BEHAVIORS) {
-      if (this.isSuppressed(e, id)) continue;
-      let s = this.coreScore(e, id, t);
-      if (id === e.behavior) s += 5;
-      if (s > best) {
-        best = s;
-        bestId = id;
-      }
-    }
-    for (const b of this.behaviors) {
-      if (this.isSuppressed(e, b.id) || !b.appliesTo(e)) continue;
-      let s = b.score(e);
-      s = Number.isFinite(s) ? Math.min(100, Math.max(0, s)) : 0;
-      if (b.id === e.behavior) s += 5;
-      if (s > best) {
-        best = s;
-        bestId = b.id;
-        bestEntry = b;
-      }
-    }
-    if (bestId !== e.behavior) this.leaveBehavior(e, e.behavior, bestId);
-    e.behavior = bestId || 'wander';
-    return bestEntry;
-  }
-
-  private leaveBehavior(e: Entity, from: string, _to: string) {
-    if (from === 'sleep') {
-      e.hidden = false;
-      const h = this.home(e);
-      if (h) this.updateHouseSleep(h);
-    }
-    if (from === 'seek-food' && e.target >= 0) {
-      const f = this.ents.get(e.target);
-      if (f && f.reservedBy === e.id) f.reservedBy = undefined;
-      e.target = -1;
-    }
-    if (from !== _to) this.stop(e);
-  }
-
-  private actCore(e: Entity, id: string, t: TimeInfo) {
-    switch (id) {
-      case 'sleep': {
-        if (!e.hidden) {
-          e.hidden = true;
-          this.stop(e);
-          if (e.faction) this.dayStats.slept[e.faction]++;
-          const h = this.home(e);
-          if (h) {
-            e.x = h.x;
-            e.z = h.z;
-            this.updateHouseSleep(h);
-          }
-        }
-        if (e.hunger < 50 && t.tick % 30 === 0) e.hp = Math.min(this.stat(e, 'maxHp'), e.hp + 1);
+  /** Move the clock forward, firing hour/dawn/dusk/midnight for each boundary crossed, in order. */
+  advanceClock(ms: number, live = true) {
+    let left = ms;
+    while (left > 0) {
+      const toHour = HOUR_MS - (((this.clockMs % HOUR_MS) + HOUR_MS) % HOUR_MS);
+      if (left < toHour) {
+        this.clockMs += left;
         break;
       }
-      case 'go-home': {
-        const h = this.home(e);
-        if (h && !e.path && !e.want) this.goTo(e, h.x, h.z);
-        break;
-      }
-      case 'seek-food': {
-        let f = e.target >= 0 ? this.ents.get(e.target) : undefined;
-        if (!f || !this.isFood(f, e)) {
-          f = this.nearestFood(e, 10) ?? undefined;
-          if (!f) return;
-          e.target = f.id;
-          e.targetSince = t.tick;
-          f.reservedBy = e.id;
-          f.reservedUntil = t.tick + 200;
-          if (!this.goTo(e, f.x, f.z)) return;
-        }
-        if (t.tick - e.targetSince > 200) {
-          // reservation lapsed: let it go
-          if (f.reservedBy === e.id) f.reservedBy = undefined;
-          e.target = -1;
-          this.stop(e);
-          return;
-        }
-        if (Math.hypot(f.x - e.x, f.z - e.z) < 0.9) {
-          this.stop(e);
-          this.eat(e, f);
-          e.target = -1;
-        } else if (!e.path && !e.want) {
-          this.goTo(e, f.x, f.z);
-        }
-        break;
-      }
-      case 'wander': {
-        if (e.path || e.want || e.idleUntil > t.tick) return;
-        const h = this.home(e);
-        const cx = h ? h.x : e.x, cz = h ? h.z : e.z;
-        for (let k = 0; k < 6; k++) {
-          const x = Math.floor(cx + this.rng.int(-6, 6)), z = Math.floor(cz + this.rng.int(-6, 6));
-          if (this.walkableFor(e.kind, x, z) && this.goTo(e, x, z)) break;
-        }
-        e.idleUntil = t.tick + this.rng.int(5, 40);
-        break;
-      }
+      this.clockMs += toHour;
+      left -= toHour;
+      this.onHourBoundary(live);
     }
   }
 
-  private onArriveCore(e: Entity) {
-    if (e.behavior === 'wander') e.idleUntil = this.tick + this.rng.int(10, 60);
+  private onHourBoundary(live: boolean) {
+    const h = Math.round(hourOf(this.clockMs)) % 24;
+    if (h === 0) this.midnight();
+    villageHour(this);
+    if (live) for (const l of this.listeners) l.onHour?.();
+    if (h === 6) {
+      championDawn(this);
+      if (live) for (const l of this.listeners) l.onDawn?.();
+    }
+    if (h === 18 && live) for (const l of this.listeners) l.onDusk?.();
   }
 
-  updateHouseSleep(h: Entity) {
-    let sleepers = 0;
-    for (const e of this.ents.values()) if (e.inhabitant && e.homeId === h.id && e.hidden && e.behavior === 'sleep') sleepers++;
-    if (sleepers > 0) this.attach(h, 'zzz');
-    else this.detach(h, 'zzz');
-    const base = h.faction === 'monster' ? 'hut' : 'cottage';
-    const lit = sleepers > 0 && this.time.isNight;
-    h.shape = lit ? `${base}-lit` : base;
+  private midnight() {
+    this.nightIndex++;
+    judgment(this);
+    villageMidnight(this);
+    monsterMidnight(this);
+    for (const l of this.listeners) l.onMidnight?.();
   }
 
   // ---------- the tick ----------
 
   step() {
+    if (this.gameOver) return;
     this.tick++;
     this.repathsThisTick = 0;
-    const t = this.time;
-
-    if (t.dayTick === 0) this.dawn(t);
-    if (t.dayTick === DUSK_TICK) for (const l of this.listeners) l.onDusk?.();
-
-    // food growth
-    if (t.tick % 100 === 0) this.spawnMushroom();
-    for (const f of this.ents.values()) {
-      if (f.kind === 'berry-bush' && (f.berries ?? 0) < 3 && (f.growAt ?? 0) <= t.tick) {
-        f.berries = (f.berries ?? 0) + 1;
-        f.shape = `berry-bush-${f.berries}`;
-        f.growAt = t.tick + 300;
-      }
-    }
-
+    this.advanceClock(this.msPerTick);
+    this.light = this.computeLight();
     this.processRepaths();
+    foodTick(this);
 
-    const dying: Entity[] = [];
     for (const e of [...this.ents.values()]) {
       if (!this.ents.has(e.id)) continue;
-      if (!e.inhabitant) {
-        if (e.path || e.want) this.advancePath(e);
-        continue;
+      if (e.burnUntil !== undefined) stepBurning(this, e);
+      if (!this.ents.has(e.id)) continue;
+      switch (e.kind) {
+        case 'human':
+          if (e.id === this.championId) stepChampion(this, e);
+          else if (!this.moduleBehavior(e)) stepHuman(this, e);
+          break;
+        case 'monster':
+          if (!this.moduleBehavior(e)) stepMonster(this, e);
+          break;
+        case 'animal':
+          stepAnimal(this, e);
+          break;
+        case 'corpse':
+        case 'part':
+          stepCorpse(this, e);
+          break;
+        default:
+          if (e.owner && (e.path || e.want)) this.advancePath(e, this.stat(e, 'speed'));
       }
-      // needs
-      e.hunger = Math.min(100, e.hunger + this.stat(e, 'hungerRate') / 30);
-      if (e.hunger >= 100) e.hp -= 1 / 30;
-      const maxHp = this.stat(e, 'maxHp');
-      if (e.hp > maxHp) e.hp = maxHp;
-      if (e.hp <= 0) {
-        dying.push(e);
-        continue;
-      }
-      if (!e.path && !e.want && !e.hidden && !this.walkableFor(e.kind, Math.floor(e.x), Math.floor(e.z))) this.unstrand(e);
-      // behavior
-      const entry = this.chooseBehavior(e, t);
-      this.dayStats.behaviorTicks[e.behavior] = (this.dayStats.behaviorTicks[e.behavior] ?? 0) + 1;
-      if (entry) entry.act(e);
-      else this.actCore(e, e.behavior, t);
-      if (this.ents.has(e.id) && (e.path || e.want) && !e.hidden) this.advancePath(e);
     }
-    for (const e of dying) {
-      const by = e.harmedBy ?? '';
-      this.kill(e, e.hunger >= 100 && !by ? 'starvation' : by ? `wounds from ${by}` : 'wounds');
-    }
-
+    if (this.tick % 5 === 0) updateVision(this);
     for (const l of this.listeners) l.onTick?.();
+    this.checkGameOver();
   }
 
-  private dawn(t: TimeInfo) {
-    if (t.day > 0) {
-      this.history.push(this.dayStats);
-      if (this.history.length > 5) this.history.shift();
-    }
-    this.dayStats = emptyDayStats(t.day);
-    // gravestones fade after 3 days
-    for (const g of [...this.ents.values()]) {
-      if (g.kind === 'gravestone' && t.tick - (g.diedAt ?? 0) >= 3 * TICKS_PER_DAY) this.remove(g);
-    }
-    // births
-    for (const faction of ['monster', 'human'] as Faction[]) {
-      const pop = this.inhabitants(faction);
-      if (!pop.length) continue;
-      const avg = pop.reduce((s, e) => s + e.hunger, 0) / pop.length;
-      if (avg >= 40) continue;
-      let count = pop.length;
-      for (const h of this.ents.values()) {
-        if (h.kind !== 'house' || h.faction !== faction) continue;
-        if (count >= FACTIONS[faction].cap) break;
-        const residents = pop.filter((e) => e.homeId === h.id).length;
-        if (residents >= (h.capacity ?? 0)) continue;
-        if (!this.rng.chance(0.3)) continue;
-        const baby = this.spawnInhabitant(faction, h, true);
-        count++;
-        this.dayStats.births++;
-        this.log(`${baby.name} was born to the ${faction}s.`, 1, 'core', 'birth');
+  /** Let a module behavior take over an inhabitant for this tick. */
+  private moduleBehavior(e: Entity): boolean {
+    if (!this.behaviors.length || LOCKED_STATES.has(e.state)) return false;
+    let best: BehaviorEntry | null = null, bs = CORE_BASELINE;
+    for (const b of this.behaviors) {
+      if (!b.appliesTo(e)) continue;
+      let s = b.score(e);
+      s = Number.isFinite(s) ? Math.min(100, Math.max(0, s)) : 0;
+      if (s > bs) {
+        bs = s;
+        best = b;
       }
     }
-    for (const h of this.ents.values()) if (h.kind === 'house') this.updateHouseSleep(h);
-    for (const l of this.listeners) l.onDawn?.();
+    if (!best) {
+      if (e.state.startsWith('mod:')) {
+        e.state = '';
+        this.stop(e);
+      }
+      return false;
+    }
+    if (e.state !== `mod:${best.id}`) {
+      this.stop(e);
+      e.state = `mod:${best.id}`;
+    }
+    best.act(e);
+    if (this.ents.has(e.id) && (e.path || e.want)) this.advancePath(e, this.stat(e, 'speed'));
+    return true;
   }
 
-  private spawnMushroom() {
-    let n = 0;
-    for (const e of this.ents.values()) if (e.kind === 'mushroom') n++;
-    if (n >= 15) return;
-    for (let k = 0; k < 10; k++) {
-      const x = this.rng.int(0, SIZE - 1), z = this.rng.int(0, SIZE - 1);
-      if (this.grid.get(x, z) !== 'forest') continue;
-      this.spawn({ kind: 'mushroom', x: x + 0.5, z: z + 0.5, shape: 'mushroom' });
-      return;
+  checkGameOver() {
+    if (this.gameOver) return;
+    let humans = 0, monsters = 0;
+    for (const e of this.ents.values()) {
+      if (e.kind === 'human') humans++;
+      else if (e.kind === 'monster') monsters++;
+    }
+    if (monsters === 0 || humans === 0) {
+      this.gameOver = { winner: monsters === 0 ? 'human' : 'monster', day: this.day };
+      const text = monsters === 0 ? 'The last monster is dead. The island belongs to the humans.' : 'The last of the village is gone. The island belongs to the monsters.';
+      this.log(text, 3, 'core', 'gameover');
+      this.alert({ kind: 'gameover', text });
     }
   }
 
-  /** Drain chronicle/visual output accumulated since the last call. */
   drainOut() {
     const o = this.out;
-    this.out = { emitterOps: [], emotes: [], events: [], atmosphereDirty: false };
+    this.out = { emitterOps: [], emotes: [], events: [], alerts: [], atmosphereDirty: false };
     return o;
   }
 }
+
+export const DAY = DAY_MS;

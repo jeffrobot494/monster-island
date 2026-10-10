@@ -1,23 +1,38 @@
 import type { TileTypeDef } from './types';
 
-export const SIZE = 64;
+export const SIZE = 128;
 
 export const CORE_TILES: TileTypeDef[] = [
-  { id: 'deep-water', height: -0.6, walkable: false, moveCost: Infinity, color: '#2b5d8a' },
+  { id: 'deep-water', height: -0.6, walkable: false, moveCost: Infinity, color: '#1f4f7a' },
   { id: 'shallow-water', height: -0.3, walkable: false, moveCost: Infinity, color: '#3f86b8' },
-  { id: 'sand', height: 0.0, walkable: true, moveCost: 1.2, color: '#e6d39a' },
-  { id: 'grass', height: 0.2, walkable: true, moveCost: 1.0, color: '#7cba5a' },
-  { id: 'forest', height: 0.25, walkable: true, moveCost: 1.5, color: '#4d8a3e' },
-  { id: 'rock', height: 0.6, walkable: true, moveCost: 2.0, color: '#8c8a84' },
-  { id: 'bridge', height: 0.1, walkable: true, moveCost: 1.0, color: '#9b6b3f' },
+  { id: 'sand', height: 0.0, walkable: true, moveCost: 1.2, color: '#e3d3a0' },
+  { id: 'grass', height: 0.2, walkable: true, moveCost: 1.0, color: '#9db35a' },
+  { id: 'scrub', height: 0.2, walkable: true, moveCost: 1.1, color: '#b6a66a' },
+  { id: 'wheat', height: 0.2, walkable: true, moveCost: 1.0, color: '#e2c25a' },
+  { id: 'olive', height: 0.25, walkable: true, moveCost: 1.2, color: '#7f9a52' },
+  { id: 'vineyard', height: 0.25, walkable: true, moveCost: 1.2, color: '#8d8f3e' },
+  { id: 'cedar', height: 0.3, walkable: true, moveCost: 1.6, color: '#2f5a35' },
+  { id: 'rock', height: 0.6, walkable: true, moveCost: 2.0, color: '#9a9286' },
+  { id: 'wadi', height: 0.05, walkable: true, moveCost: 1.1, color: '#c9a877' },
+  { id: 'salt', height: 0.02, walkable: true, moveCost: 1.3, color: '#ece8dc' },
+  { id: 'marsh', height: 0.0, walkable: true, moveCost: 2.2, color: '#6f8a6a' },
+  { id: 'ruin-floor', height: 0.2, walkable: true, moveCost: 1.0, color: '#b8ab92' },
+  { id: 'road', height: 0.18, walkable: true, moveCost: 0.8, color: '#c8b48a' },
+  { id: 'wall', height: 1.2, walkable: false, moveCost: Infinity, color: '#a8865a' },
+  { id: 'shrine-floor', height: 0.6, walkable: true, moveCost: 1.0, color: '#d8ccb0' },
 ];
+
+/** Tiles whose surface height comes from the elevation map. */
+export const ELEV_TILES = new Set(['rock', 'shrine-floor']);
 
 /** Tile grid. Types are stored by id string per tile so module tile types survive registry changes. */
 export class TileGrid {
   readonly size = SIZE;
   types: string[];
-  /** extra elevation for rock tiles (0.6–1.5); 0 elsewhere */
+  /** extra elevation for rock/shrine tiles; 0 elsewhere */
   elev: Float32Array;
+  /** region index per tile (0–6; 255 = sea) */
+  region: Uint8Array;
   defs = new Map<string, TileTypeDef>();
   /** tile indices changed since the last drain */
   changed = new Set<number>();
@@ -27,6 +42,7 @@ export class TileGrid {
   constructor() {
     this.types = new Array(SIZE * SIZE).fill('deep-water');
     this.elev = new Float32Array(SIZE * SIZE);
+    this.region = new Uint8Array(SIZE * SIZE).fill(255);
     for (const d of CORE_TILES) this.defs.set(d.id, d);
   }
 
@@ -54,8 +70,14 @@ export class TileGrid {
     if (!this.inBounds(x, z)) return -0.6;
     const i = z * SIZE + x;
     const t = this.types[i];
-    if (t === 'rock') return Math.max(0.6, this.elev[i]);
+    if (ELEV_TILES.has(t)) return Math.max(this.def(t).height, this.elev[i]);
     return this.def(t).height;
+  }
+  regionAt(x: number, z: number): number {
+    x = Math.floor(x);
+    z = Math.floor(z);
+    if (!this.inBounds(x, z)) return 255;
+    return this.region[z * SIZE + x];
   }
   defineTile(def: TileTypeDef) {
     this.defs.set(def.id, def);
