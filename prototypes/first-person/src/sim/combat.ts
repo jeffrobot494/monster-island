@@ -4,6 +4,7 @@ import type { DeathType, DmgType, Entity, Zone } from './types';
 import { ARCH } from './monsters-gen';
 import { calDay } from './clock';
 import { onChampionDied } from './champion';
+import { dropSpears } from './spears';
 
 export const humanMaxHp = (level: number) => 60 + 20 * (level - 1);
 export function monsterMaxHp(m: Entity): number {
@@ -248,6 +249,7 @@ export function kill(sim: Sim, e: Entity, info: DeathInfo) {
 
   if (e.kind === 'monster') {
     sim.stats.monsterKills++;
+    if (e.monster!.alt) e.monster!.alt = 0; // a flyer killed in the air drops
     if (src?.kind === 'human') gainXp(sim, src, 50);
     const m = e.monster!;
     for (const nid of m.neighbors) {
@@ -261,6 +263,8 @@ export function kill(sim: Sim, e: Entity, info: DeathInfo) {
     sim.log(`${e.name} is dead${src?.kind === 'human' ? `, slain by ${src.name}` : ''}${deathType !== 'slain' ? ` (${DEATH_WORD[deathType]})` : ''}.`, 3, 'core', 'monster-death');
   } else if (e.kind === 'human') {
     sim.stats.villagerDeaths++;
+    dropSpears(sim, e);
+    if (e.shape === 'guard-bare') e.shape = 'guard';
     if (src?.kind === 'monster') gainXp(sim, src, 25);
     const how = src ? `${DEATH_VERB[deathType]} by ${src.name ?? src.kind}` : DEATH_VERB[deathType];
     const job = e.human!.job === 'champion' ? 'the champion' : e.human!.job;

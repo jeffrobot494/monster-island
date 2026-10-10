@@ -17,6 +17,7 @@ export const BODY: Record<string, Body> = {
   rahab: { r: 0.25, reach: 0.64, half: 0.54, height: 0.4 },
   anak: { r: 0.19, reach: 0.61, half: 0, height: 0.8 },
   reem: { r: 0.235, reach: 0.65, half: 0.31, height: 0.6 },
+  ziz: { r: 0.2, reach: 0.72, half: 0.2, height: 0.6 },
   tannin: { r: 0.25, reach: 0.72, half: 0.42, height: 0.4 },
   goat: { r: 0.13, reach: 0, half: 0.16, height: 0.4 },
   ox: { r: 0.22, reach: 0, half: 0.31, height: 0.65 },

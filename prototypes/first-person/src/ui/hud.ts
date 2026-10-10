@@ -108,6 +108,7 @@ export class HudView {
         row(keyLabel(b.dodge), 'dodge'),
         row(keyLabel(b.interact), 'bind · drag · drop · altar'),
         row(keyLabel(b.finish), 'finish a downed monster'),
+        row(keyLabel(b.throw), 'throw a spear (pick it up again after)'),
         row(keyLabel(b.torch), 'torch'),
         row(keyLabel(b.inspect), 'inspect'),
         row(keyLabel(b.map), 'map'),
@@ -142,10 +143,12 @@ export class HudView {
     const jm = Math.max(0, hud.judgmentInMs);
     const jmin = Math.floor(jm / 60_000), js = Math.floor((jm % 60_000) / 1000);
     const total = Math.max(1, hud.favor.human + hud.favor.monster);
+    const raid = hud.raid ? [h('div', { class: 'raid' }, 'RAID: the monsters are attacking the village')] : [];
     this.tl.replaceChildren(
       h('div', { class: 'clock' }, `${night ? '☾' : '☀'} Day ${hud.day} · ${fmtClock(hud.clockMs)}${hud.timescale !== GAME_TIMESCALE ? ` ×${hud.timescale}` : ''}`),
       h('div', { class: 'favor' }, h('span', { class: 'fh' }, `☀ ${hud.favor.human}`), h('span', { class: 'fbar' }, h('i', { style: `width:${(hud.favor.human / total) * 100}%` })), h('span', { class: 'fm' }, `${hud.favor.monster} ☾`)),
       h('div', { class: 'muted-l' }, `Judgment in ${jmin}:${String(js).padStart(2, '0')}`),
+      ...raid,
     );
     const slain = 6 - hud.monstersAlive;
     this.tr.replaceChildren(
@@ -161,6 +164,7 @@ export class HudView {
       this.hpI.style.width = `${(c.hp / c.maxHp) * 100}%`;
       this.xpI.style.width = `${(c.xp / c.xpNext) * 100}%`;
       const bits: string[] = [];
+      bits.push(`Spears ${c.spears}/${c.spearCap}`);
       if (c.dragging) bits.push(`Dragging ${c.dragging.name.split(' ')[0]} (${c.dragging.value} favor)`);
       if (c.torch) bits.push('Torch lit');
       if (winded) bits.push('Winded!');

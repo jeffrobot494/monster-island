@@ -2,7 +2,7 @@
 // envelopes. Positions are in meters (renderer space).
 export type SoundKind =
   | 'swing' | 'hit' | 'block' | 'step' | 'growl' | 'roar' | 'scream' | 'shofar' | 'judgment' | 'whiff' | 'hurt'
-  | 'burn' | 'bind' | 'offer';
+  | 'burn' | 'bind' | 'offer' | 'screech';
 
 interface Pos { x: number; y: number; z: number }
 
@@ -13,7 +13,6 @@ export class GameAudio {
   private amb!: GainNode;
   private noiseBuf!: AudioBuffer;
   private wind: { src: AudioBufferSourceNode; gain: GainNode; filt: BiquadFilterNode } | null = null;
-  private crickets: { gain: GainNode } | null = null;
   private surf: { gain: GainNode } | null = null;
   private fire: { panner: PannerNode; gain: GainNode } | null = null;
   volume = 0.8;
@@ -79,12 +78,11 @@ export class GameAudio {
     }
   }
 
-  /** Ambience mix: day wind, night crickets, surf near the shore (0..1 each). */
+  /** Ambience mix: day wind, surf near the shore (0..1 each). */
   ambience(night: number, shore: number, firePos: Pos | null) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     this.wind?.gain.gain.setTargetAtTime(0.05 + 0.08 * (1 - night), t, 0.5);
-    this.crickets?.gain.gain.setTargetAtTime(0.05 * night, t, 0.5);
     this.surf?.gain.gain.setTargetAtTime(0.12 * shore, t, 0.5);
     if (this.fire && firePos) {
       const p = this.fire.panner;
@@ -142,23 +140,6 @@ export class GameAudio {
     src.start();
     lfo.start();
     this.wind = { src, gain, filt };
-    // crickets: a 4.2 kHz sine gated by a fast square
-    const osc = c.createOscillator();
-    osc.frequency.value = 4200;
-    const gate = c.createGain();
-    gate.gain.value = 0;
-    const chirp = c.createOscillator();
-    chirp.type = 'square';
-    chirp.frequency.value = 14;
-    const chirpGain = c.createGain();
-    chirpGain.gain.value = 0.5;
-    chirp.connect(chirpGain).connect(gate.gain);
-    const cg = c.createGain();
-    cg.gain.value = 0;
-    osc.connect(gate).connect(cg).connect(this.amb);
-    osc.start();
-    chirp.start();
-    this.crickets = { gain: cg };
     // surf: noise through a lowpass with a slow swell
     const sn = this.noise(true);
     const sf = c.createBiquadFilter();
@@ -230,7 +211,7 @@ export class GameAudio {
     const c = this.ctx;
     if (!c || c.state !== 'running') return;
     const t = c.currentTime;
-    const out: AudioNode = p ? this.panner(p, kind === 'roar' ? 400 : kind === 'scream' ? 160 : 120, kind === 'roar' ? 10 : 4) : this.fx;
+    const out: AudioNode = p ? this.panner(p, kind === 'roar' || kind === 'screech' ? 400 : kind === 'scream' ? 160 : 120, kind === 'roar' || kind === 'screech' ? 10 : 4) : this.fx;
     const size = opts.size ?? 1;
     switch (kind) {
       case 'swing':
@@ -313,6 +294,30 @@ export class GameAudio {
         wob.start(t);
         o.stop(t + 0.85);
         wob.stop(t + 0.85);
+        break;
+      }
+      case 'screech': {
+        // a raptor's falling scream, from high up: it has seen someone
+        const o = c.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(2300, t);
+        o.frequency.exponentialRampToValueAtTime(900, t + 0.9);
+        const vib = c.createOscillator();
+        vib.frequency.value = 38;
+        const vg = c.createGain();
+        vg.gain.value = 60;
+        vib.connect(vg).connect(o.frequency);
+        const f = c.createBiquadFilter();
+        f.type = 'bandpass';
+        f.frequency.value = 1800;
+        f.Q.value = 1.2;
+        const g = c.createGain();
+        this.env(g, t, 0.05, 0.9, 0.9);
+        o.connect(f).connect(g).connect(out);
+        o.start(t);
+        vib.start(t);
+        o.stop(t + 1);
+        vib.stop(t + 1);
         break;
       }
       case 'roar': {

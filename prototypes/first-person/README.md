@@ -33,6 +33,7 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | C | dodge: a quick dash with a moment of invulnerability |
 | E | interact: bind a downed monster, drag a body, let go, open the altar, talk |
 | F | finish a downed monster |
+| R | throw a spear. Spears are real items: you carry up to 3, and a thrown one lies where it fell until someone picks it up (walk over it, or E). The village rack holds 6 more |
 | T | torch on/off (it takes your shield hand) |
 | Q | inspect what you're looking at |
 | V | first / third person camera (also the button at the bottom right) |

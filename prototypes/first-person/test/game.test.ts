@@ -157,7 +157,7 @@ describe('away resolver', () => {
     const run = () => {
       const sim = make(6).sim;
       const s = resolveAway(sim, DAY_MS, DAY_MS);
-      return { s, humans: sim.humans().length, night: sim.nightIndex, food: Math.round(sim.food), favor: sim.favor };
+      return { s, humans: sim.humans().length, night: sim.nightIndex, food: sim.food, favor: sim.favor };
     };
     const a = run(), b = run();
     expect(a).toEqual(b);

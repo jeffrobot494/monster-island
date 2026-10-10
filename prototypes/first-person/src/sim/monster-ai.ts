@@ -10,6 +10,7 @@ import { SIZE } from './world';
 import { M as MPT } from './ground';
 import { bodyR, frontPoint, heightM, reachT } from './body';
 import { cs, releaseOnChampion } from './champion';
+import { breachHouse, doorOf, houseBreached, occupants } from './village';
 
 const DOWNED_TICKS = 1200;
 
@@ -32,10 +33,63 @@ export function isEnraged(sim: Sim, m: Entity) {
   return m.monster!.enragedUntil > sim.clockMs;
 }
 
+/** Tonight every monster marches on the village. */
+export function raiding(sim: Sim) {
+  return sim.raidUntil > sim.clockMs;
+}
+
+/** Enraged or raiding: the walls are no protection. */
+function bold(sim: Sim, m: Entity) {
+  return isEnraged(sim, m) || raiding(sim);
+}
+
+// ---------- flight ----------
+
+/** Soaring height (m): high enough to look over the whole of a region. */
+export const CRUISE_M = 45;
+const CLIMB_M = 0.5; // per tick (5 m/s)
+const STOOP_M = 1.4; // per tick (14 m/s)
+
+export function canFly(m: Entity) {
+  return !!m.monster?.flies && m.zones?.sig?.state === 'ok';
+}
+
+const altOf = (m: Entity) => m.monster?.alt ?? 0;
+/** Too high to strike or grab. */
+const aloft = (m: Entity) => altOf(m) > 3;
+
+function targetAlt(sim: Sim, m: Entity): number {
+  const M = m.monster!;
+  if (!canFly(m)) return 0;
+  switch (m.state) {
+    case 'rest': case 'downed': case 'bound': case 'sacrifice': case 'feed': case 'batter': return 0;
+    case 'carry': return 7;
+    case 'fight': case 'stalk': case 'grab': case 'raid': {
+      // stoop on the quarry: lower the closer it is
+      const t = sim.ents.get(m.state === 'fight' || m.state === 'raid' ? m.target : M.prey);
+      if (!t) return m.state === 'raid' ? CRUISE_M : 0;
+      return Math.min(CRUISE_M, Math.max(0, (Math.hypot(t.x - m.x, t.z - m.z) - 1.2) * 7));
+    }
+  }
+  // coming home: glide down onto the lair
+  const dl = Math.hypot(m.x - M.lairX, m.z - M.lairZ);
+  if (m.state === 'return' || m.state === 'flee') return Math.min(CRUISE_M, Math.max(0, (dl - 0.8) * 9));
+  return CRUISE_M;
+}
+
+function updateAltitude(sim: Sim, m: Entity) {
+  const M = m.monster!;
+  if (!M.flies && !M.alt) return;
+  const a = M.alt ?? 0, want = targetAlt(sim, m);
+  // a crippled wing drops it out of the sky
+  const fall = !canFly(m) || m.state === 'downed' || m.state === 'bound' ? 3 : STOOP_M;
+  M.alt = want > a ? Math.min(want, a + CLIMB_M) : Math.max(want, a - fall);
+}
+
 /** Active hours (clock windows, widened by boldness) and the light rule (R8). */
 export function monsterActive(sim: Sim, m: Entity, hour = sim.hour, light = sim.light): boolean {
   const M = m.monster!;
-  if (isEnraged(sim, m)) return true;
+  if (isEnraged(sim, m) || raiding(sim)) return true;
   if (M.hours === 'night' && light < 0.3) return true;
   if (M.hours === 'day' && light <= 0.4) return false;
   return monsterWindows(sim, m).some(([a, b]) => inWindow(hour, a, b));
@@ -92,6 +146,8 @@ export function monsterSpeed(sim: Sim, m: Entity): number {
 }
 
 function sightOf(sim: Sim, m: Entity) {
+  // flyers soaring high see a long way: 320 m by day, 160 m by night
+  if (altOf(m) > 15) return (sim.light > 0.4 ? 40 : 20) * sim.stat(m, 'sight');
   const base = sim.light > 0.4 ? 10 : m.monster!.archetype === 'lilit' ? 10 : 7;
   return base * sim.stat(m, 'sight');
 }
@@ -136,7 +192,7 @@ export function insideWalls(sim: Sim, p: { x: number; z: number }, pad = 0.5) {
 
 function preyScore(sim: Sim, m: Entity, h: Entity): number {
   if (h.kind !== 'human' || h.hidden || h.state === 'captive' || h.carriedBy !== undefined) return -Infinity;
-  if (!isEnraged(sim, m) && insideWalls(sim, h, 1.5)) return -Infinity;
+  if (!bold(sim, m) && insideWalls(sim, h, 1.5)) return -Infinity;
   const isChamp = h.id === sim.championId;
   if (isChamp && h.state !== 'downed' && h.hp > sim.maxHp(h) * 0.4) return -Infinity;
   const d = Math.hypot(h.x - m.x, h.z - m.z);
@@ -182,6 +238,11 @@ function pickGround(sim: Sim, m: Entity): { x: number; z: number } {
 }
 
 export function stepMonster(sim: Sim, m: Entity) {
+  stepMonsterAI(sim, m);
+  if (sim.ents.has(m.id) && m.monster) updateAltitude(sim, m);
+}
+
+function stepMonsterAI(sim: Sim, m: Entity) {
   const M = m.monster!;
   const max = sim.maxHp(m);
   const champ = sim.champion();
@@ -212,8 +273,10 @@ export function stepMonster(sim: Sim, m: Entity) {
 
   // fighting: a current target (whoever attacked it), or the champion when close
   const t = m.target >= 0 ? sim.ents.get(m.target) : undefined;
-  if (t && t.kind === 'human' && t.state !== 'captive' && !t.hidden && Math.hypot(t.x - m.x, t.z - m.z) < 14 && (isEnraged(sim, m) || !insideWalls(sim, t, 1))) {
-    if (t.state === 'downed') {
+  // raiders don't chase a runaway across the island: they stay on the village
+  const strayed = !!t && raiding(sim) && Math.hypot(t.x - sim.layout.village.x, t.z - sim.layout.village.z) > sim.layout.wallRadius + 12;
+  if (t && !strayed && t.kind === 'human' && t.state !== 'captive' && !t.hidden && Math.hypot(t.x - m.x, t.z - m.z) < 14 && (bold(sim, m) || !insideWalls(sim, t, 1))) {
+    if (t.state === 'downed' && !raiding(sim)) {
       m.target = -1;
       M.prey = t.id;
       setState(sim, m, 'stalk');
@@ -228,9 +291,9 @@ export function stepMonster(sim: Sim, m: Entity) {
     }
   } else if (m.target >= 0) {
     m.target = -1;
-    if (m.state === 'fight') setState(sim, m, 'return');
+    if (m.state === 'fight') setState(sim, m, raiding(sim) ? 'raid' : 'return');
   }
-  if (champ && champ.state !== 'downed' && champ.state !== 'captive' && Math.hypot(champ.x - m.x, champ.z - m.z) < (m.state === 'rest' ? 3.5 : 5) && !['flee'].includes(m.state) && (isEnraged(sim, m) || !insideWalls(sim, champ, 1))) {
+  if (champ && champ.state !== 'downed' && champ.state !== 'captive' && Math.hypot(champ.x - m.x, champ.z - m.z) < (m.state === 'rest' ? 3.5 : 5) && !['flee'].includes(m.state) && (bold(sim, m) || !insideWalls(sim, champ, 1))) {
     m.target = champ.id;
     setState(sim, m, 'fight');
     return fight(sim, m, champ);
@@ -258,12 +321,16 @@ export function stepMonster(sim: Sim, m: Entity) {
     return;
   }
 
+  // the raid: every monster on the island comes for the village
+  if (raiding(sim)) return raid(sim, m);
+  if (m.state === 'raid' || m.state === 'batter') setState(sim, m, 'return');
+
   const active = monsterActive(sim, m) && (M.satedUntil ?? 0) <= sim.clockMs;
   // wounded monsters heal at the lair
   if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && m.hp < max && sim.tick % 10 === 0) heal(sim, m, (max * 0.1 * sim.msPerTick * 10) / HOUR_MS);
 
   // anak (and the hungry, after a kill) eat the dead
-  if ((M.archetype === 'anak' || sim.tick < M.feedAt) && sim.tick % 20 === 0 && m.state !== 'stalk' && m.state !== 'grab') {
+  if ((M.archetype === 'anak' || sim.tick < M.feedAt) && sim.tick % 20 === 0 && m.state !== 'stalk' && m.state !== 'grab' && !raiding(sim)) {
     const c = nearestCorpse(sim, m, M.archetype === 'anak' ? 10 : 2);
     if (c) {
       if (Math.hypot(c.x - m.x, c.z - m.z) < 1.5) return startFeed(sim, m, c);
@@ -307,7 +374,13 @@ export function stepMonster(sim: Sim, m: Entity) {
     }
     // prowl the territory
     m.state = 'prowl';
-    if (!sim.moving(m) && m.idleUntil < sim.tick) {
+    if (canFly(m) && !sim.moving(m)) {
+      // soar in wide circles over the territory
+      M.circle = (M.circle ?? sim.rng.next() * Math.PI * 2) + 0.7;
+      const r = 12 + sim.rng.next() * 14;
+      const n = sim.nearestWalkable(m, M.lairX + Math.cos(M.circle) * r, M.lairZ + Math.sin(M.circle) * r, 3);
+      if (n) sim.goTo(m, n.x + 0.5, n.z + 0.5);
+    } else if (!sim.moving(m) && m.idleUntil < sim.tick) {
       const a = sim.rng.next() * Math.PI * 2, r = 2 + sim.rng.next() * 10;
       const n = sim.nearestWalkable(m, M.lairX + Math.cos(a) * r, M.lairZ + Math.sin(a) * r, 3);
       if (n) sim.goTo(m, n.x, n.z);
@@ -317,7 +390,8 @@ export function stepMonster(sim: Sim, m: Entity) {
     // opportunistic grab of anyone wandering close
     if (sim.tick % 15 === 0) {
       const p = M.huntAt.length ? findPrey(sim, m) : null;
-      if (p && Math.hypot(p.x - m.x, p.z - m.z) < 7) {
+      if (p && Math.hypot(p.x - m.x, p.z - m.z) < (altOf(m) > 15 ? sightOf(sim, m) : 7)) {
+        if (altOf(m) > 15) screech(sim, m);
         M.huntAt.shift(); // an opportunistic grab spends one of today's hunts
         M.prey = p.id;
         M.huntUntil = sim.clockMs + Math.max(HOUR_MS, 60_000 * sim.timescale);
@@ -342,6 +416,128 @@ export function stepMonster(sim: Sim, m: Entity) {
   }
 }
 
+// ---------- the raid ----------
+
+export const RAID_CHANCE = 0.3;
+
+/** Each evening at 20:00 there is a 30 % chance the monsters raid the village until 05:00. */
+export function raidHour(sim: Sim, h: number) {
+  if (h === 20 && !raiding(sim) && !sim.gameOver && sim.monsters().length && sim.rng.chance(RAID_CHANCE)) startRaid(sim);
+  if (h === 5 && sim.raidUntil && !raiding(sim)) {
+    sim.raidUntil = 0;
+    if (sim.monsters().length) sim.log('Dawn grays the sky. The monsters slink back to their lairs.', 2, 'core', 'raid');
+  }
+}
+
+export function startRaid(sim: Sim, hours = 9) {
+  sim.raidUntil = sim.clockMs + hours * HOUR_MS;
+  for (const m of sim.monsters()) {
+    const M = m.monster!;
+    M.batterId = undefined;
+    M.respondTo = null;
+    if (['downed', 'bound', 'carry', 'sacrifice'].includes(m.state)) continue;
+    M.prey = -1;
+    m.target = -1;
+    sim.stop(m);
+    sim.sound('roar', m.x, m.z, m.scale);
+  }
+  sim.alert({ kind: 'shofar', text: 'Roars from every hill: tonight all the monsters are coming for the village!' });
+  sim.log('Night falls, and every monster on the island marches on the village.', 3, 'core', 'raid');
+}
+
+/** A flyer that spots prey from high up gives a scream before it stoops. */
+function screech(sim: Sim, m: Entity) {
+  const M = m.monster!;
+  if (sim.tick - M.roarAt < 100) return;
+  M.roarAt = sim.tick;
+  sim.sound('screech', m.x, m.z, m.scale);
+}
+
+const RAID_SIGHT = 13; // tiles: inside the fight check's 14-tile leash
+
+function raid(sim: Sim, m: Entity) {
+  const M = m.monster!;
+  const V = sim.layout.village;
+  if (m.state !== 'raid' && m.state !== 'batter') setState(sim, m, 'raid');
+  // anyone in the open close by: kill them
+  if (sim.tick % 5 === m.id % 5) {
+    let best: Entity | null = null, bd = RAID_SIGHT;
+    for (const h of sim.humans()) {
+      if (h.hidden || h.state === 'captive' || h.carriedBy !== undefined) continue;
+      const d = Math.hypot(h.x - m.x, h.z - m.z) + (h.id === sim.championId ? 4 : 0);
+      if (d < bd) { bd = d; best = h; }
+    }
+    if (best) {
+      M.batterId = undefined;
+      m.target = best.id;
+      setState(sim, m, 'fight');
+      return fight(sim, m, best);
+    }
+  }
+  if (m.state === 'batter') return batter(sim, m);
+  // march on the village
+  if (Math.hypot(m.x - V.x - 0.5, m.z - V.z - 0.5) > sim.layout.wallRadius + 1) {
+    const n = sim.nearestWalkable(m, V.x + 0.5, V.z + 0.5, 5);
+    if (n) go(sim, m, n.x + 0.5, n.z + 0.5, 50);
+    return;
+  }
+  // inside: break into a house with people hiding in it
+  let h = M.batterId !== undefined ? sim.ents.get(M.batterId) : undefined;
+  if (!h || houseBreached(sim, h) || !occupants(sim, h).length) {
+    const taken = new Set(sim.monsters().map((o) => (o !== m ? o.monster!.batterId : undefined)));
+    let bd = Infinity;
+    h = undefined;
+    for (const e of sim.ents.values()) {
+      if (e.role !== 'house' || houseBreached(sim, e) || !occupants(sim, e).length) continue;
+      const d = Math.hypot(e.x - m.x, e.z - m.z) + (taken.has(e.id) ? 6 : 0);
+      if (d < bd) { bd = d; h = e; }
+    }
+    M.batterId = h?.id;
+    sim.stop(m);
+  }
+  if (!h) {
+    // nobody left to find: prowl the lanes
+    if (!sim.moving(m) && m.idleUntil < sim.tick) {
+      const a = sim.rng.next() * Math.PI * 2, r = sim.rng.next() * sim.layout.wallRadius;
+      const n = sim.nearestWalkable(m, V.x + 0.5 + Math.cos(a) * r, V.z + 0.5 + Math.sin(a) * r, 3);
+      if (n) sim.goTo(m, n.x + 0.5, n.z + 0.5);
+      m.idleUntil = sim.tick + sim.rng.int(30, 120);
+    }
+    sim.advancePath(m, monsterSpeed(sim, m));
+    return;
+  }
+  const door = doorOf(sim, h);
+  if (Math.hypot(door.x - m.x, door.z - m.z) > 0.3 + bodyR(m)) {
+    if (!go(sim, m, door.x, door.z)) M.batterId = undefined;
+    return;
+  }
+  setState(sim, m, 'batter');
+  M.batterAt = sim.tick;
+}
+
+/** Hammer at a door until it gives. */
+function batter(sim: Sim, m: Entity) {
+  const M = m.monster!;
+  const h = M.batterId !== undefined ? sim.ents.get(M.batterId) : undefined;
+  if (!h || houseBreached(sim, h)) {
+    M.batterId = undefined;
+    return setState(sim, m, 'raid');
+  }
+  sim.stop(m);
+  m.yaw = Math.atan2(h.x - m.x, h.z - m.z);
+  const t = sim.tick - (M.batterAt ?? sim.tick);
+  if (t % 15 === 0) {
+    M.strikeAt = sim.tick;
+    sim.sound('hit', h.x, h.z, m.scale * 1.5);
+    sim.emote(m, '💥', 1);
+  }
+  if (t >= 80) {
+    breachHouse(sim, h);
+    M.batterId = undefined;
+    setState(sim, m, 'raid');
+  }
+}
+
 function startFlee(sim: Sim, m: Entity) {
   dropCarried(sim, m);
   setState(sim, m, 'flee');
@@ -361,6 +557,7 @@ function hunt(sim: Sim, m: Entity) {
       const p = findPrey(sim, m);
       if (p) {
         M.prey = p.id;
+        if (altOf(m) > 15) screech(sim, m);
         setState(sim, m, 'stalk');
         return;
       }
@@ -390,7 +587,7 @@ function hunt(sim: Sim, m: Entity) {
     setState(sim, m, 'fight');
     return;
   }
-  if (m.state !== 'grab' && d > reach) {
+  if (m.state !== 'grab' && (d > reach || aloft(m))) {
     m.state = 'stalk';
     const near = Math.hypot(prey.x - m.x, prey.z - m.z);
     if (near < 2 && sim.lineOk(m.x, m.z, prey.x, prey.z, sim.costsFor(sim.moveKey(m)), 99)) {
@@ -461,7 +658,7 @@ function carry(sim: Sim, m: Entity) {
   v.x = m.x;
   v.z = m.z;
   v.yaw = m.yaw;
-  v.lift = heightM(m) * 0.5; // meters (F13)
+  v.lift = heightM(m) * 0.5 + altOf(m); // meters (F13)
   const A = sim.layout.highAltar;
   const c = sim.champion();
   if (v.kind === 'human') {
@@ -603,7 +800,7 @@ function fight(sim: Sim, m: Entity, t: Entity) {
     return;
   }
   const stop = Math.max(bodyR(m) + bodyR(t) + 0.1 / MPT, reachT(m) * 0.8);
-  if (d <= hitR - 0.4 / MPT && sim.tick >= M.attackReadyAt) {
+  if (d <= hitR - 0.4 / MPT && sim.tick >= M.attackReadyAt && !aloft(m)) {
     sim.stop(m);
     M.windup = sim.tick;
     m.yaw = Math.atan2(t.x - m.x, t.z - m.z);

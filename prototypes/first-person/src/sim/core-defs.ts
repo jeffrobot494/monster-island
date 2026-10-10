@@ -31,8 +31,25 @@ const house = (lit: boolean): ShapeDef => ({
 
 export const CORE_SHAPES: Record<string, ShapeDef> = {
   ...MONSTER_SHAPES,
+  // a 2.4 m bronze-tipped spear lying along +z (on the ground or in flight)
+  spear: { parts: [
+    { prim: 'cylinder', size: [0.022, 1.0, 0.022], pos: [0, 0.02, -0.04], rot: [90, 0, 0], color: '#7a5634' },
+    { prim: 'cone', size: [0.045, 0.13, 0.045], pos: [0, 0.02, 0.52], rot: [90, 0, 0], color: '#d0a050', emissive: 0.08 },
+  ] },
+  // the same spear standing in the rack
+  'spear-up': { parts: [
+    { prim: 'cylinder', size: [0.022, 1.0, 0.022], pos: [0, 0.5, 0], rot: [0, 0, 4], color: '#7a5634' },
+    { prim: 'cone', size: [0.045, 0.13, 0.045], pos: [-0.04, 1.06, 0], rot: [0, 0, 4], color: '#d0a050', emissive: 0.08 },
+  ] },
+  'spear-rack': { parts: [
+    { prim: 'box', size: [0.06, 0.5, 0.06], pos: [0.55, 0.25, 0], color: '#5a3a20' },
+    { prim: 'box', size: [0.06, 0.5, 0.06], pos: [-0.55, 0.25, 0], color: '#5a3a20' },
+    { prim: 'box', size: [1.2, 0.05, 0.06], pos: [0, 0.46, 0], color: '#6a4a2a' },
+    { prim: 'box', size: [1.2, 0.04, 0.16], pos: [0, 0.03, 0], color: '#5a3a20' },
+  ] },
   human: body(),
   shepherd: body([{ prim: 'cylinder', size: [0.03, 0.8, 0.03], pos: [0.22, 0.4, 0.06], color: '#7a5a3a' }]),
+  'guard-bare': body([{ prim: 'cone', size: [0.25, 0.14, 0.25], pos: [0, 0.76, 0], color: '#a07040' }]),
   guard: body([
     { prim: 'cylinder', size: [0.03, 1.0, 0.03], pos: [0.22, 0.5, 0.08], color: '#6a4a2a' },
     { prim: 'cone', size: [0.06, 0.14, 0.06], pos: [0.22, 1.05, 0.08], color: '#c08a4a' },

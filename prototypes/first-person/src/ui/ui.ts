@@ -316,7 +316,7 @@ export class Ui {
         h('button', { class: 'btn wide danger', onclick: () => { if (confirm('Abandon this island and start a new one?')) this.cb.newIsland(); } }, 'New island'),
         this.devMode ? h('div', { class: 'dev' },
           h('h3', {}, 'Dev'),
-          ...[['crown', 'New champion now (F8)'], ['kill-champion', 'Kill the champion'], ['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['install-war-hounds', 'Install war-hounds'], ['install-poison-fog', 'Install poison fog'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
+          ...[['crown', 'New champion now (F8)'], ['kill-champion', 'Kill the champion'], ['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['raid', 'Start a raid now'], ['install-war-hounds', 'Install war-hounds'], ['install-poison-fog', 'Install poison fog'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
       );
     }
     body.scrollTop = scroll;

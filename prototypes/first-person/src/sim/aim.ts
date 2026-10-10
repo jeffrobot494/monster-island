@@ -8,7 +8,7 @@ export type Plan = 'biped' | 'quad' | 'serpent';
 
 export function planFor(arch: string): Plan {
   if (arch === 'reem' || arch === 'rahab' || arch === 'goat' || arch === 'ox') return 'quad';
-  if (arch === 'saraph' || arch === 'tannin') return 'serpent';
+  if (arch === 'saraph' || arch === 'tannin' || arch === 'ziz') return 'serpent';
   return 'biped';
 }
 
@@ -31,7 +31,7 @@ export function zoneFor(arch: string, h: number, s: number, f: number): Zone {
     if (h < 0.4) return f > 0 ? side('armL', 'armR') : side('legL', 'legR');
     return 'torso';
   }
-  if (arch === 'saraph' && h > 0.6 && Math.abs(s) > 0.5) return 'sig'; // wings
+  if ((arch === 'saraph' || arch === 'ziz') && h > 0.6 && Math.abs(s) > 0.5) return 'sig'; // wings
   if (f > 0.6) return 'head';
   if (f < -0.5) return side('legL', 'legR'); // the tail
   if (arch === 'tannin' && h > 0.5) return 'sig'; // coils

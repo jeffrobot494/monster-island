@@ -16,6 +16,8 @@ import { Ground } from './ground';
 import { bodyR } from './body';
 import { judgment } from './favor';
 import { updateVision } from './vision';
+import { stepSpear } from './spears';
+import { raidHour } from './monster-ai';
 
 export const ENTITY_CAP = 600;
 export const MAX_REPATHS_PER_TICK = 4;
@@ -149,6 +151,8 @@ export class Sim {
   prayer = '';
   alarmUntil = 0;
   alarmCooldownUntil = 0;
+  /** clockMs the current raid on the village ends (0 = none); rolled each evening */
+  raidUntil = 0;
   pendingCreations: CreationRequest[] = [];
   domainHistory: Record<Faction, { night: number; domain: string }[]> = { human: [], monster: [] };
   nightIndex = 0;
@@ -644,6 +648,7 @@ export class Sim {
       if (live) for (const l of this.listeners) l.onDawn?.();
     }
     if (h === 18 && live) for (const l of this.listeners) l.onDusk?.();
+    if (live) raidHour(this, h);
     this.checkGameOver();
   }
 
@@ -693,6 +698,9 @@ export class Sim {
         case 'part':
           stepCorpse(this, e);
           break;
+        case 'spear':
+          stepSpear(this, e);
+          break;
         default:
           if (e.owner && (e.path || e.want)) this.advancePath(e, this.stat(e, 'speed'));
       }
@@ -713,7 +721,7 @@ export class Sim {
     const cells = new Map<number, Entity[]>();
     const list: Entity[] = [];
     for (const e of this.ents.values()) {
-      if (!e.inhabitant || e.hidden || e.carriedBy !== undefined || LOCKED_STATES.has(e.state) || e.state === 'sleep') continue;
+      if (!e.inhabitant || e.hidden || e.carriedBy !== undefined || LOCKED_STATES.has(e.state) || e.state === 'sleep' || (e.monster?.alt ?? 0) > 3) continue;
       list.push(e);
       const k = Math.floor(e.x / 2) * 1000 + Math.floor(e.z / 2);
       let c = cells.get(k);

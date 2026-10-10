@@ -10,6 +10,7 @@ import { initZones } from './combat';
 import { hourOf } from './clock';
 import { REGION_NAMES } from './island-gen';
 import { rollHunts } from './monster-ai';
+import { placeRack, setSpears } from './spears';
 
 export const JOB_LABEL: Record<Job, string> = {
   champion: 'champion', shepherd: 'shepherd', vinedresser: 'vinedresser', woodcutter: 'woodcutter', fisherman: 'fisherman', farmer: 'farmer', guard: 'guard',
@@ -53,8 +54,11 @@ export function populate(sim: Sim) {
     const home = houses[k % houses.length];
     spawnHuman(sim, job, home, job === 'guard' ? 2 : 1, nightShift.has(k) ? 'night' : 'day');
   });
+  for (const h of sim.humans()) if (h.human!.job === 'guard') setSpears(h, 1);
+  placeRack(sim);
   // the champion
   const champ = spawnHuman(sim, 'champion', houses[0], 3, 'day');
+  setSpears(champ, 1);
   champ.tags.push('champion');
   sim.championId = champ.id;
   champ.x = L.villageAltar.x + 0.5;

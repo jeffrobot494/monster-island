@@ -22,6 +22,9 @@ export class ViewModel {
   private ambient = new THREE.AmbientLight('#ffffff', 0.6);
   private sun = new THREE.DirectionalLight('#ffffff', 0.9);
   private swingT = -1;
+  private throwT = -1;
+  private sword!: THREE.Group;
+  private spear = new THREE.Group();
   private dodgeT = -1;
   private blockK = 0;
   private hurtT = -1;
@@ -55,6 +58,17 @@ export class ViewModel {
     swordPivot.add(grip, guard, blade, hook);
     swordPivot.rotation.x = -0.25;
     this.right.add(arm, sleeve, swordPivot);
+    this.sword = swordPivot;
+    // a spear, shown while throwing: held overhand along the forearm, point forward
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.5, 6), mat('#7a5634'));
+    shaft.rotation.x = Math.PI / 2;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), mat('#d0a050', 0.08));
+    tip.rotation.x = -Math.PI / 2;
+    tip.position.z = -0.82;
+    this.spear.add(shaft, tip);
+    this.spear.position.set(0, 0.05, -0.2);
+    this.spear.visible = false;
+    this.right.add(this.spear);
     this.right.position.set(0.34, -0.34, -0.5);
     this.right.scale.setScalar(0.8);
     this.camera.add(this.right);
@@ -96,6 +110,10 @@ export class ViewModel {
 
   swing() {
     this.swingT = 0;
+  }
+  throwSpear() {
+    this.throwT = 0;
+    this.swingT = -1;
   }
   dodge() {
     this.dodgeT = 0;
@@ -156,6 +174,29 @@ export class ViewModel {
           py += 0.04 * b;
         }
       }
+    }
+    // throw: draw the spear back over the shoulder, then cast it
+    this.spear.visible = this.throwT >= 0 && this.throwT < 0.55;
+    this.sword.visible = this.throwT < 0;
+    if (this.throwT >= 0) {
+      this.throwT += dt / 0.6;
+      const k = this.throwT;
+      if (k >= 1) this.throwT = -1;
+      else if (k < 0.4) {
+        const a = Math.sin((k / 0.4) * Math.PI * 0.5);
+        py += 0.22 * a;
+        pz += 0.22 * a;
+        px -= 0.04 * a;
+        rx = 0.35 * a;
+      } else {
+        const a = Math.min(1, (k - 0.4) / 0.2);
+        py += 0.22 - 0.3 * a;
+        pz += 0.22 - 0.5 * a;
+        rx = 0.35 - 0.7 * a;
+        if (k > 0.6) py -= 0.3 * ((k - 0.6) / 0.4) * (1 - (k - 0.6) / 0.4);
+      }
+      ry = -0.25;
+      rz = 0.2;
     }
     this.right.position.set(px, py, pz);
     this.right.rotation.set(rx - 0.15, ry + 0.25, rz - 0.2);

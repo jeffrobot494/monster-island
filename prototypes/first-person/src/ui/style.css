@@ -136,6 +136,8 @@ body { cursor: default; }
 .hud-tl { left: 18px; top: 16px; min-width: 250px; display: flex; flex-direction: column; gap: 5px; }
 .hud-tl .favor { display: flex; gap: 8px; align-items: center; }
 .hud-tl .muted-l { color: #c8b48a; font-size: 12px; }
+.hud-tl .raid { color: #ff6a50; font-weight: 700; font-size: 13px; margin-top: 4px; text-shadow: 0 0 6px #000; animation: raidpulse 1.4s ease-in-out infinite; }
+@keyframes raidpulse { 50% { opacity: 0.55; } }
 .hud-tr { right: 18px; top: 16px; display: flex; gap: 14px; align-items: center; }
 .hud-tr .low { color: #ff8a6a; }
 .hud-bl { left: 18px; bottom: 18px; width: 300px; display: flex; flex-direction: column; gap: 5px; }

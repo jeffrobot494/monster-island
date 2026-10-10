@@ -114,6 +114,14 @@ export interface MonsterInfo {
   windup: number; // tick the current wind-up started, -1 none
   attackReadyAt: number; // tick
   runFrom: { x: number; z: number } | null; // charge start (se'ir)
+  /** flyers: meters above the ground (0 = landed) */
+  alt?: number;
+  /** flyers: the bearing of the current soaring circle around the lair */
+  circle?: number;
+  /** tick a door-battering began (raids) */
+  batterAt?: number;
+  /** the house this raider is breaking into */
+  batterId?: number;
 }
 
 export interface HumanInfo {
@@ -130,6 +138,26 @@ export interface HumanInfo {
   screamAt: number;
   capturedAt: number;
   missingReported: boolean;
+  /** spears carried (champion and guards); real items, see spears.ts */
+  spears?: number;
+  /** the spear a guard is walking to pick up */
+  fetchSpear?: number;
+}
+
+/** A spear lying in the world, standing in the rack, or in flight. Heights and velocities in meters. */
+export interface SpearInfo {
+  st: 'rack' | 'ground' | 'flying';
+  /** absolute height (m) while flying */
+  y: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  thrower: number;
+  /** what the thrower aimed at, and where */
+  aimId: number;
+  aimZone: Zone | null;
+  /** ticks in the air */
+  t: number;
 }
 
 export interface CorpseInfo {
@@ -184,6 +212,7 @@ export interface Entity {
   human?: HumanInfo;
   corpse?: CorpseInfo;
   animal?: { species: 'goat' | 'ox'; region: number };
+  spear?: SpearInfo;
   carrying?: number;
   carriedBy?: number;
   burnUntil?: number;

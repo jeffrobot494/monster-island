@@ -8,6 +8,7 @@ import { JOB_TINT } from './core-defs';
 import { doorOf } from './village';
 import { M } from './ground';
 import { axisDist, axisPoint, bearingOff, bodyR, frontPoint } from './body';
+import { champThrow, takeSpear } from './spears';
 
 /** Internal orders: used by autopilot and by dev/test scripts. */
 export type Order =
@@ -22,6 +23,7 @@ export type Order =
 export type ChampInput =
   | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean }
   | { type: 'swing'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
+  | { type: 'throw'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
   | { type: 'dodge' }
   | { type: 'block'; on: boolean }
   | { type: 'interact'; id: number | null }
@@ -189,6 +191,12 @@ export function processInputs(sim: Sim) {
     if (reason !== 'player') continue;
     switch (i.type) {
       case 'swing': swing(sim, c, i); break;
+      case 'throw':
+        if (c.state === 'downed' || sim.dragging >= 0 || sim.tick < S.swingReady - 1) break;
+        S.swingReady = sim.tick + 8;
+        S.blocking = false;
+        sim.actionError = champThrow(sim, c, i);
+        break;
       case 'dodge':
         S.iframesUntil = sim.tick + 3;
         S.dodgeTick = sim.tick;
@@ -302,6 +310,10 @@ function interact(sim: Sim, c: Entity, id: number | null): string | null {
   }
   const t = id !== null ? sim.ents.get(id) : undefined;
   if (!t) return null;
+  if (t.kind === 'spear') {
+    if (!near(c, t)) return 'Too far away.';
+    return takeSpear(sim, c, t);
+  }
   if ((t.kind === 'monster' && (t.state === 'downed' || t.state === 'bound')) || t.kind === 'corpse') {
     if (!near(c, t)) return 'Too far away.';
     bind(sim, c, t);

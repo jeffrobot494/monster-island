@@ -1,7 +1,7 @@
 // Entity views (spec §7.5, F15, F17, F18): rigs for core creatures, ShapeDefs for everything else, a snapshot buffer
 // rendered 1.5 ticks behind the newest frame, and look-ray picking against oriented boxes.
 import * as THREE from 'three';
-import { ENT_STRIDE, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_HUMAN, F_INHABITANT, F_MONSTER, F_ANIMAL, F_TELEGRAPH, F_BOUND, F_HITTABLE, F_DRAGGED, O } from '../protocol';
+import { ENT_STRIDE, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_HUMAN, F_INHABITANT, F_MONSTER, F_ANIMAL, F_TELEGRAPH, F_BOUND, F_HITTABLE, F_DRAGGED, F_ITEM, O } from '../protocol';
 import type { ShapeDef } from '../sim/types';
 import { M } from '../sim/ground';
 import { SHAPE_M, BODY } from '../sim/body';
@@ -282,7 +282,7 @@ export class Entities {
     let best: { id: number; t: number; h: number; s: number; f: number } | null = null;
     for (const v of this.views.values()) {
       if (v.id === champId || !v.root.visible) continue;
-      const interesting = v.flags & (F_INHABITANT | F_CORPSE | F_HITTABLE);
+      const interesting = v.flags & (F_INHABITANT | F_CORPSE | F_HITTABLE | F_ITEM);
       if (!interesting) continue;
       const lying = (v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) !== 0;
       const box = this.boxOf(v, lying);
@@ -293,7 +293,7 @@ export class Entities {
     // things on the ground near your feet
     let near: { id: number; t: number; h: number; s: number; f: number } | null = null, bestAng = 25 * DEG;
     for (const v of this.views.values()) {
-      if (!(v.flags & (F_DOWNED | F_BOUND | F_CORPSE))) continue;
+      if (!(v.flags & (F_DOWNED | F_BOUND | F_CORPSE | F_ITEM))) continue;
       const dx = v.pos.x - eye.x, dy = v.pos.y + 0.3 - eye.y, dz = v.pos.z - eye.z;
       const d = Math.hypot(dx, dy, dz);
       const reach = 3 + this.boxOf(v, true).len;
@@ -305,6 +305,7 @@ export class Entities {
   }
 
   boxOf(v: View, lying = false) {
+    if (v.flags & F_ITEM) return v.shape === 'spear-up' ? { len: 0.15, wid: 0.15, hgt: 2.4 } : { len: 1.2, wid: 0.2, hgt: 0.3 };
     const arch = this.archOf(v);
     let b = (v.flags & F_HUMAN) ? { len: 0.25, wid: 0.3, hgt: 1.8 * v.scale } : arch ? hitBox(arch, v.scale) : { len: 0.4 * SHAPE_M * v.scale, wid: 0.4 * SHAPE_M * v.scale, hgt: 0.6 * SHAPE_M * v.scale };
     if (lying) b = { len: Math.max(b.len, b.hgt / 2), wid: Math.max(b.wid, b.hgt / 2), hgt: Math.min(b.hgt, 0.8) };

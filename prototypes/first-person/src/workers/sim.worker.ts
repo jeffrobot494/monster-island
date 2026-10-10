@@ -1,11 +1,12 @@
 import { harden, hostCreateBlobUrl, hostNow, hostPost, hostRevokeUrl, hostSetTimeout } from './harden';
 import { Island, importDefault, type SavedWorld } from '../sim/island';
-import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_MONSTER, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
+import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_ITEM, F_MONSTER, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
 import type { FaultInfo, VisibleEffect } from '../sim/module-runtime';
 import { TICKS_PER_SECOND, HOUR_MS, MS_PER_REAL_TICK, fmtClock } from '../sim/clock';
 import type { Entity } from '../sim/types';
 import { visibleMonsters, championSight } from '../sim/vision';
-import { telegraphRadius, monsterActive, windupProgress } from '../sim/monster-ai';
+import { telegraphRadius, monsterActive, windupProgress, raiding, startRaid } from '../sim/monster-ai';
+import { spearsOf, spearCap } from '../sim/spears';
 import { crown, issueOrder, cs, ctrlReason, isPlayerCtrl, champSpeedMul } from '../sim/champion';
 import { M as MPT } from '../sim/ground';
 import { frontPoint } from '../sim/body';
@@ -138,6 +139,7 @@ function titleOf(e: Entity): NameInfo | null {
     return { name: e.corpse.name ? `Body of ${e.corpse.name.split(' ')[0]}` : `Carcass of a ${ARCH[sp]?.display ?? sp}`, title: e.corpse.bones ? 'bones' : 'carcass' };
   }
   if (e.kind === 'animal') return { name: `Wild ${e.animal!.species}`, title: 'beast' };
+  if (e.kind === 'spear') return { name: 'Spear', title: e.spear?.st === 'rack' ? 'in the village rack' : 'bronze-tipped' };
   if (e.owner) {
     const m = island!.manifest.find((x) => x.id === e.owner);
     return { name: e.kind, title: m ? `a creation: ${m.title}` : 'a creation' };
@@ -168,8 +170,9 @@ function packEnts(): Float32Array {
     if (e.id === sim.championId) flags |= F_CHAMPION;
     if (e.id === sim.dragging) flags |= F_DRAGGED;
     if (e.tags.includes('hittable')) flags |= F_HITTABLE;
+    if (e.kind === 'spear' && e.spear?.st !== 'flying') flags |= F_ITEM;
     const core = e.kind === 'monster' ? e.monster!.archetype : e.kind === 'human' ? shapeForJob(e.human!.job) : e.kind === 'animal' ? e.animal!.species : e.kind === 'corpse' ? e.corpse?.species === 'human' ? null : e.corpse?.species : null;
-    if ((core && e.shape === core) || (e.kind === 'corpse' && ['human', 'shepherd', 'guard', 'champion'].includes(e.shape)) || (e.kind === 'corpse' && e.shape === e.corpse?.species)) flags |= F_CORE_SHAPE;
+    if ((core && (e.shape === core || (core === 'guard' && e.shape === 'guard-bare'))) || (e.kind === 'corpse' && ['human', 'shepherd', 'guard', 'champion'].includes(e.shape)) || (e.kind === 'corpse' && e.shape === e.corpse?.species)) flags |= F_CORE_SHAPE;
     const pp = prevPos.get(e.id);
     const moved = pp ? Math.hypot(e.x - pp.x, e.z - pp.z) : 0;
     const v = pp ? pp.v * 0.5 + moved * 0.5 : 0;
@@ -177,8 +180,8 @@ function packEnts(): Float32Array {
     let y = sim.ground.y(e.x, e.z);
     if (e.monster?.flies && e.zones?.sig?.state === 'ok') {
       const t = sim.grid.get(Math.floor(e.x), Math.floor(e.z));
-      if (t === 'wall' || t === 'house') y += 5;
-    }
+      y += Math.max(e.monster.alt ?? 0, t === 'wall' || t === 'house' ? 5 : 0);
+    } else if (e.monster?.alt) y += e.monster.alt; // falling out of the sky
     arr[o++] = e.id;
     arr[o++] = shapeLookup.get(e.shape) ?? -1;
     arr[o++] = e.x;
@@ -264,6 +267,7 @@ function sendHud() {
       id: c.id, name: c.name!, hp: c.hp, maxHp: sim.maxHp(c), level: c.level, xp: c.xp, xpNext: xpToNext(c), state: c.state, x: c.x, z: c.z,
       dragging, nearAltar: nearAltar(sim), downedTarget, weaponMul: cs(sim).weapon.mul,
       speedMul: champSpeedMul(sim), blocking: cs(sim).blocking, torch: cs(sim).torch, sight: championSight(sim, c),
+      spears: spearsOf(c), spearCap: spearCap(sim, c),
     } : null,
     championPendingDawn: sim.championPendingDawn,
     favor: { human: Math.round(sim.favor.human), monster: Math.round(sim.favor.monster) },
@@ -271,6 +275,7 @@ function sendHud() {
     pop: sim.humans().filter((h) => h.id !== sim.championId).length,
     monstersAlive: sim.monsters().length,
     alarm: sim.alarmUntil > sim.tick,
+    raid: raiding(sim),
     prayer: sim.prayer,
     pendingCreations: sim.pendingCreations,
     creations: sim.creations,
@@ -575,6 +580,12 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         inspectId = msg.id;
         if (island) sendInspect();
         break;
+      case 'devRaid': {
+        startRaid(island!.sim);
+        flushOut();
+        sendHud();
+        break;
+      }
       case 'devJudge': {
         const sim = island!.sim;
         sim.favor = { human: msg.human, monster: msg.monster };

@@ -86,7 +86,7 @@ export function updateVision(sim: Sim, initial = false) {
 }
 
 function archLabel(m: Entity) {
-  return ({ nephil: 'Nephil giant', saraph: 'fiery flying serpent', seir: 'goat-demon', lilit: 'night hag', rahab: 'marsh dragon', anak: 'tomb ghoul', reem: 'wild-ox demon', tannin: 'great serpent' } as Record<string, string>)[m.monster!.archetype] ?? 'monster';
+  return ({ nephil: 'Nephil giant', saraph: 'fiery flying serpent', seir: 'goat-demon', lilit: 'night hag', rahab: 'marsh dragon', anak: 'tomb ghoul', reem: 'wild-ox demon', tannin: 'great serpent', ziz: 'great bird' } as Record<string, string>)[m.monster!.archetype] ?? 'monster';
 }
 
 function regionLabel(sim: Sim, e: Entity) {

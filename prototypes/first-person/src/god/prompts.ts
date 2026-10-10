@@ -7,11 +7,13 @@ import type { CreationRequest, Faction } from '../sim/types';
 const WORLD = `The world: a small island in the Great Sea, in an Iron Age Levant like the Book of Judges. A walled village of about
 twenty humans (shepherds, vinedressers, woodcutters, fishermen, farmers, guards) and their champion, a bronze-armed hero
 the player controls. Six monsters out of scripture and legend (Nephilim, fiery flying serpents, goat-demons, night hags,
-marsh dragons, tomb ghouls, wild-ox demons, serpents) live alone in hidden lairs in six regions: Cedar Heights, the Olive
+marsh dragons, tomb ghouls, wild-ox demons, serpents, the great bird Ziz) live alone in hidden lairs in six regions: Cedar Heights, the Olive
 Terraces, the Salt Flats, the Wilderness of Stones, the Ruins of the Anakim, and the High Place at the island's center,
 where Dagon's altar stands. Monsters hunt villagers and carry them to the High Place to sacrifice them; the champion
 hunts monsters, and drags the crippled ones home to burn on the altar of the Most High. Game time runs fast: a game day
-is 8 real minutes (4 of daylight, 4 of night). The game ends when every monster or every villager is dead.
+is 8 real minutes (4 of daylight, 4 of night). Flyers soar high and spot people from afar. The champion and the guards
+throw spears: real items (entity kind 'spear') that must be picked up again; a rack of them stands in the village. On
+about three nights in ten, every monster raids the village together. The game ends when every monster or every villager is dead.
 
 Two rival gods shape this young, unfinished world. Each midnight, the god whose followers sacrificed more favor that day
 adds ONE permanent creation, like the days of Genesis: a new creature, weather, sky, land, plant, body, or law of nature.
@@ -222,7 +224,7 @@ shapeDef = { parts: [ { prim: 'box'|'sphere'|'cylinder'|'cone', size: [x,y,z], p
   a tile is 8 m ≈ 3.5 units. Give creatures 0.15–1.4 units of height so they read at eye level. Emitter size and speed
   are in the same units (size 0.1 ≈ a 22 cm puff).
 emitterDef = { color, color2?, size, rate, life, speed, spread (0..1), gravity, glow? }
-Core shapes: human, champion, guard, shepherd, goat, ox, lamb, house, bones, blood, nephil, saraph, seir, lilit, rahab, anak, reem, tannin.
+Core shapes: human, champion, guard, shepherd, goat, ox, lamb, house, bones, blood, nephil, saraph, seir, lilit, rahab, anak, reem, tannin, ziz, spear.
 Core emitters: blood, blood-big, fire, smoke, pillar, dark-pillar, whiff, dust, levelup, roar, torch.
 
 ## Craft notes

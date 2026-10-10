@@ -22,6 +22,7 @@ export const F_CORE_SHAPE = 512; // an inhabitant still wearing its core shape (
 export const F_ANIMAL = 1024;
 export const F_CORPSE = 2048;
 export const F_HUMAN = 4096;
+export const F_ITEM = 8192; // a spear (rack or ground): can be picked up
 
 export interface ModuleSource {
   id: string;
@@ -50,6 +51,7 @@ export type MainToSim =
   | { type: 'inspect'; id: number | null }
   | { type: 'devJudge'; human: number; monster: number }
   | { type: 'devSkipHours'; hours: number }
+  | { type: 'devRaid' }
   | { type: 'devScenario'; name: string }
   | { type: 'devCrown' }
   | { type: 'devKillChampion' };
@@ -112,6 +114,8 @@ export interface Hud {
     blocking: boolean;
     torch: boolean;
     sight: number;
+    spears: number;
+    spearCap: number;
   };
   championPendingDawn: boolean;
   favor: { human: number; monster: number };
@@ -121,6 +125,8 @@ export interface Hud {
   pop: number;
   monstersAlive: number;
   alarm: boolean;
+  /** the monsters are raiding the village tonight */
+  raid: boolean;
   prayer: string;
   pendingCreations: CreationRequest[];
   creations: CreationRecord[];

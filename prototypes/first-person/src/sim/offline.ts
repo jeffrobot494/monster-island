@@ -4,7 +4,7 @@ import type { Entity } from './types';
 import { DAY_MS, HOUR_MS } from './clock';
 import { SIZE } from './world';
 import { PRODUCTION, doorOf, onShift, pickSite, productionMul } from './village';
-import { boldness, isEnraged } from './monster-ai';
+import { boldness, isEnraged, raiding } from './monster-ai';
 import { applyDamage, firstName, gainXp, heal, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
 import { cs } from './champion';
@@ -112,8 +112,14 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
       sim.food = 0;
       for (const h of sim.humans()) if (h.id !== sim.championId) applyDamage(sim, h, 4 * f, { type: 'hunger', noRules: true });
     }
+    const raidBefore = sim.raidUntil;
     sim.advanceClock(step);
     left -= step;
+    // a raid began while you were away: every monster comes for the village once
+    if (raiding(sim) && sim.raidUntil !== raidBefore) {
+      sum.events.push('In the night, every monster on the island raided the village.');
+      for (const m of sim.monsters()) if (m.state !== 'bound') resolveHunt(sim, m, sum);
+    }
     sim.checkGameOver();
   }
 
@@ -163,7 +169,7 @@ function resolveHunt(sim: Sim, m: Entity, sum: AwaySummary) {
   const M = m.monster!;
   const V = sim.layout.village;
   const roam = Math.min(90, 30 + 4 * boldness(sim));
-  const raid = isEnraged(sim, m);
+  const raid = isEnraged(sim, m) || raiding(sim);
   const champ = sim.champion();
   const cands: { h: Entity; w: number; near: boolean }[] = [];
   for (const h of sim.humans()) {

@@ -212,7 +212,7 @@ function human(tint: string, shape: string, seed: number): Rig {
   r.plan = 'biped';
   r.height = 0.82;
   r.strideLen = 0.3;
-  const job = shape === 'champion' ? 'champion' : shape === 'guard' ? 'guard' : shape === 'shepherd' ? 'shepherd' : JOB_BY_TINT[tint.replace('#', '')] ?? 'farmer';
+  const job = shape === 'champion' ? 'champion' : shape === 'guard' ? 'guard' : shape === 'guard-bare' ? 'guard-bare' : shape === 'shepherd' ? 'shepherd' : JOB_BY_TINT[tint.replace('#', '')] ?? 'farmer';
   const B = r.body;
   r.hipL = limb(B, [0.055, 0.38, 0], 0.37, 0.085, '#6a4a30');
   r.hipR = limb(B, [-0.055, 0.38, 0], 0.37, 0.085, '#6a4a30');
@@ -223,7 +223,7 @@ function human(tint: string, shape: string, seed: number): Rig {
   mesh(B, 'taper', [0.26, 0.14, 0.17], [0, 0.34, 0], tint, [Math.PI, 0, 0]); // tunic skirt
   r.neck = joint(B, [0, 0.73, 0]);
   const head = mesh(r.neck, 'sphere', [0.13, 0.15, 0.14], [0, 0.07, 0.005], SKIN);
-  const hair = job === 'guard' || job === 'champion'
+  const hair = job === 'guard' || job === 'guard-bare' || job === 'champion'
     ? mesh(r.neck, 'cone', [0.15, 0.08, 0.15], [0, 0.15, 0], job === 'champion' ? '#b08a3a' : '#8a6a3a')
     : mesh(r.neck, 'sphere', [0.14, 0.08, 0.15], [0, 0.12, -0.01], ['#3a2a1a', '#2a1a10', '#5a3a1a', '#d8ccb0'][seed % 4]);
   mesh(r.neck, 'box', [0.1, 0.05, 0.03], [0, 0.0, 0.06], '#3a2a1a'); // beard
@@ -235,6 +235,7 @@ function human(tint: string, shape: string, seed: number): Rig {
   const hand = joint(r.shR, [0, -0.33, 0]);
   switch (job) {
     case 'shepherd': mesh(hand, 'cyl', [0.022, 0.8, 0.022], [0, 0.1, 0.06], '#7a5a3a', [0.2, 0, 0]); break;
+    case 'guard-bare': mesh(hand, 'box', [0.015, 0.02, 0.12], [0, -0.02, 0.07], '#b08a50'); break; // only a knife: his spear is thrown
     case 'guard': mesh(hand, 'cyl', [0.022, 1.0, 0.022], [0, 0.2, 0.05], '#6a4a2a'); mesh(hand, 'cone', [0.04, 0.1, 0.04], [0, 0.74, 0.05], '#c08a4a'); break;
     case 'woodcutter': mesh(hand, 'cyl', [0.02, 0.3, 0.02], [0, 0, 0.08], '#6a4a2a', [1.4, 0, 0]); mesh(hand, 'box', [0.02, 0.1, 0.07], [0, 0, 0.22], '#8a8070'); break;
     case 'farmer': case 'vinedresser': mesh(hand, 'box', [0.015, 0.02, 0.18], [0, -0.02, 0.1], '#9a8a6a'); break;
@@ -427,6 +428,27 @@ function monster(arch: string, tint: string): Rig {
       r.mark('armR', m2);
       return r;
     }
+    case 'ziz': {
+      // a great bird of prey: a short body, a huge wingspan, a hooked beak, talons
+      const r = serpent({ tint, segs: 3, radius: 0.15, segLen: 0.16, y: 0.5, head: [0.14, 0.14, 0.18], belly: '#d8ccb0' });
+      r.hover = 0.2;
+      EYE(r.neck!, 0.05, 0.07, 0.12, 0.03, '#ffd040');
+      mesh(r.neck!, 'cone', [0.06, 0.14, 0.06], [0, 0.0, 0.24], '#e0b040', [Math.PI / 2 + 0.3, 0, 0]);
+      const wl = joint(r.segs[0], [0.1, 0.06, -0.08]);
+      const wr = joint(r.segs[0], [-0.1, 0.06, -0.08]);
+      const m1 = mesh(wl, 'box', [0.95, 0.025, 0.34], [0.47, 0, 0], tint);
+      const m2 = mesh(wr, 'box', [0.95, 0.025, 0.34], [-0.47, 0, 0], tint);
+      const t1 = mesh(wl, 'box', [0.3, 0.02, 0.2], [0.9, 0, -0.08], '#3a3028');
+      const t2 = mesh(wr, 'box', [0.3, 0.02, 0.2], [-0.9, 0, -0.08], '#3a3028');
+      mesh(r.segs[2], 'box', [0.3, 0.02, 0.26], [0, 0, -0.2], tint); // tail fan
+      mesh(r.segs[1], 'cone', [0.05, 0.16, 0.05], [0.07, -0.18, 0], '#3a3020', [Math.PI, 0, 0]); // talons
+      mesh(r.segs[1], 'cone', [0.05, 0.16, 0.05], [-0.07, -0.18, 0], '#3a3020', [Math.PI, 0, 0]);
+      r.wings.push(wl, wr);
+      r.mark('sig', m1, m2, t1, t2);
+      r.mark('armL', m1, t1);
+      r.mark('armR', m2, t2);
+      return r;
+    }
     case 'tannin':
     default: {
       const r = serpent({ tint, segs: 9, radius: 0.12, segLen: 0.14, y: 0.12, head: [0.2, 0.14, 0.24], belly: '#5a7a4a' });
@@ -455,8 +477,8 @@ function animal(species: string, tint: string): Rig {
   return r;
 }
 
-const MONSTERS = new Set(['nephil', 'saraph', 'seir', 'lilit', 'rahab', 'anak', 'reem', 'tannin']);
-const HUMANS = new Set(['human', 'shepherd', 'guard', 'champion']);
+const MONSTERS = new Set(['nephil', 'saraph', 'seir', 'lilit', 'rahab', 'anak', 'reem', 'tannin', 'ziz']);
+const HUMANS = new Set(['human', 'shepherd', 'guard', 'guard-bare', 'champion']);
 const ANIMALS = new Set(['goat', 'ox', 'lamb']);
 
 export function hasRig(shape: string) {
@@ -481,6 +503,6 @@ export function buildRig(shape: string, tint: string, seed = 0): Rig {
 /** Which body plan the sim's aim-zone rules use for an archetype (spec §5.2). */
 export function planOf(shape: string): Plan {
   if (shape === 'reem' || shape === 'rahab') return 'quad';
-  if (shape === 'saraph' || shape === 'tannin') return 'serpent';
+  if (shape === 'saraph' || shape === 'tannin' || shape === 'ziz') return 'serpent';
   return 'biped';
 }

@@ -1,6 +1,7 @@
 // Save format (§15). Schema 2: incompatible with the monster-island prototype.
 import { Sim } from './sim';
 import { SIZE } from './world';
+import { ensureSpears } from './spears';
 import type { Atmosphere, CreationRecord, CreationRequest, Entity, Faction } from './types';
 
 export const SCHEMA_VERSION = 3;
@@ -47,6 +48,7 @@ export interface SavedCore {
   favor: Record<Faction, number>;
   prayer: string;
   alarmUntil: number;
+  raidUntil?: number;
   pendingCreations: CreationRequest[];
   domainHistory: Sim['domainHistory'];
   nightIndex: number;
@@ -93,6 +95,7 @@ export function serializeCore(sim: Sim): SavedCore {
     favor: { ...sim.favor },
     prayer: sim.prayer,
     alarmUntil: sim.alarmUntil,
+    raidUntil: sim.raidUntil,
     pendingCreations: structuredClone(sim.pendingCreations),
     domainHistory: structuredClone(sim.domainHistory),
     nightIndex: sim.nightIndex,
@@ -136,6 +139,7 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.favor = { ...s.favor };
   sim.prayer = s.prayer;
   sim.alarmUntil = s.alarmUntil;
+  sim.raidUntil = s.raidUntil ?? 0;
   sim.pendingCreations = structuredClone(s.pendingCreations);
   sim.domainHistory = structuredClone(s.domainHistory);
   sim.nightIndex = s.nightIndex;
@@ -152,6 +156,7 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.grid.changed.clear();
   sim.ground.rebuild();
   sim.grid.groundChanged.clear();
+  ensureSpears(sim);
   const S = (sim as any).champState;
   if (S) {
     S.combat = [];

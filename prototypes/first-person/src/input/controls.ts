@@ -1,16 +1,16 @@
 // Keyboard + mouse input with pointer lock and rebindable keys (spec §3).
 export type ActionName =
-  | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'inspect' | 'map'
+  | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'throw' | 'inspect' | 'map'
   | 'journal' | 'confirm' | 'camera';
 
 export const DEFAULT_BINDINGS: Record<ActionName, string> = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', jump: 'Space', dodge: 'KeyC', interact: 'KeyE',
-  finish: 'KeyF', torch: 'KeyT', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
+  finish: 'KeyF', torch: 'KeyT', throw: 'KeyR', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
 };
 
 export const ACTION_LABEL: Record<ActionName, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Strafe left', right: 'Strafe right', sprint: 'Sprint', jump: 'Jump', dodge: 'Dodge',
-  interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', inspect: 'Inspect',
+  interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', throw: 'Throw a spear', inspect: 'Inspect',
   map: 'Map', journal: 'Journal', confirm: 'Dismiss banner', camera: 'First / third person',
 };
 

@@ -1,4 +1,5 @@
 // Village sim (§5): shifts, work sites and drift, food, sleep, flight, guards, the shofar, growth.
+import { dropSpears, guardFetch, guardThrow, setSpears, spearsOf } from './spears';
 import { axisDist, bodyR } from './body';
 import type { Sim } from './sim';
 import type { Entity, Job } from './types';
@@ -162,11 +163,24 @@ export function stepHuman(sim: Sim, e: Entity) {
     const post = H.site >= 0 ? { x: (H.site % SIZE) + 0.5, z: ((H.site / SIZE) | 0) + 0.5 } : e;
     const m = nearestThreat(sim, e, 9);
     if (m && Math.hypot(m.x - V.x, m.z - V.z) < 14 && sim.alarmCooldownUntil <= sim.tick) soundShofar(sim, e, m);
+    // a spear thrown at whatever comes near the walls, before it closes
+    if (m && spearsOf(e) > 0 && sim.tick >= H.attackReadyAt && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius + 6) {
+      const d = Math.hypot(m.x - e.x, m.z - e.z);
+      if (d > 0.6 && d < 5.5 && guardThrow(sim, e, m)) {
+        sim.stop(e);
+        e.state = 'fight';
+        H.attackReadyAt = sim.tick + 15;
+        if (m.monster && m.target < 0) m.target = e.id;
+        return;
+      }
+    }
     if (m && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius + 3 && e.hp > sim.maxHp(e) * 0.3) {
       e.state = 'fight';
       guardFight(sim, e, m);
       return;
     }
+    // unarmed: fetch a spear (a lying one, else one from the rack)
+    if (guardFetch(sim, e)) return;
   }
 
   // flee from close monsters
@@ -186,6 +200,7 @@ export function stepHuman(sim: Sim, e: Entity) {
       e.state = 'idle';
       sim.stop(e);
     } else {
+      if (homeBreached(sim, e)) return scatter(sim, e);
       if (atHome(sim, e)) return enterHouse(sim, e, 'hide');
       const h = homeDoor(sim, e);
       if (h && !sim.moving(e)) sim.goTo(e, h.x, h.z);
@@ -215,6 +230,7 @@ export function stepHuman(sim: Sim, e: Entity) {
   // alarm: everyone near the village goes inside
   if (alarm && H.job !== 'guard') {
     if (e.hidden) return;
+    if (homeBreached(sim, e)) return scatter(sim, e);
     if (atHome(sim, e)) return enterHouse(sim, e, 'hide');
     e.state = 'go-home';
     const h = homeDoor(sim, e);
@@ -223,7 +239,9 @@ export function stepHuman(sim: Sim, e: Entity) {
     return;
   }
 
-  if (onShift(sim, e)) {
+  // the shofar (or a raid) calls every guard to the walls, on shift or not
+  const called = H.job === 'guard' && (alarm || sim.raidUntil > sim.clockMs);
+  if (onShift(sim, e) || called) {
     if (e.hidden) leaveHouse(sim, e);
     if (H.site < 0 || sim.stock[H.site] < 0.34 && H.job !== 'guard') {
       H.site = pickSite(sim, e);
@@ -257,10 +275,62 @@ export function stepHuman(sim: Sim, e: Entity) {
     if (sim.food > 0) heal(sim, e, (5 * sim.msPerTick) / HOUR_MS);
     return;
   }
+  if (homeBreached(sim, e)) return scatter(sim, e);
   if (atHome(sim, e)) return enterHouse(sim, e, 'sleep');
   e.state = 'go-home';
   const h = homeDoor(sim, e);
   if (h && !sim.moving(e)) sim.goTo(e, h.x, h.z);
+  sim.advancePath(e, humanSpeed(sim, e));
+}
+
+// ---------- raids: monsters break into houses ----------
+
+export function houseBreached(sim: Sim, h: Entity): boolean {
+  return ((h.data.core?.breachedUntil as number | undefined) ?? 0) > sim.tick;
+}
+
+function homeBreached(sim: Sim, e: Entity): boolean {
+  const h = home(sim, e);
+  return !!h && houseBreached(sim, h);
+}
+
+/** Who is hiding in a house. */
+export function occupants(sim: Sim, h: Entity): Entity[] {
+  return sim.humans().filter((e) => e.human!.homeId === h.id && e.hidden && e.id !== sim.championId);
+}
+
+/** A monster has broken the door in: everyone inside bolts, and the house is no shelter for a while. */
+export function breachHouse(sim: Sim, h: Entity) {
+  (h.data.core ??= {}).breachedUntil = sim.tick + 1200;
+  const out = occupants(sim, h);
+  for (const e of out) {
+    leaveHouse(sim, e);
+    e.state = 'flee';
+    e.stateUntil = sim.tick + 120;
+    sim.emote(e, '😱', 2);
+  }
+  updateHouseLight(sim, h);
+  if (out.length) sim.log(`A monster smashes into a house; ${out.length === 1 ? `${out[0].name} flees` : `${out.length} villagers flee`} into the night.`, 2, 'core', 'raid');
+}
+
+/** No shelter: run from the nearest monster, toward the champion when there is one. */
+function scatter(sim: Sim, e: Entity) {
+  e.state = 'flee';
+  if (!sim.moving(e) || sim.tick % 20 === e.id % 20) {
+    const m = nearestThreat(sim, e, 20);
+    const c = sim.champion();
+    let tx: number, tz: number;
+    if (c && c.state !== 'downed' && c.state !== 'captive' && (!m || Math.hypot(m.x - c.x, m.z - c.z) > 3)) {
+      tx = c.x; tz = c.z;
+    } else if (m) {
+      const dx = e.x - m.x, dz = e.z - m.z, d = Math.hypot(dx, dz) || 1;
+      tx = e.x + (dx / d) * 8; tz = e.z + (dz / d) * 8;
+    } else {
+      tx = e.x; tz = e.z;
+    }
+    const n = sim.nearestWalkable(e, tx, tz, 4);
+    if (n) sim.goTo(e, n.x, n.z);
+  }
   sim.advancePath(e, humanSpeed(sim, e));
 }
 
@@ -276,7 +346,8 @@ function wander(sim: Sim, e: Entity) {
 }
 
 function guardFight(sim: Sim, e: Entity, m: Entity) {
-  const reach = 2.6 / 8; // spear, meters → tiles (§2)
+  const armed = spearsOf(e) > 0;
+  const reach = (armed ? 2.6 : 1.4) / 8; // spear or knife, meters → tiles (§2)
   const d = axisDist(m, e.x, e.z) - bodyR(m);
   e.yaw = Math.atan2(m.x - e.x, m.z - e.z);
   if (d > reach) {
@@ -291,9 +362,10 @@ function guardFight(sim: Sim, e: Entity, m: Entity) {
   }
   sim.stop(e);
   const H = e.human!;
+  if ((m.monster?.alt ?? 0) > 3) return; // out of reach overhead
   if (sim.tick >= H.attackReadyAt) {
     H.attackReadyAt = sim.tick + 12;
-    applyDamage(sim, m, 6 * armFactor(e) * sim.stat(e, 'strength'), { type: 'pierce', sourceId: e.id });
+    applyDamage(sim, m, (armed ? 6 : 4) * armFactor(e) * sim.stat(e, 'strength'), { type: armed ? 'pierce' : 'slash', sourceId: e.id });
     if (m.monster && m.state !== 'downed' && m.state !== 'bound' && m.target < 0) m.target = e.id;
   }
 }
@@ -365,6 +437,9 @@ export function changeJob(sim: Sim, e: Entity, job: Job) {
   H.site = -1;
   e.shape = job === 'guard' ? 'guard' : job === 'shepherd' ? 'shepherd' : 'human';
   e.tint = ({ shepherd: '#e6dcc4', vinedresser: '#7a3a5a', woodcutter: '#6a4a2a', fisherman: '#3a6a8a', farmer: '#c8a050', guard: '#8a2a2a' } as Record<string, string>)[job] ?? e.tint;
+  // only guards (and the champion) bear spears: a new guard fetches one, a former guard leaves his on the ground
+  if (job === 'guard') setSpears(e, spearsOf(e));
+  else dropSpears(sim, e);
 }
 
 export function villageMidnight(sim: Sim) {

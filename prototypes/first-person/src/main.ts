@@ -12,7 +12,7 @@ import { CreationPipeline } from './god/pipeline';
 import { runValidation } from './god/validation-host';
 import type { SavedWorld } from './sim/island';
 import type { ChronicleEvent, CreationRecord, Zone } from './sim/types';
-import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_MONSTER, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
+import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
 import { GAME_TIMESCALE } from './sim/clock';
 import type { Alert } from './sim/sim';
 import type { CtrlReason } from './sim/champion';
@@ -226,6 +226,7 @@ async function boot() {
       else if (cmd === 'crown') sim.post({ type: 'devCrown' });
       else if (cmd === 'kill-champion') sim.post({ type: 'devKillChampion' });
       else if (cmd === 'skip-8') sim.post({ type: 'devSkipHours', hours: 8 });
+      else if (cmd === 'raid') sim.post({ type: 'devRaid' });
       else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
         map.reveal = !map.reveal;
@@ -651,6 +652,30 @@ async function boot() {
     input({ type: 'swing', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
   }
 
+  let throwReady = 0;
+  function throwSpear(now: number) {
+    const c = hud?.champion;
+    if (!c || ctrlReason !== 'player' || c.dragging || now < throwReady) return;
+    if (c.spears <= 0) {
+      ui.toast('No spears. Pick one up where it fell, or take one from the village rack.', 'info', 3);
+      return;
+    }
+    throwReady = now + 0.8;
+    // aim: whatever hittable thing is under the crosshair, out to 100 m
+    const { eye, dir } = renderer.lookRay();
+    const hit = renderer.ents.pick(eye, dir, 100, champId());
+    let targetId: number | null = null, zone: Zone | null = null;
+    const v = hit ? renderer.ents.views.get(hit.id) : undefined;
+    if (hit && v && (v.flags & (F_MONSTER | F_HITTABLE)) && !(v.flags & (F_DOWNED | F_BOUND))) {
+      targetId = hit.id;
+      const arch = renderer.ents.arch(hit.id);
+      zone = arch ? zoneFor(arch, hit.h, hit.s, hit.f) : null;
+    }
+    renderer.view.throwSpear();
+    audio.play('swing');
+    input({ type: 'throw', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
+  }
+
   function interact() {
     const dragging = !!hud?.champion?.dragging;
     if (lookingAtAltar() || (dragging && nearAltar())) {
@@ -693,6 +718,7 @@ async function boot() {
     if (v.flags & F_DOWNED && v.flags & F_MONSTER) return close ? `${E} Bind ${n} · ${F} Finish it` : `${n} is down: get closer`;
     if ((v.flags & F_BOUND) || (v.flags & F_CORPSE)) return close ? `${E} Drag ${n}` : '';
     if (v.flags & F_HUMAN && look.t < 6) return `${E} Talk to ${n.split(' ')[0]}`;
+    if (v.flags & F_ITEM && close) return c && c.spears >= c.spearCap ? `You carry all the spears you can (${c.spears})` : `${E} Take the spear (${c?.spears ?? 0}/${c?.spearCap ?? 3})`;
     return '';
   }
 
@@ -728,6 +754,7 @@ async function boot() {
         if (v && v.flags & F_DOWNED) input({ type: 'finish', id: look.id });
       }
       if (controls.take('torch')) input({ type: 'torch', on: !hud?.champion?.torch });
+      if (controls.take('throw')) throwSpear(now);
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);
     controls.clearFrame();
@@ -759,6 +786,7 @@ async function boot() {
       if (L) controller.solids.push({ x: L.villageAltar.x + 0.5, z: L.villageAltar.z + 0.5, r: 1.3 / M }, { x: L.highAltar.x + 0.5, z: L.highAltar.z + 0.5, r: 1.9 / M });
       renderer.ents.each((v) => {
         if (!(v.flags & F_MONSTER) || v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) return;
+        if (v.pos.y - renderer.terrain.y(v.pos.x / M, v.pos.z / M) > 3) return; // flying overhead
         const box = renderer.ents.boxOf(v);
         const r = box.wid / M;
         const half = Math.max(0, box.len - box.wid) / M;
