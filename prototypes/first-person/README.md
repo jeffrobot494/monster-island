@@ -4,7 +4,7 @@ A real-time, first-person sandbox for desktop, set on an Iron Age island. You ar
 monsters in their hidden lairs while they hunt your people. Each midnight, the god whose followers sacrificed more
 favor writes a new **gameplay module** that permanently changes the world. The god runs on Claude.
 
-This is the desktop, first-person version of `~/humans-and-monsters` (the top-down mobile build of the same design).
+This is the desktop, first-person version of [`../top-down`](../top-down) (the top-down mobile build of the same design).
 
 - Design: [`docs/design-doc.md`](docs/design-doc.md)
 - Tech spec, including the adversarial-review revisions in §14: [`docs/tech-spec.md`](docs/tech-spec.md). It inherits every rule of
