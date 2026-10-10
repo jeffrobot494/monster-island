@@ -50,7 +50,9 @@ export type MainToSim =
   | { type: 'inspect'; id: number | null }
   | { type: 'devJudge'; human: number; monster: number }
   | { type: 'devSkipHours'; hours: number }
-  | { type: 'devScenario'; name: string };
+  | { type: 'devScenario'; name: string }
+  | { type: 'devCrown' }
+  | { type: 'devKillChampion' };
 
 export interface VillagerInfo {
   id: number;

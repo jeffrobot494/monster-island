@@ -6,13 +6,13 @@ import { TICKS_PER_SECOND, HOUR_MS, fmtClock } from '../sim/clock';
 import type { Entity } from '../sim/types';
 import { visibleMonsters, championSight } from '../sim/vision';
 import { telegraphRadius, monsterActive, windupProgress } from '../sim/monster-ai';
-import { issueOrder, cs, ctrlReason, isPlayerCtrl, champSpeedMul } from '../sim/champion';
+import { crown, issueOrder, cs, ctrlReason, isPlayerCtrl, champSpeedMul } from '../sim/champion';
 import { M as MPT } from '../sim/ground';
 import { frontPoint } from '../sim/body';
 import { shapeForJob } from '../sim/populate';
 import { DAY_MS } from '../sim/clock';
 import { offerDragged, offerLamb, offerVillager, offeringValue, setPrayer, nearAltar, judgment } from '../sim/favor';
-import { xpToNext, firstName } from '../sim/combat';
+import { kill, xpToNext, firstName } from '../sim/combat';
 import { resolveAway } from '../sim/offline';
 import { ARCH } from '../sim/monsters-gen';
 import { REGION_NAMES } from '../sim/island-gen';
@@ -627,6 +627,30 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
           m.state = 'stalk';
         }
         sendFullState();
+        break;
+      }
+      case 'devCrown': {
+        // crown the next champion now instead of waiting for dawn
+        const sim = island!.sim;
+        if (!sim.championPendingDawn) sim.toast('Your champion is still alive.');
+        else {
+          crown(sim);
+          if (sim.championPendingDawn) sim.toast('No villager is free to take up the sword.');
+        }
+        flushOut();
+        sendFullState();
+        sendHud();
+        save('dev-crown');
+        break;
+      }
+      case 'devKillChampion': {
+        const sim = island!.sim;
+        const c = sim.champion();
+        if (c) kill(sim, c, { amount: c.hp, type: 'dev', sourceId: -1, sourceKind: 'none' });
+        flushOut();
+        sendFullState();
+        sendHud();
+        save('dev-kill');
         break;
       }
       case 'devSkipHours': {

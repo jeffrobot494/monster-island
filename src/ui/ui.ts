@@ -137,7 +137,7 @@ export class Ui {
       this.altarBtn.classList.toggle('glow', c.nearAltar || !!c.dragging);
     }
     this.fallen.classList.toggle('hidden', !hud.championPendingDawn || !!hud.gameOver);
-    if (hud.championPendingDawn) this.fallen.textContent = 'Your champion has fallen. A new champion will rise at dawn. (WASD + mouse: look around)';
+    if (hud.championPendingDawn) this.fallen.textContent = `Your champion has fallen. A new champion will rise at dawn. (WASD + mouse: look around${this.devMode ? ' · dev: F8 for a new champion now' : ''})`;
     if (this.altarOpen) this.renderAltar();
     if (!this.sheet.classList.contains('hidden') && (this.tab === 'book' || this.tab === 'god')) this.renderTab();
   }
@@ -316,7 +316,7 @@ export class Ui {
         h('button', { class: 'btn wide danger', onclick: () => { if (confirm('Abandon this island and start a new one?')) this.cb.newIsland(); } }, 'New island'),
         this.devMode ? h('div', { class: 'dev' },
           h('h3', {}, 'Dev'),
-          ...[['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['install-war-hounds', 'Install war-hounds'], ['install-poison-fog', 'Install poison fog'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
+          ...[['crown', 'New champion now (F8)'], ['kill-champion', 'Kill the champion'], ['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['install-war-hounds', 'Install war-hounds'], ['install-poison-fog', 'Install poison fog'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
       );
     }
     body.scrollTop = scroll;

@@ -221,6 +221,8 @@ async function boot() {
     dev: (cmd) => {
       if (cmd === 'judge-human') sim.post({ type: 'devJudge', human: 300, monster: 0 });
       else if (cmd === 'judge-monster') sim.post({ type: 'devJudge', human: 0, monster: 300 });
+      else if (cmd === 'crown') sim.post({ type: 'devCrown' });
+      else if (cmd === 'kill-champion') sim.post({ type: 'devKillChampion' });
       else if (cmd === 'skip-8') sim.post({ type: 'devSkipHours', hours: 8 });
       else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
@@ -230,6 +232,12 @@ async function boot() {
     },
     panelChanged: () => updateLockUi(),
   }, devMode);
+  // dev hotkey: F8 crowns the next champion now (no waiting for dawn)
+  if (devMode) window.addEventListener('keydown', (e) => {
+    if (e.code !== 'F8' || e.repeat) return;
+    e.preventDefault();
+    sim.post({ type: 'devCrown' });
+  });
   if (platform.warning) ui.toast(platform.warning, 'info', 10);
   ui.setChronicle(chronicle);
 

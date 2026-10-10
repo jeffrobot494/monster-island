@@ -16,6 +16,8 @@ import { SIZE } from '../src/sim/world';
 import { HOUR_MS } from '../src/sim/clock';
 import type { Entity } from '../src/sim/types';
 import { now, START } from './helpers';
+import { kill } from '../src/sim/combat';
+import { crown } from '../src/sim/champion';
 import { ChampionController, EYE_H } from '../src/input/controller';
 import type { Controls } from '../src/input/controls';
 
@@ -156,6 +158,26 @@ describe('poses and epochs', () => {
     feed(island, { type: 'pose', x: away.x, z: away.z, yaw: 0, pitch: 0, epoch: before, input: true });
     island.step();
     expect(Math.hypot(c.x - home.x, c.z - home.z)).toBeLessThan(0.5);
+  });
+});
+
+describe('dev: crown now', () => {
+  it('a fallen champion is replaced immediately, with a new epoch, instead of at dawn', () => {
+    const island = make(2);
+    const sim = island.sim;
+    const old = sim.champion()!;
+    kill(sim, old, { amount: old.hp, type: 'dev', sourceId: -1, sourceKind: 'none' });
+    expect(sim.championPendingDawn).toBe(true);
+    expect(sim.champion()).toBeFalsy();
+    const epoch = cs(sim).epoch;
+    crown(sim);
+    const c = sim.champion()!;
+    expect(c).toBeTruthy();
+    expect(c.id).not.toBe(old.id);
+    expect(sim.championPendingDawn).toBe(false);
+    expect(cs(sim).epoch).toBeGreaterThan(epoch);
+    for (let i = 0; i < 10; i++) island.step();
+    expect(sim.champion()!.id).toBe(c.id);
   });
 });
 
