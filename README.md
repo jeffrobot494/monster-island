@@ -1,4 +1,4 @@
-# Monster Game
+# Monster Island
 
 Prototypes of **Island Humans and Monsters**, a real-time sandbox in which a village and six monsters share an
 island, and each midnight a god (Claude) writes a new gameplay module that permanently changes the world.
@@ -35,5 +35,5 @@ are much slower across the Windows mount.
 
 ## History
 
-This repository was the original `monster-island` repo. Its earlier history is under `prototypes/monster-island/`;
+This repository started as the original `monster-island` prototype alone. Its earlier history is under `prototypes/monster-island/`;
 the other two prototypes were merged in with their full commit history.
