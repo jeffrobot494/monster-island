@@ -1,0 +1,103 @@
+# Island Humans and Monsters — first person
+
+A real-time, first-person sandbox for desktop, set on an Iron Age island. You are the village's champion: you hunt six
+monsters in their hidden lairs while they hunt your people. Each midnight, the god whose followers sacrificed more
+favor writes a new **gameplay module** that permanently changes the world. The god runs on Claude.
+
+This is the desktop, first-person version of `~/humans-and-monsters` (the top-down mobile build of the same design).
+
+- Design: [`docs/design-doc.md`](docs/design-doc.md)
+- Tech spec, including the adversarial-review revisions in §14: [`docs/tech-spec.md`](docs/tech-spec.md). It inherits every rule of
+  [`docs/base-spec.md`](docs/base-spec.md) that it doesn't change.
+
+## Run it
+
+```bash
+npm install
+dev/serve.sh            # Vite on :5201; the log prints a LAN token for the AI middleware
+# open http://localhost:5201/ in Chrome, Edge or Firefox on a desktop
+```
+
+The dev server spawns `claude -p` for each god call. If the CLI is missing, the game falls back to a manual god.
+
+## Controls
+
+| Input | Action |
+|---|---|
+| Mouse | look (click the game to capture the mouse) |
+| W A S D | move |
+| Shift | sprint (uses stamina) |
+| Left click | swing the sword. **Where you aim picks the wound**: head (×1.5), arms, legs, or the monster's signature limb (club arm, horns, wings, jaws…) |
+| Right mouse (hold) | raise the shield: blocks 75 % of a blow from the front, costs stamina |
+| Space | jump (costs a little stamina; no jumping while dragging) |
+| C | dodge: a quick dash with a moment of invulnerability |
+| E | interact: bind a downed monster, drag a body, let go, open the altar, talk |
+| F | finish a downed monster |
+| T | torch on/off (it takes your shield hand) |
+| Q | inspect what you're looking at |
+| M | map |
+| Tab or Esc | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
+
+The world never pauses: it runs on the real clock, even while the journal is open. Whenever you release the mouse, your
+champion holds his ground and strikes back at anything attacking him.
+
+## How to play
+
+- **Find lairs.** They're hidden in the hills; walk within 40 m of one to mark it on your map and compass. A monster
+  caught resting in its lair takes double damage from your first blow.
+- **Fight.** A red ring on the ground (and a red arc at the screen edge) means a blow is coming in 0.8 s: dodge (C) out of
+  it, step behind the beast, or take it on your shield. Cripple legs to slow a monster, cripple its signature limb to
+  blunt its special.
+- **Capture.** At 20 % HP a monster collapses (yellow ring). Press **E** to bind it and walk it home: it follows on a
+  rope, and villagers who see you help pull. Press **E** at the altar to burn it alive for its full HP in favor, or
+  **F** to finish it where it lies.
+- **Defend.** A scream shows a red **!** on the compass toward the captive. Strike the carrier and it drops its
+  prisoner. The shofar means a monster is at the walls.
+- **Judgment** falls at local midnight: the god with more favor today adds a creation to the world.
+- You win when all six monsters are dead, and lose when every villager is.
+
+## URL parameters (dev)
+
+All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`, `?at=HH:MM`, `?reveal=1`, `?god=1`,
+`?nogod=1`, `?ai=manual`, `?devinstall=…`, `?judge=human:300`, `?script=fight|downed|drag|carry`, `?debug=1`,
+`?shot=ms`, `?panel=village|altar|map`) plus:
+
+| Param | Effect |
+|---|---|
+| `?pose=x,z,yawDeg,pitchDeg` | start the champion at a tile, looking that way |
+| `?pitch=deg`, `?yaw=deg` | hold the view (headless screenshots) |
+| `?nolock=1` | drag-to-look without pointer lock |
+| `?hideplay=1` | hide the click-to-play card |
+| `?noshadow=1` | shadows off |
+
+**Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
+any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
+succession. The other buttons force a judgment, skip 8 hours, install a reference module or toggle fog of war.
+
+Headless screenshots on the Windows GPU: `ANGLE=d3d11 WIN=1600,900 dev/winshot.sh "<url>&shot=6000" out.png`.
+(SwiftShader, the default, draws some lit terrain black. That's a software-renderer bug, not a game bug.)
+
+## Code map
+
+- `src/sim/`: the deterministic simulation (no DOM), shared with the top-down build, plus:
+  - `ground.ts`: the shared height function, exactly matching the terrain mesh;
+  - `body.ts`: bodies in meters;
+  - `aim.ts`: hit zones by aim;
+  - `champion.ts`: poses, swings, dodge, block, interact, hold and autopilot, rope trail.
+- `src/input/`:
+  - `controls.ts`: keyboard, mouse, pointer lock and bindings;
+  - `controller.ts`: client-side movement, collision and stamina.
+- `src/render/`:
+  - `renderer.ts`, `terrain.ts` (heightmap and instanced vegetation), `structures.ts` (village, altars, lairs);
+  - `entities.ts`: interpolation buffer, rigs or module shapes, look-ray picking;
+  - `rigs.ts` (procedural creature rigs), `viewmodel.ts` (sword arm and shield or torch), `sky.ts`, `particles.ts`.
+- `src/audio/audio.ts`: synthesized positional sound.
+- `src/ui/`: `hud.ts` (crosshair, compass, bars, prompts, hints), `map.ts`, `ui.ts` (journal, altar, cards).
+- `src/god/`: the decree → implement → validate → install pipeline (prompts updated for first person).
+
+## Tests
+
+```bash
+npm test                                      # all suites, including test/fp.test.ts (first-person rules)
+TS=1 DAYS=1 npx vitest run test/smoke.test.ts # balance: a real-time day, no player
+```
