@@ -94,7 +94,7 @@ Headless screenshots on the Windows GPU: `ANGLE=d3d11 WIN=1600,900 dev/winshot.s
   - `renderer.ts`, `terrain.ts` (heightmap and instanced vegetation), `structures.ts` (village, altars, lairs);
   - `entities.ts`: interpolation buffer, rigs or module shapes, look-ray picking;
   - `rigs.ts` (procedural creature rigs), `viewmodel.ts` (sword arm and shield or torch), `sky.ts`, `particles.ts`.
-- `src/audio/audio.ts`: synthesized positional sound.
+- `src/audio/audio.ts`: positional sound, played from CC0 recordings in `public/audio` (credits in `public/audio/credits.md`).
 - `src/ui/`: `hud.ts` (crosshair, compass, bars, prompts, hints), `map.ts`, `ui.ts` (journal, altar, cards).
 - `src/god/`: the decree → implement → validate → install pipeline (prompts updated for first person).
 

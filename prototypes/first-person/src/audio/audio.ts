@@ -1,5 +1,5 @@
-// Synthesized, positional game audio (spec §10). No audio files: everything is oscillators, filtered noise and
-// envelopes. Positions are in meters (renderer space).
+// Positional game audio (spec §10), played from sourced CC0 recordings in public/audio (see public/audio/credits.md).
+// Positions are in meters (renderer space).
 export type SoundKind =
   | 'swing' | 'hit' | 'block' | 'step' | 'growl' | 'roar' | 'scream' | 'shofar' | 'judgment' | 'whiff' | 'hurt'
   | 'burn' | 'bind' | 'offer' | 'screech';
@@ -11,8 +11,8 @@ export class GameAudio {
   private master!: GainNode;
   private fx!: GainNode;
   private amb!: GainNode;
-  private noiseBuf!: AudioBuffer;
-  private wind: { src: AudioBufferSourceNode; gain: GainNode; filt: BiquadFilterNode } | null = null;
+  private bufs = new Map<string, AudioBuffer>();
+  private wind: { gain: GainNode } | null = null;
   private surf: { gain: GainNode } | null = null;
   private fire: { panner: PannerNode; gain: GainNode } | null = null;
   volume = 0.8;
@@ -37,15 +37,8 @@ export class GameAudio {
     this.amb = ctx.createGain();
     this.amb.gain.value = 0.5;
     this.amb.connect(this.master);
-    const len = ctx.sampleRate * 2;
-    this.noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const d = this.noiseBuf.getChannelData(0);
-    let s = 12345;
-    for (let i = 0; i < len; i++) {
-      s = (s * 1103515245 + 12345) >>> 0;
-      d[i] = (s / 4294967296) * 2 - 1;
-    }
     this.startAmbience();
+    for (const f of FILES) void this.load(f);
   }
 
   setVolumes(master: number, fx: number) {
@@ -92,12 +85,49 @@ export class GameAudio {
     }
   }
 
-  private noise(loop = false): AudioBufferSourceNode {
-    const n = this.ctx!.createBufferSource();
-    n.buffer = this.noiseBuf;
-    n.loop = loop;
-    if (!loop) n.loopStart = 0;
-    return n;
+  private async load(name: string): Promise<AudioBuffer | null> {
+    const have = this.bufs.get(name);
+    if (have) return have;
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}audio/${name}.mp3`);
+      const buf = await this.ctx!.decodeAudioData(await res.arrayBuffer());
+      this.bufs.set(name, buf);
+      return buf;
+    } catch {
+      return null;
+    }
+  }
+
+  /** One-shot of a loaded file; silently skipped if it hasn't finished loading yet. */
+  private sample(name: string, out: AudioNode, gain: number, rate = 1, at = 0) {
+    const buf = this.bufs.get(name);
+    if (!buf) return;
+    const c = this.ctx!;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = rate;
+    const g = c.createGain();
+    g.gain.value = gain;
+    src.connect(g).connect(out);
+    src.start(c.currentTime + at);
+  }
+
+  /** A looped file that starts once loaded; returns its gain so the mix can ride it. */
+  private loop(name: string, out: AudioNode, gain: number): GainNode {
+    const c = this.ctx!;
+    const g = c.createGain();
+    g.gain.value = gain;
+    g.connect(out);
+    void this.load(name).then((buf) => {
+      if (!buf) return;
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.connect(g);
+      // start somewhere random so loops don't line up across reloads
+      src.start(0, Math.random() * buf.duration);
+    });
+    return g;
   }
 
   private panner(p: Pos, maxDistance = 300, ref = 4): PannerNode {
@@ -116,324 +146,47 @@ export class GameAudio {
     return pn;
   }
 
-  private env(g: GainNode, t: number, a: number, peak: number, dec: number) {
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(peak, t + a);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + a + dec);
-  }
-
   private startAmbience() {
-    const c = this.ctx!;
-    // wind: looped noise through a slowly wandering lowpass
-    const src = this.noise(true);
-    const filt = c.createBiquadFilter();
-    filt.type = 'lowpass';
-    filt.frequency.value = 500;
-    const lfo = c.createOscillator();
-    lfo.frequency.value = 0.07;
-    const lfoGain = c.createGain();
-    lfoGain.gain.value = 250;
-    lfo.connect(lfoGain).connect(filt.frequency);
-    const gain = c.createGain();
-    gain.gain.value = 0.08;
-    src.connect(filt).connect(gain).connect(this.amb);
-    src.start();
-    lfo.start();
-    this.wind = { src, gain, filt };
-    // surf: noise through a lowpass with a slow swell
-    const sn = this.noise(true);
-    const sf = c.createBiquadFilter();
-    sf.type = 'lowpass';
-    sf.frequency.value = 900;
-    const swell = c.createOscillator();
-    swell.frequency.value = 0.12;
-    const swellGain = c.createGain();
-    swellGain.gain.value = 0.5;
-    const sg = c.createGain();
-    sg.gain.value = 0;
-    const sv = c.createGain();
-    sv.gain.value = 0.5;
-    swell.connect(swellGain).connect(sv.gain);
-    sn.connect(sf).connect(sv).connect(sg).connect(this.amb);
-    sn.start();
-    swell.start();
-    this.surf = { gain: sg };
-    // the village altar fire: a soft low roar that breathes, with sparse irregular pops on top
-    const fn = this.noise(true);
-    const ff = c.createBiquadFilter();
-    ff.type = 'lowpass';
-    ff.frequency.value = 420;
-    ff.Q.value = 0.4;
-    const roar = c.createGain();
-    roar.gain.value = 0.5;
-    // two slow, detuned swells so the roar never settles into an audible beat
-    for (const [hz, depth] of [[0.13, 0.14], [0.31, 0.09]]) {
-      const lfo = c.createOscillator();
-      lfo.frequency.value = hz;
-      const lg = c.createGain();
-      lg.gain.value = depth;
-      lfo.connect(lg).connect(roar.gain);
-      lfo.start();
-    }
-    // crackles: a long buffer of a few random clicks of random size, so the loop has no rhythm
-    const len = Math.floor(c.sampleRate * 9.7);
-    const cb = c.createBuffer(1, len, c.sampleRate);
-    const d = cb.getChannelData(0);
-    for (let k = 0; k < 26; k++) {
-      const at = Math.floor(Math.random() * (len - 2000));
-      const amp = 0.15 + Math.random() ** 3 * 0.85;
-      const dur = 60 + Math.floor(Math.random() * 500);
-      for (let i = 0; i < dur; i++) d[at + i] += (Math.random() * 2 - 1) * amp * Math.exp(-i / (dur * 0.25));
-    }
-    const cs = c.createBufferSource();
-    cs.buffer = cb;
-    cs.loop = true;
-    const cf = c.createBiquadFilter();
-    cf.type = 'bandpass';
-    cf.frequency.value = 2200;
-    cf.Q.value = 0.7;
-    const cgain = c.createGain();
-    cgain.gain.value = 0.22;
-    const fg = c.createGain();
-    fg.gain.value = 0.35;
+    this.wind = { gain: this.loop('wind', this.amb, 0.08) };
+    this.surf = { gain: this.loop('surf', this.amb, 0) };
+    // the village altar fire, positioned at the altar
     const panner = this.panner({ x: 0, y: 0, z: 0 }, 60, 2);
     panner.disconnect();
     panner.connect(this.amb);
-    fn.connect(ff).connect(roar).connect(fg);
-    cs.connect(cf).connect(cgain).connect(fg);
-    fg.connect(panner);
-    fn.start();
-    cs.start();
+    const fg = this.loop('fire', panner, 0.6);
     this.fire = { panner, gain: fg };
   }
 
   play(kind: SoundKind, p?: Pos, opts: { size?: number; surface?: string } = {}) {
     const c = this.ctx;
     if (!c || c.state !== 'running') return;
-    const t = c.currentTime;
     const out: AudioNode = p ? this.panner(p, kind === 'roar' || kind === 'screech' ? 400 : kind === 'scream' ? 160 : 120, kind === 'roar' || kind === 'screech' ? 10 : 4) : this.fx;
     const size = opts.size ?? 1;
+    // a little pitch scatter so repeated sounds don't machine-gun
+    const vary = (amt: number) => 1 + (Math.random() * 2 - 1) * amt;
     switch (kind) {
-      case 'swing':
-      case 'whiff': {
-        const n = this.noise();
-        const f = c.createBiquadFilter();
-        f.type = 'bandpass';
-        f.Q.value = 2;
-        f.frequency.setValueAtTime(400, t);
-        f.frequency.exponentialRampToValueAtTime(2400, t + 0.18);
-        const g = c.createGain();
-        this.env(g, t, 0.03, kind === 'swing' ? 0.5 : 0.3, 0.18);
-        n.connect(f).connect(g).connect(out);
-        n.start(t);
-        n.stop(t + 0.3);
-        break;
-      }
-      case 'hit':
-      case 'hurt': {
-        const n = this.noise();
-        const f = c.createBiquadFilter();
-        f.type = 'lowpass';
-        f.frequency.value = kind === 'hurt' ? 500 : 900;
-        const g = c.createGain();
-        this.env(g, t, 0.005, 0.9, 0.16);
-        n.connect(f).connect(g).connect(out);
-        n.start(t);
-        n.stop(t + 0.25);
-        const o = c.createOscillator();
-        o.frequency.setValueAtTime(140, t);
-        o.frequency.exponentialRampToValueAtTime(50, t + 0.15);
-        const og = c.createGain();
-        this.env(og, t, 0.005, 0.6, 0.15);
-        o.connect(og).connect(out);
-        o.start(t);
-        o.stop(t + 0.2);
-        break;
-      }
-      case 'block': {
-        for (const fr of [820, 1230, 1660]) {
-          const o = c.createOscillator();
-          o.frequency.value = fr * (0.98 + Math.random() * 0.04);
-          const g = c.createGain();
-          this.env(g, t, 0.003, 0.18, 0.45);
-          o.connect(g).connect(out);
-          o.start(t);
-          o.stop(t + 0.5);
-        }
-        break;
-      }
+      case 'swing': this.sample('swing', out, 0.6, vary(0.08)); break;
+      case 'whiff': this.sample('whiff', out, 0.4, vary(0.08)); break;
+      case 'hit': this.sample('hit', out, 0.9, vary(0.06)); break;
+      case 'hurt': this.sample('hurt', out, 0.8, vary(0.05)); break;
+      case 'block': this.sample('block', out, 0.5, vary(0.05)); break;
       case 'step': {
-        const n = this.noise();
-        const f = c.createBiquadFilter();
-        f.type = 'lowpass';
         const soft = opts.surface === 'sand' || opts.surface === 'marsh' || opts.surface === 'salt';
-        f.frequency.value = soft ? 300 : 600;
-        const g = c.createGain();
-        this.env(g, t, 0.004, soft ? 0.12 : 0.2, 0.07);
-        n.connect(f).connect(g).connect(out);
-        n.start(t, Math.random());
-        n.stop(t + 0.1);
+        this.sample(soft ? 'step-soft' : 'step', out, soft ? 0.35 : 0.3, vary(0.12));
         break;
       }
-      case 'growl': {
-        const o = c.createOscillator();
-        o.type = 'sawtooth';
-        o.frequency.value = 70 / Math.sqrt(size);
-        const wob = c.createOscillator();
-        wob.frequency.value = 9;
-        const wg = c.createGain();
-        wg.gain.value = 12;
-        wob.connect(wg).connect(o.frequency);
-        const f = c.createBiquadFilter();
-        f.type = 'lowpass';
-        f.frequency.value = 420;
-        const g = c.createGain();
-        this.env(g, t, 0.15, 0.7, 0.65);
-        o.connect(f).connect(g).connect(out);
-        o.start(t);
-        wob.start(t);
-        o.stop(t + 0.85);
-        wob.stop(t + 0.85);
-        break;
-      }
-      case 'screech': {
-        // a raptor's falling scream, from high up: it has seen someone
-        const o = c.createOscillator();
-        o.type = 'sawtooth';
-        o.frequency.setValueAtTime(2300, t);
-        o.frequency.exponentialRampToValueAtTime(900, t + 0.9);
-        const vib = c.createOscillator();
-        vib.frequency.value = 38;
-        const vg = c.createGain();
-        vg.gain.value = 60;
-        vib.connect(vg).connect(o.frequency);
-        const f = c.createBiquadFilter();
-        f.type = 'bandpass';
-        f.frequency.value = 1800;
-        f.Q.value = 1.2;
-        const g = c.createGain();
-        this.env(g, t, 0.05, 0.9, 0.9);
-        o.connect(f).connect(g).connect(out);
-        o.start(t);
-        vib.start(t);
-        o.stop(t + 1);
-        vib.stop(t + 1);
-        break;
-      }
-      case 'roar': {
-        const o = c.createOscillator();
-        o.type = 'sawtooth';
-        const base = 110 / Math.sqrt(size);
-        o.frequency.setValueAtTime(base * 1.6, t);
-        o.frequency.exponentialRampToValueAtTime(base * 0.7, t + 1.4);
-        const n = this.noise();
-        const nf = c.createBiquadFilter();
-        nf.type = 'bandpass';
-        nf.frequency.value = 600;
-        const f = c.createBiquadFilter();
-        f.type = 'lowpass';
-        f.frequency.value = 900;
-        const g = c.createGain();
-        this.env(g, t, 0.12, 1.0, 1.35);
-        o.connect(f);
-        n.connect(nf).connect(f);
-        f.connect(g).connect(out);
-        o.start(t);
-        n.start(t);
-        o.stop(t + 1.6);
-        n.stop(t + 1.6);
-        break;
-      }
-      case 'scream': {
-        const o = c.createOscillator();
-        o.type = 'triangle';
-        o.frequency.setValueAtTime(700, t);
-        o.frequency.linearRampToValueAtTime(1150, t + 0.3);
-        o.frequency.linearRampToValueAtTime(820, t + 1.2);
-        const vib = c.createOscillator();
-        vib.frequency.value = 7;
-        const vg = c.createGain();
-        vg.gain.value = 30;
-        vib.connect(vg).connect(o.frequency);
-        const g = c.createGain();
-        this.env(g, t, 0.05, 0.6, 1.15);
-        o.connect(g).connect(out);
-        o.start(t);
-        vib.start(t);
-        o.stop(t + 1.3);
-        vib.stop(t + 1.3);
-        break;
-      }
-      case 'shofar': {
-        const notes: [number, number, number][] = [[233, 0, 1.2], [349, 1.25, 1.6]];
-        for (const [fr, at, dur] of notes) {
-          const o = c.createOscillator();
-          o.type = 'sawtooth';
-          o.frequency.setValueAtTime(fr * 0.97, t + at);
-          o.frequency.linearRampToValueAtTime(fr, t + at + 0.2);
-          const f = c.createBiquadFilter();
-          f.type = 'lowpass';
-          f.frequency.setValueAtTime(600, t + at);
-          f.frequency.linearRampToValueAtTime(1800, t + at + 0.4);
-          const g = c.createGain();
-          g.gain.setValueAtTime(0.0001, t + at);
-          g.gain.exponentialRampToValueAtTime(0.5, t + at + 0.25);
-          g.gain.setValueAtTime(0.5, t + at + dur - 0.2);
-          g.gain.exponentialRampToValueAtTime(0.0001, t + at + dur);
-          o.connect(f).connect(g).connect(out);
-          o.start(t + at);
-          o.stop(t + at + dur + 0.05);
-        }
-        break;
-      }
-      case 'judgment': {
-        const o = c.createOscillator();
-        o.frequency.setValueAtTime(90, t);
-        o.frequency.exponentialRampToValueAtTime(40, t + 0.6);
-        const g = c.createGain();
-        this.env(g, t, 0.005, 1, 0.8);
-        o.connect(g).connect(out);
-        o.start(t);
-        o.stop(t + 1);
-        for (const fr of [220, 277, 330, 440]) {
-          const v = c.createOscillator();
-          v.type = 'sine';
-          v.frequency.value = fr;
-          const vg = c.createGain();
-          vg.gain.setValueAtTime(0.0001, t + 0.3);
-          vg.gain.exponentialRampToValueAtTime(0.08, t + 1.5);
-          vg.gain.exponentialRampToValueAtTime(0.0001, t + 4.2);
-          v.connect(vg).connect(out);
-          v.start(t + 0.3);
-          v.stop(t + 4.3);
-        }
-        break;
-      }
+      // bigger monsters sound deeper
+      case 'growl': this.sample('growl', out, 0.8, vary(0.05) / Math.sqrt(size)); break;
+      case 'roar': this.sample('roar', out, 1, vary(0.04) / Math.sqrt(size)); break;
+      case 'screech': this.sample('screech', out, 0.9, vary(0.06)); break;
+      case 'scream': this.sample('scream', out, 0.6, vary(0.1)); break;
+      case 'shofar': this.sample('shofar', out, 0.7); break;
+      case 'judgment': this.sample('judgment', out, 1); break;
       case 'burn':
-      case 'offer': {
-        const n = this.noise();
-        const f = c.createBiquadFilter();
-        f.type = 'bandpass';
-        f.frequency.value = 1200;
-        const g = c.createGain();
-        this.env(g, t, 0.2, 0.5, 1.4);
-        n.connect(f).connect(g).connect(out);
-        n.start(t);
-        n.stop(t + 1.8);
-        break;
-      }
-      case 'bind': {
-        const n = this.noise();
-        const f = c.createBiquadFilter();
-        f.type = 'highpass';
-        f.frequency.value = 2000;
-        const g = c.createGain();
-        this.env(g, t, 0.01, 0.3, 0.35);
-        n.connect(f).connect(g).connect(out);
-        n.start(t);
-        n.stop(t + 0.4);
-        break;
-      }
+      case 'offer': this.sample('burn', out, 0.6, vary(0.05)); break;
+      case 'bind': this.sample('bind', out, 0.5, vary(0.05)); break;
     }
   }
 }
+
+const FILES = ['swing', 'whiff', 'hit', 'hurt', 'block', 'step', 'step-soft', 'growl', 'roar', 'screech', 'scream', 'shofar', 'judgment', 'burn', 'bind'];

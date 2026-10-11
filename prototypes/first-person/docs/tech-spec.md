@@ -27,7 +27,7 @@ need. Where the design is silent, this spec picks the **simplest thing that play
 | Torch | **T** swaps the shield for a torch. At night the torch lights about 18 m and widens your sight, but you can't block while you hold it. |
 | Exploration | The 3D world is always fully drawn: there is no black fog, and darkness and distance fog do the hiding. The world **map** (M) keeps the fog of war, and lairs are "found" (marked on the map, chronicled) within 5 tiles, as before. |
 | Navigation | A **compass strip** at the top of the screen shows the village, the altar, the High Place, found lairs, a pulsing marker toward screams, and the newest creation. |
-| Audio | New: synthesized WebAudio with **positional** sound (HRTF), so screams, roars and growls come from where they happen. No audio files. |
+| Audio | New: WebAudio with **positional** sound (HRTF), so screams, roars and growls come from where they happen. Sounds are CC0 recordings from Freesound in `public/audio` (credits in `public/audio/credits.md`). |
 | Creations | Unchanged pipeline and module API. Visibility at eye level is now part of the prompt. The base game's "camera flies to the creation" becomes a compass marker plus a Genesis card. |
 
 ---
@@ -46,7 +46,7 @@ humans-and-monsters-fp/
     render/           renderer.ts (FP camera), terrain.ts (heightmap mesh), decor.ts, village.ts (static
                       structures), rigs.ts (procedural creature rigs), viewmodel.ts, shapes.ts (module shapes),
                       particles.ts, sky.ts, rings.ts, water.ts
-    audio/            audio.ts (synth + positional voices)
+    audio/            audio.ts (sample playback + positional voices)
     ui/               hud.ts (crosshair, compass, bars, prompts), map.ts (2D map canvas), journal.ts (tabs),
                       altar.ts, style.css
   test/
@@ -491,21 +491,25 @@ loss (§16, R20–R21).
 
 - One `AudioContext`, created on the first click (browser autoplay rules). The listener follows the camera.
   Positional voices use `PannerNode` (HRTF, `inverse` distance model, refDistance 4 m, maxDistance 300 m).
-- **Synthesized** sounds (oscillators, filtered noise, envelopes; no files):
+- **Recorded** sounds: CC0 files from Freesound in `public/audio`, decoded once on start (credits in
+  `public/audio/credits.md`). One-shots get a small random pitch scatter.
 
-| sound | recipe | positional |
+| sound | file | positional |
 |---|---|---|
-| sword swing | a band-passed noise sweep, 0.2 s | no |
-| hit flesh | a low noise thump + click | at the hit |
-| shield block | a metallic ring (3 detuned sines, quick decay) | no |
-| footsteps | short low noise ticks per step; softer on sand and marsh | no |
-| monster growl (wind-up) | a low saw through a lowpass with wobble, 0.8 s | yes |
-| roar | a saw + noise, pitch drop, 1.5 s; deeper for larger scale | yes, heard to 400 m |
-| scream | a high sine glide with vibrato, 1.2 s | yes, heard to 150 m (19 tiles) |
-| shofar | two-tone brass (a saw with lowpass, swell, then break), 3 s | no |
-| fire | crackle (sparse noise pops) loop near fires | yes |
-| ambience | wind (filtered noise) by day; crickets (pulsed sines) at night; sea surf near the shore | no |
-| Judgment | a low drum hit + choir pad (stacked sines), 4 s | no |
+| sword swing / whiff | `swing`, `whiff` | no |
+| hit flesh | `hit` | at the hit |
+| hurt | `hurt` (a pain grunt) | no |
+| shield block | `block` (a sword clash) | no |
+| footsteps | `step`; `step-soft` on sand, marsh and salt | no |
+| monster growl (wind-up) | `growl`, pitched down for larger scale | yes |
+| roar | `roar`, pitched down for larger scale | yes, heard to 400 m |
+| screech | `screech` (a hawk cry) | yes, heard to 400 m |
+| scream | `scream` | yes, heard to 150 m (19 tiles) |
+| shofar | `shofar` | no |
+| fire | `fire` loop at the village altar | yes |
+| ambience | `wind` loop by day; `surf` loop near the shore | no |
+| Judgment | `judgment` (a deep metallic boom) | no |
+| burn / offer, bind | `burn`, `bind` | at the event |
 
 - Volume settings are master and effects. Sounds for events beyond their hearing range are dropped in the worker,
   using the champion position.
