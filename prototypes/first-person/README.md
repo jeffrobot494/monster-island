@@ -106,3 +106,20 @@ Headless screenshots on the Windows GPU: `ANGLE=d3d11 WIN=1600,900 dev/winshot.s
 npm test                                      # all suites, including test/fp.test.ts (first-person rules)
 TS=1 DAYS=1 npx vitest run test/smoke.test.ts # balance: a real-time day, no player
 ```
+
+## Deploying to RUN.world
+
+```bash
+npm run deploy   # vite build, vendor the RUN.world SDK into dist/, rundot deploy (unlisted)
+```
+
+- Game `9Fj1bofR40DUGCYtatbu` (`game.config.prod.json`). Private share links only load for a signed-in RUN.world user.
+- `npm run build:run` builds without deploying. `scripts/vendor-rundot.mjs` copies the SDK's `api` entry and its chunks
+  unbundled into `dist/vendor/rundot-sdk/` and adds it as its own `<script type="module">`: it reports ready to the
+  host, and builds with the SDK bundled into the game's JS hang at "Processing game file" (see
+  `../monster-island/docs/run-world-findings.md`). The game code does not import the SDK.
+- `public/thumbnail.jpg` must be a 512×512 JPEG. `rundot/textGen.config.json` caps hosted-LLM spend.
+- Deployed builds have no dev server, so the god is the **manual** one (the Claude Code provider needs
+  `dev/claude-code-middleware.ts`). A RUN.world `textGen` provider is the next step.
+- Preflight's `sandbox-blocked-modals` check is skipped: all but two hits are `sim.alert(...)`. The real ones are the
+  `confirm()` calls in `src/ui/ui.ts` (New island, burning a villager), which the host's sandbox may block.

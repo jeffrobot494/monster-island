@@ -3,3 +3,4 @@ dist
 .env.local
 dev/.vite.pid
 dev/.cdp.pid
+game.config.playground.json

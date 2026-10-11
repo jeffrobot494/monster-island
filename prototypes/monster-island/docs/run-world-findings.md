@@ -94,6 +94,8 @@ All of these went to the same throwaway game, with the same CLI, on the same day
 
 **Conclusion:** processing only completes when a build containing JS also ships the SDK as a standalone entry module (the unbundled `rundot-game-api/index.js` plus its chunks). The documented Vite-plugin setup hangs. This looks like a platform bug. It has not been reported to RUN.world yet; the docs MCP has a `sendFeedback` tool for that.
 
+**Confirmed 2026-10-10:** `prototypes/first-person` (normal Vite build with Three.js, two module workers and a `.glb`, plus the SDK vendored by `scripts/vendor-rundot.mjs`) deployed in 13 s as game `9Fj1bofR40DUGCYtatbu`.
+
 **Workarounds:**
 1. **Single-file build.** Use `vite-plugin-singlefile` and inline the SDK's bootstrap script after the build (`prototypes/run-llm-test/inline-bootstrap.mjs`). It deploys, but it depends on inline scripts, which the pending CSP would block.
 2. **Vendor the SDK the way side-scroller does.** Its `build.mjs` copies the SDK into `dist/vendor/rundot-sdk/` and adds `<script type="module" src="./vendor/rundot-sdk/rundot-game-api/index.js">`. This keeps real `.js` files and is the better long-term bet for Monster Island.

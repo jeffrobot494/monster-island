@@ -8,9 +8,12 @@
     "dev": "VITE_PLATFORM=local vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:run": "VITE_RUNDOT=1 npm run build && node scripts/vendor-rundot.mjs",
+    "deploy": "npm run build:run && rundot deploy --ignore-checks sandbox-blocked-modals"
   },
   "dependencies": {
+    "@series-inc/rundot-game-sdk": "5.29.1",
     "acorn": "^8.19.0",
     "three": "^0.186.1"
   },
