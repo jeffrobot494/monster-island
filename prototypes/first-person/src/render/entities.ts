@@ -5,7 +5,8 @@ import { ENT_STRIDE, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_HUMAN, F_IN
 import type { ShapeDef } from '../sim/types';
 import { M } from '../sim/ground';
 import { SHAPE_M, BODY } from '../sim/body';
-import { buildRig, hasRig, Rig, ANIM, rigMat } from './rigs';
+import { hasRig, Rig, ANIM, rigMat } from './rigs';
+import { buildModelRig, onModelsReady } from './glb-rig';
 import { hitBox, rayBox } from '../sim/aim';
 
 const DEG = Math.PI / 180;
@@ -76,6 +77,11 @@ export class Entities {
   renderTick = 0;
   private frameNo = 0;
 
+  constructor() {
+    // a generated model finished loading: rebuild views that are still on the procedural rig
+    onModelsReady(() => { for (const v of this.views.values()) v.key = ''; });
+  }
+
   setDefs(shapeIds: string[], shapes: Map<string, ShapeDef>) {
     this.shapeIds = shapeIds;
     this.shapes = shapes;
@@ -95,7 +101,7 @@ export class Entities {
     const tint = '#' + v.tint.toString(16).padStart(6, '0');
     const useRig = hasRig(v.shape) && ((v.flags & F_CORE_SHAPE) !== 0 || (v.flags & F_CORPSE) !== 0);
     if (useRig) {
-      v.rig = buildRig(v.shape, tint, v.id);
+      v.rig = buildModelRig(v.shape, tint, v.id);
       v.root.add(v.rig.root);
       v.rig.root.traverse((o) => (o.userData.entityId = v.id));
       return;
@@ -149,7 +155,9 @@ export class Entities {
       v.ring = ents[o + O.ring];
       v.anim = ents[o + O.anim];
       v.mask = ents[o + O.mask];
-      v.hp = ents[o + O.hp];
+      const hp = ents[o + O.hp];
+      if (v.rig && v.samples.length && hp < v.hp) v.rig.hurt();
+      v.hp = hp;
       v.seen = ents[o + O.seen] > 0;
       const w = ents[o + O.windup];
       if (w >= 0 && v.windup < 0) v.windupAt = now;

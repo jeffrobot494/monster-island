@@ -54,7 +54,7 @@ function limb(parent: THREE.Object3D, at: [number, number, number], len: number,
 }
 
 export type Zone = 'head' | 'torso' | 'armL' | 'armR' | 'legL' | 'legR' | 'sig';
-const ZONE_BIT: Record<Zone, number> = { head: 0, torso: 1, armL: 2, armR: 3, legL: 4, legR: 5, sig: 6 };
+export const ZONE_BIT: Record<Zone, number> = { head: 0, torso: 1, armL: 2, armR: 3, legL: 4, legR: 5, sig: 6 };
 
 export type Plan = 'biped' | 'quad' | 'serpent';
 
@@ -103,6 +103,9 @@ export class Rig {
       if (s) s.visible = !!severed;
     }
   }
+
+  /** the entity just lost HP (rigs with a hit reaction override this) */
+  hurt() {}
 
   crippled(mask: number, z: Zone) {
     return ((mask >> ZONE_BIT[z]) & 1) === 1 || ((mask >> (8 + ZONE_BIT[z])) & 1) === 1;
