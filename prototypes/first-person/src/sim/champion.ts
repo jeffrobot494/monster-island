@@ -21,7 +21,7 @@ export type Order =
   | { type: 'altar' };
 
 export type ChampInput =
-  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean }
+  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean; fly?: boolean }
   | { type: 'swing'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
   | { type: 'throw'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
   | { type: 'dodge' }
@@ -210,9 +210,19 @@ export function processInputs(sim: Sim) {
   }
 }
 
-function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number }) {
+function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number; fly?: boolean }) {
   const S = cs(sim);
   if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.yaw)) return;
+  if (p.fly) {
+    // dev fly mode: anywhere, any speed, and nothing can touch you up there
+    S.iframesUntil = sim.tick + 5;
+    S.lastPoseTick = sim.tick;
+    c.x = Math.min(127.99, Math.max(0, p.x));
+    c.z = Math.min(127.99, Math.max(0, p.z));
+    c.yaw = p.yaw;
+    S.pitch = p.pitch;
+    return;
+  }
   const downed = c.state === 'downed';
   let max = downed ? CRAWL_MS : SPRINT_MS * Math.max(0.3, champSpeedMul(sim)) * 1.15;
   if (sim.tick - S.dodgeTick <= 4) max += 17.5;

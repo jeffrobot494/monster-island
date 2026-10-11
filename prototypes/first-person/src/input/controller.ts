@@ -11,6 +11,7 @@ const WALK = 4.5, SPRINT = 8.8; // m/s
 const ACCEL = 30, FRICTION = 12;
 const GRAVITY = 22, JUMP_V = 6.2; // m/s², m/s: a ~0.85 m hop, ~0.55 s in the air
 const AIR_CONTROL = 2.5; // how quickly you can steer in the air (1/s)
+const FLY = 60, FLY_FAST = 240; // dev fly mode, m/s (Shift for fast)
 
 export interface Solid { x: number; z: number; r: number } // tiles
 
@@ -62,6 +63,9 @@ export class ChampionController {
   lift = 0;
   /** a gentle cap on the pose rate (ms) */
   poseEvery = 50;
+  /** dev fly mode: no collision, no gravity; eye height in meters (absolute) */
+  flying = false;
+  private flyY = 0;
 
   constructor(private controls: Controls, private ground: Ground, private send: (m: unknown) => void) {}
 
@@ -112,8 +116,36 @@ export class ChampionController {
     this.vy = 0;
   }
 
+  /** Dev: toggle fly mode. Landing drops you (with gravity) onto the nearest walkable tile. */
+  setFlying(on: boolean) {
+    if (on === this.flying) return;
+    this.flying = on;
+    this.vx = this.vz = this.vy = 0;
+    this.dodgeT = -1;
+    if (on) {
+      this.flyY = this.eyeY;
+      this.air = false;
+      return;
+    }
+    if (!this.clear(this.x, this.z)) {
+      found: for (let r = 1; r < 40; r++) {
+        for (let a = 0; a < 16; a++) {
+          const nx = this.x + Math.cos((a / 16) * Math.PI * 2) * r, nz = this.z + Math.sin((a / 16) * Math.PI * 2) * r;
+          if (this.clear(nx, nz)) {
+            this.x = nx;
+            this.z = nz;
+            break found;
+          }
+        }
+      }
+    }
+    this.feetY = Math.max(this.flyY - EYE_H, this.ground.y(this.x, this.z));
+    this.air = true;
+    this.inputSince = true;
+  }
+
   tryJump(now: number): boolean {
-    if (this.ctrl !== 'player' || this.air || this.view !== 'normal' || this.dragging || this.dodgeT >= 0) return false;
+    if (this.ctrl !== 'player' || this.flying || this.air || this.view !== 'normal' || this.dragging || this.dodgeT >= 0) return false;
     if (!this.spend(8)) return false;
     this.air = true;
     this.feetY = this.ground.y(this.x, this.z);
@@ -124,7 +156,7 @@ export class ChampionController {
   }
 
   tryDodge(now: number): boolean {
-    if (this.ctrl !== 'player' || now < this.dodgeReady || this.dragging || this.air) return false;
+    if (this.ctrl !== 'player' || this.flying || now < this.dodgeReady || this.dragging || this.air) return false;
     if (!this.spend(25)) return false;
     this.dodgeReady = now + 0.5;
     let fx = 0, fz = 0;
@@ -173,6 +205,10 @@ export class ChampionController {
     if (now - this.spentAt > 0.8) this.stamina = Math.min(100, this.stamina + 25 * dt);
     if (this.winded && this.stamina >= 25) this.winded = false;
 
+    if (this.ctrl === 'player' && this.flying) {
+      this.fly(dt, now);
+      return;
+    }
     if (this.ctrl === 'player') {
       let fx = 0, fz = 0;
       if (c.down('forward')) fz += 1;
@@ -250,6 +286,36 @@ export class ChampionController {
     else this.smoothEye += (target - this.smoothEye) * Math.min(1, dt * 12);
     if (Math.abs(target - this.smoothEye) > 3) this.smoothEye = target;
     this.eyeY = this.smoothEye + bob;
+  }
+
+  /** Dev fly mode: WASD along the view, Space up, C down, Shift for speed. */
+  private fly(dt: number, now: number) {
+    const c = this.controls;
+    let fx = 0, fz = 0, up = 0;
+    if (c.down('forward')) fz += 1;
+    if (c.down('back')) fz -= 1;
+    if (c.down('left')) fx += 1;
+    if (c.down('right')) fx -= 1;
+    if (c.down('jump')) up += 1;
+    if (c.down('dodge')) up -= 1;
+    const sp = c.down('sprint') ? FLY_FAST : FLY;
+    const s = Math.sin(this.yaw), co = Math.cos(this.yaw), cp = Math.cos(this.pitch), sp2 = Math.sin(this.pitch);
+    let wx = fz * s * cp + fx * co, wz = fz * co * cp - fx * s, wy = fz * sp2 + up;
+    const l = Math.hypot(wx, wy, wz);
+    if (l > 0) { wx /= l; wy /= l; wz /= l; }
+    this.x = Math.min(SIZE - 0.01, Math.max(0, this.x + (wx * sp * dt) / M));
+    this.z = Math.min(SIZE - 0.01, Math.max(0, this.z + (wz * sp * dt) / M));
+    this.flyY = Math.min(400, Math.max(this.ground.y(this.x, this.z) + EYE_H, this.flyY + wy * sp * dt));
+    if (l > 0) this.inputSince = true;
+    this.moveSpeed = 0;
+    this.sprinting = false;
+    this.air = false;
+    this.eyeY = this.smoothEye = this.flyY;
+    if (now * 1000 - this.lastPose >= this.poseEvery) {
+      this.lastPose = now * 1000;
+      this.send({ type: 'input', input: { type: 'pose', x: this.x, z: this.z, yaw: this.yaw, pitch: this.pitch, epoch: this.epoch, input: this.inputSince, fly: true } });
+      this.inputSince = false;
+    }
   }
 
   private move(mx: number, mz: number) {

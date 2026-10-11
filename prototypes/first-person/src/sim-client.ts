@@ -29,6 +29,13 @@ export class SimClient {
     this.post({ type: 'init', ...init });
   }
 
+  /** Kill the worker for good: no more frames, saves or watchdog restarts. */
+  stop() {
+    this.worker?.terminate();
+    this.worker = null;
+    this.paused = true;
+  }
+
   post(m: MainToSim) {
     this.worker?.postMessage(m);
   }

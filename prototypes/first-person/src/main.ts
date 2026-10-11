@@ -213,10 +213,14 @@ async function boot() {
       ui.setInspector(null);
     },
     newIsland: async () => {
-      sim.setPaused(true);
+      // Stop the worker without pausing it (a pause triggers a save), and drop every later write
+      // (late saves, pagehide, the god pipeline), so nothing of the old island can land after the clear.
+      sim.stop();
+      store.set = async () => {};
       await store.clear?.();
       const p = new URLSearchParams(location.search);
       p.delete('seed');
+      p.set('fresh', '1'); // and clear once more on boot, before anything is read
       location.search = p.toString();
     },
     showCreation: () => showCreation(),
@@ -227,6 +231,7 @@ async function boot() {
       else if (cmd === 'kill-champion') sim.post({ type: 'devKillChampion' });
       else if (cmd === 'skip-8') sim.post({ type: 'devSkipHours', hours: 8 });
       else if (cmd === 'raid') sim.post({ type: 'devRaid' });
+      else if (cmd === 'fly') toggleFly();
       else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
         map.reveal = !map.reveal;
@@ -239,11 +244,16 @@ async function boot() {
       else updateLockUi();
     },
   }, devMode);
-  // dev hotkey: F8 crowns the next champion now (no waiting for dawn)
+  function toggleFly() {
+    controller.setFlying(!controller.flying);
+    ui.toast(controller.flying ? 'Fly mode: WASD along your view, Space up, C down, Shift for speed (F9 to land)' : 'Fly mode off', 'info', 4);
+  }
+  // dev hotkeys: F8 crowns the next champion now (no waiting for dawn); F9 toggles fly mode
   if (devMode) window.addEventListener('keydown', (e) => {
-    if (e.code !== 'F8' || e.repeat) return;
+    if ((e.code !== 'F8' && e.code !== 'F9') || e.repeat) return;
     e.preventDefault();
-    sim.post({ type: 'devCrown' });
+    if (e.code === 'F8') sim.post({ type: 'devCrown' });
+    else toggleFly();
   });
   if (platform.warning) ui.toast(platform.warning, 'info', 10);
   ui.setChronicle(chronicle);

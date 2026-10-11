@@ -75,7 +75,9 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
-succession. The other buttons force a judgment, skip 8 hours, install a reference module or toggle fog of war.
+succession. **Fly mode** (also **F9**) lifts you off the ground: WASD flies where you look, Space up, C down, Shift
+for 240 m/s; nothing can hurt you while flying, and F9 again drops you onto the nearest dry land. The other buttons
+force a judgment, skip 8 hours, start a raid, install a reference module or toggle fog of war.
 
 Headless screenshots on the Windows GPU: `ANGLE=d3d11 WIN=1600,900 dev/winshot.sh "<url>&shot=6000" out.png`.
 (SwiftShader, the default, draws some lit terrain black. That's a software-renderer bug, not a game bug.)
