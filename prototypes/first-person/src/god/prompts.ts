@@ -191,6 +191,7 @@ api.ent.damage(e, n, { type?, source? }) // through the core combat system (zone
 api.ent.heal(e, n)
 api.ent.goTo(e, x, z) → false if unreachable  // pathfinding for your entities
 api.ent.moveToward(e, x, z, speed?)      // straight-line step this tick (tiles/s; default the entity's speed)
+                                         // (goTo / moveToward targets past the edge are clamped onto the island)
 api.ent.setPos(e, x, z)                  // your own entities only
 api.ent.stop(e)
 api.ent.modify(e, stat, { mul?, add? })  // stat: speed | maxHp | strength (damage dealt ×) | sight. Your layer replaces your previous one.

@@ -118,6 +118,10 @@ function num(v: unknown, name: string, min = -Infinity, max = Infinity): number 
   if (v < min || v > max) fail(`${name} must be between ${min} and ${max} (got ${v})`);
   return v;
 }
+/** A movement target: any finite number, clamped onto the island (a goal past the edge just means "that way"). */
+function goal(v: unknown, name: string): number {
+  return Math.min(SIZE - 0.001, Math.max(0, num(v, name)));
+}
 function int(v: unknown, name: string, min: number, max: number): number {
   return Math.floor(num(v, name, min, max));
 }
@@ -553,12 +557,12 @@ export class ModuleRuntime implements SimListener {
       goTo: (x: unknown, gx: unknown, gz: unknown) => {
         running('api.ent.goTo');
         const e = rt.resolve(x);
-        return sim.goTo(e, num(gx, 'x', 0, SIZE - 0.001), num(gz, 'z', 0, SIZE - 0.001));
+        return sim.goTo(e, goal(gx, 'x'), goal(gz, 'z'));
       },
       moveToward: (x: unknown, gx: unknown, gz: unknown, speed?: unknown) => {
         running('api.ent.moveToward');
         const e = rt.resolve(x);
-        sim.moveToward(e, num(gx, 'x', 0, SIZE), num(gz, 'z', 0, SIZE), speed === undefined ? sim.stat(e, 'speed') : num(speed, 'speed', 0, 10));
+        sim.moveToward(e, goal(gx, 'x'), goal(gz, 'z'), speed === undefined ? sim.stat(e, 'speed') : num(speed, 'speed', 0, 10));
       },
       setPos: (x: unknown, px: unknown, pz: unknown) => {
         running('api.ent.setPos');
