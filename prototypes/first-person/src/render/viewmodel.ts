@@ -28,6 +28,7 @@ export class ViewModel {
   private dodgeT = -1;
   private blockK = 0;
   private hurtT = -1;
+  private stopT = 0;
   private landT = -1;
   private landK = 0;
   /** the champion's vertical speed (m/s): the arms lag behind a jump */
@@ -121,6 +122,10 @@ export class ViewModel {
   hurt() {
     this.hurtT = 0;
   }
+  /** Freeze the blade where it bit, for weight. */
+  hitstop(sec: number) {
+    this.stopT = sec;
+  }
   land(impact: number) {
     this.landT = 0;
     this.landK = Math.min(1, impact / 7);
@@ -148,8 +153,10 @@ export class ViewModel {
     }
     // right arm and sword
     let rx = 0, ry = 0, rz = 0, px = 0.34 + bx, py = -0.34 + by, pz = -0.5;
+    const sdt = this.stopT > 0 ? 0 : dt;
+    this.stopT -= dt;
     if (this.swingT >= 0) {
-      this.swingT += dt / 0.35;
+      this.swingT += sdt / 0.35;
       const k = this.swingT;
       if (k >= 1) this.swingT = -1;
       else if (k < 0.25) {

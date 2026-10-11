@@ -151,6 +151,19 @@ body { cursor: default; }
 .bar.xpb i { background: #e8c45a; }
 .xhair { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.5); }
 .xhair.hostile { background: #ff4a3a; width: 8px; height: 8px; margin: -4px 0 0 -4px; }
+.hitm { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; opacity: 0; pointer-events: none; }
+.hitm::before, .hitm::after { content: ''; position: absolute; left: 50%; top: 0; width: 2px; height: 100%; margin-left: -1px; background: linear-gradient(#fff 0 30%, transparent 30% 70%, #fff 70%); filter: drop-shadow(0 0 1px #000); }
+.hitm::before { transform: rotate(45deg); }
+.hitm::after { transform: rotate(-45deg); }
+.hitm.on { animation: hitm 0.26s ease-out; }
+.hitm.head { width: 30px; height: 30px; margin: -15px 0 0 -15px; }
+.hitm.head::before, .hitm.head::after { background: linear-gradient(#ffd84a 0 32%, transparent 32% 68%, #ffd84a 68%); }
+.hitm.sever { width: 36px; height: 36px; margin: -18px 0 0 -18px; }
+.hitm.sever::before, .hitm.sever::after { width: 3px; background: linear-gradient(#ff4a3a 0 34%, transparent 34% 66%, #ff4a3a 66%); }
+@keyframes hitm { 0% { opacity: 1; transform: scale(0.7); } 30% { opacity: 1; transform: scale(1.1); } 100% { opacity: 0; transform: scale(1); } }
+.tzone { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #e8d8b8; opacity: 0.85; }
+.tzone.head { color: #ffd84a; opacity: 1; }
+.tzone.sig { color: #ff9a5a; opacity: 1; }
 .xhair.downed { background: #ffd84a; width: 10px; height: 10px; margin: -5px 0 0 -5px; }
 .target { position: absolute; left: 50%; top: calc(50% + 26px); transform: translateX(-50%); text-align: center; color: #f6ecd6; text-shadow: 0 1px 3px #000, 0 0 8px #000; min-width: 200px; }
 .tname { font-family: var(--serif); font-size: 16px; }

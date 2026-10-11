@@ -428,13 +428,17 @@ async function boot() {
       if (c.kind === 'blocked') {
         controller.blockedHit(c.amount ?? 0);
         audio.play('block');
-      } else if (c.kind === 'hit' && c.severed) ui.toast(c.killed ? 'A killing blow!' : `You sever its ${c.zone === 'sig' ? 'signature limb' : c.zone}!`, 'info', 3);
-      else if (c.kind === 'hit' && c.downed) hudView.hintOnce('downed');
+      } else if (c.kind === 'hit' && c.severed) {
+        hudView.hitMarker(c.zone ?? null, true);
+        renderer.kick(-0.04, (Math.random() - 0.5) * 0.04);
+        ui.toast(c.killed ? 'A killing blow!' : `You sever its ${c.zone === 'sig' ? 'signature limb' : c.zone}!`, 'info', 3);
+      } else if (c.kind === 'hit' && c.downed) hudView.hintOnce('downed');
     }
     if (f.hurt > 0 && performance.now() - lastHurtAt > 150) {
       lastHurtAt = performance.now();
       hudView.flashHurt();
       renderer.view.hurt();
+      renderer.kick(0.025, (Math.random() < 0.5 ? -1 : 1) * 0.035);
       audio.play('hurt');
     }
     for (const t of f.toasts) ui.toast(t, 'info', 3);
@@ -645,7 +649,12 @@ async function boot() {
         // immediate local feedback (F7)
         const p = eye.clone().addScaledVector(dir, hit.t);
         renderer.particles.burst('blood', p.x, p.y, p.z);
+        if (zone === 'head') renderer.particles.burst('blood', p.x, p.y, p.z);
         audio.play('hit', { x: p.x, y: p.y, z: p.z });
+        // weight: freeze the blade a beat, jolt the view, mark the hit
+        renderer.view.hitstop(zone === 'head' ? 0.09 : 0.06);
+        renderer.kick(zone === 'head' ? -0.03 : -0.018, (Math.random() - 0.5) * 0.02);
+        hudView.hitMarker(zone);
       }
     }
     if (targetId === null) audio.play('whiff');
@@ -820,6 +829,10 @@ async function boot() {
     const { eye, dir } = renderer.lookRay();
     look = ctrlReason === 'dead' ? null : renderer.ents.pick(eye, dir, 40, champId());
     const info = look ? targetInfo(look.id) : null;
+    if (info && look && info.hostile && !info.downed && look.t <= 2.4 + 2.5) {
+      const arch = renderer.ents.arch(look.id);
+      info.zone = arch ? zoneFor(arch, look.h, look.s, look.f) : null;
+    }
     hudView.setTarget(info, promptFor());
     if (look && info?.downed) hudView.hintOnce('downed');
     audio.listener({ x: eye.x, y: eye.y, z: eye.z }, dir.x, dir.y, dir.z);

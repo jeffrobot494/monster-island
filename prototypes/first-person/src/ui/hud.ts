@@ -20,7 +20,11 @@ export interface TargetInfo {
   state: string;
   hostile: boolean;
   downed: boolean;
+  /** the body part under the crosshair, for a hostile monster in reach */
+  zone?: string | null;
 }
+
+const ZONE_LABEL: Record<string, string> = { head: 'head ×1.5', torso: 'body', armL: 'arm', armR: 'arm', legL: 'leg', legR: 'leg', sig: 'signature limb' };
 
 const HINTS: Record<string, string> = {
   windup: 'A red ring means a blow is coming. C: dodge out of it · Right mouse: raise your shield.',
@@ -34,6 +38,8 @@ const HINTS: Record<string, string> = {
 export class HudView {
   root: HTMLDivElement;
   private xhair = h('div', { class: 'xhair' });
+  private hitm = h('div', { class: 'hitm' });
+  private hitTimer = 0;
   private target = h('div', { class: 'target hidden' });
   private prompt = h('div', { class: 'prompt hidden' });
   private compass = h('div', { class: 'compass' });
@@ -62,7 +68,7 @@ export class HudView {
     this.root = h('div', { class: 'hud' });
     this.compass.append(this.strip, h('div', { class: 'compass-tick' }));
     this.bl.append(this.nameEl, h('div', { class: 'bar hp' }, this.hpI), h('div', { class: 'bar st' }, this.stI), h('div', { class: 'bar xpb' }, this.xpI), this.stateEl);
-    this.root.append(this.fx, this.hurt, this.compass, this.tl, this.tr, this.bl, this.xhair, this.target, this.prompt, this.downed, this.hint, this.play, this.camBtn);
+    this.root.append(this.fx, this.hurt, this.compass, this.tl, this.tr, this.bl, this.xhair, this.hitm, this.target, this.prompt, this.downed, this.hint, this.play, this.camBtn);
     parent.prepend(this.root);
     try {
       for (const k of JSON.parse(localStorage.getItem('hmfp:hints') ?? '[]')) this.seenHints.add(k);
@@ -134,6 +140,15 @@ export class HudView {
     this.hintTimer = window.setTimeout(() => this.hint.classList.add('hidden'), 9000);
   }
 
+  /** An X at the crosshair when a blow lands; bigger and gold for the head, red for a severing. */
+  hitMarker(zone: string | null, severed = false) {
+    this.hitm.className = 'hitm';
+    void this.hitm.offsetWidth; // restart the animation
+    this.hitm.className = `hitm on${severed ? ' sever' : zone === 'head' ? ' head' : ''}`;
+    clearTimeout(this.hitTimer);
+    this.hitTimer = window.setTimeout(() => (this.hitm.className = 'hitm'), 260);
+  }
+
   flashHurt() {
     this.hurtUntil = performance.now() + 350;
   }
@@ -179,6 +194,7 @@ export class HudView {
     this.target.classList.toggle('hidden', !t);
     if (t) {
       const kids: HTMLElement[] = [h('div', { class: 'tname' }, t.name), h('div', { class: 'ttitle' }, `${t.title}${t.state ? ` · ${t.state}` : ''}`)];
+      if (t.zone) kids.push(h('div', { class: `tzone${t.zone === 'head' ? ' head' : t.zone === 'sig' ? ' sig' : ''}` }, ZONE_LABEL[t.zone] ?? t.zone));
       if (t.hp !== null) kids.push(h('div', { class: 'bar thp' }, h('i', { style: `width:${t.hp * 100}%` })));
       this.target.replaceChildren(...kids);
     }

@@ -154,6 +154,14 @@ export class Renderer {
     }
   }
 
+  private kickP = 0;
+  private kickR = 0;
+  /** A short camera jolt (rad) that springs back: impact on a hit, a shove when hurt. */
+  kick(pitch: number, roll: number) {
+    this.kickP += pitch;
+    this.kickR += roll;
+  }
+
   /** The look ray from the camera center. */
   lookRay(): { eye: THREE.Vector3; dir: THREE.Vector3 } {
     this.camera.getWorldDirection(this.dir);
@@ -164,7 +172,9 @@ export class Renderer {
     const dt = Math.min(0.1, this.clock.getDelta());
     const t = (this.t = this.clock.elapsedTime);
     this.camera.position.set(cam.x, cam.y, cam.z);
-    this.camera.rotation.set(cam.pitch, cam.yaw + Math.PI, o.roll ?? 0);
+    this.kickP *= Math.exp(-dt * 18);
+    this.kickR *= Math.exp(-dt * 18);
+    this.camera.rotation.set(cam.pitch + this.kickP, cam.yaw + Math.PI, (o.roll ?? 0) + this.kickR);
     this.camera.updateMatrixWorld();
     this.eye.copy(this.camera.position);
 
