@@ -77,6 +77,10 @@ export class Controls {
   /** ?nolock=1: drag to look, no pointer lock (headless / devtools) */
   noLock = false;
   private dragging = false;
+  /** Chrome on Windows sometimes reports one huge bogus movementX/Y under pointer lock (and right after locking);
+   *  those read as a 180° flick. Track a running average of real motion to spot and drop them. */
+  private lockedAt = 0;
+  private avgMove = 0;
 
   constructor(private el: HTMLElement, public settings: Settings) {
     window.addEventListener('keydown', (e) => this.keyDown(e));
@@ -87,6 +91,8 @@ export class Controls {
     });
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === this.el;
+      this.lockedAt = performance.now();
+      this.avgMove = 0;
       if (!this.locked) {
         this.keys.clear();
         this.mouseL = this.mouseR = false;
@@ -113,7 +119,14 @@ export class Controls {
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mousemove', (e) => {
       if (!this.locked && !(this.noLock && this.dragging)) return;
-      this.lastInput = performance.now();
+      const now = performance.now();
+      this.lastInput = now;
+      if (this.locked) {
+        if (now - this.lockedAt < 100) return; // the first events after locking carry the cursor's jump to center
+        const mag = Math.abs(e.movementX) + Math.abs(e.movementY);
+        if (mag > 200 && mag > 6 * this.avgMove + 40) return; // a spike far beyond the recent motion: discard it
+        this.avgMove += (mag - this.avgMove) * 0.2;
+      }
       const k = this.settings.sensitivity / 1000;
       this.dYaw -= e.movementX * k;
       this.dPitch -= e.movementY * k * (this.settings.invertY ? -1 : 1);
@@ -127,8 +140,15 @@ export class Controls {
 
   requestLock() {
     if (this.noLock) return;
-    const p = this.el.requestPointerLock() as unknown as Promise<void> | undefined;
-    if (p && typeof p.catch === 'function') p.catch(() => {});
+    // raw input where supported: sidesteps the OS acceleration path that produces most of the spikes
+    const req = (opts?: object) => (this.el.requestPointerLock as (o?: object) => unknown).call(this.el, opts) as Promise<void> | undefined;
+    let p: Promise<void> | undefined;
+    try {
+      p = req({ unadjustedMovement: true });
+    } catch {
+      p = req();
+    }
+    if (p && typeof p.catch === 'function') p.catch(() => req()?.catch?.(() => {}));
   }
 
   exitLock() {

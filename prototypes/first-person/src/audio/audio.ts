@@ -153,7 +153,13 @@ export class GameAudio {
     const panner = this.panner({ x: 0, y: 0, z: 0 }, 60, 2);
     panner.disconnect();
     panner.connect(this.amb);
-    const fg = this.loop('fire', panner, 0.6);
+    // soften it: the raw recording's crackle is sharp and loud up close
+    const tame = this.ctx!.createBiquadFilter();
+    tame.type = 'lowpass';
+    tame.frequency.value = 2400;
+    tame.Q.value = 0.5;
+    tame.connect(panner);
+    const fg = this.loop('fire', tame, 0.28);
     this.fire = { panner, gain: fg };
   }
 
