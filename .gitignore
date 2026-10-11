@@ -5,3 +5,6 @@ dist/
 .DS_Store
 Thumbs.db
 .vite/
+
+# local RUN.world LLM code-rewrite test app (not part of the repo)
+prototypes/run-llm-test/
