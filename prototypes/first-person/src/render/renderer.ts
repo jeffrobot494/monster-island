@@ -120,7 +120,7 @@ export class Renderer {
 
   onFullState(s: FullState) {
     this.layout = s.layout;
-    this.terrain.load(s.tiles, s.elev);
+    this.terrain.load(s.tiles, s.elev, s.terrain);
     this.structures.build(this.terrain, s.layout);
     this.ents.apply(s.ents, s.tick, true);
     this.particles.setAttached(s.attached);

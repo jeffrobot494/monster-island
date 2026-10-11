@@ -41,7 +41,7 @@ setInterval(() => {
 
 /** Per-boot token for LAN clients (R32); localhost needs none. */
 export const LAN_TOKEN = Math.random().toString(36).slice(2, 10);
-function allowed(req: IncomingMessage): boolean {
+export function allowed(req: IncomingMessage): boolean {
   const ip = req.socket.remoteAddress ?? '';
   if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('::ffff:127.')) return true;
   const hdr = req.headers['x-dev-ai-token'];

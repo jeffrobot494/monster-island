@@ -1,7 +1,13 @@
 // Island generation (§3.3): mask → 7 regions (Voronoi on a ring of seeds) → terrain per region → village, High Place,
 // lairs, roads → reachability. Pure and seeded.
+//
+// With `terrain` (terraformer settings) the ground comes from the terraformer instead (island-import.ts): the mask
+// is its coastline, the village and High Place go where the land suits them, and roads are graded up its cliffs.
 import { Rng, hashSeed } from './rng';
 import { SIZE, TileGrid } from './world';
+import { WATER_Y } from './ground';
+import { ImportedTerrain } from './island-import';
+import type { TerrainSettings } from './terrain-import';
 
 export const REGION_NAMES = ['Village and harbor', 'Cedar Heights', 'Olive Terraces', 'Salt Flats', 'Wilderness of Stones', 'Ruins of the Anakim', 'The High Place'];
 export const LAIR_NAMES = ['', 'the cave beneath the giant cedar', 'the abandoned wine-press cave', 'the sunken cistern', 'the cliff tomb', "the ruined giant's hall", 'the catacomb under the shrine'];
@@ -45,7 +51,7 @@ function valueNoise(seed: number) {
 
 const isWater = (t: string) => t === 'deep-water' || t === 'shallow-water';
 
-export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
+export function generateIsland(seed: number, grid: TileGrid, terrain?: TerrainSettings | null): IslandLayout {
   const rng = new Rng(hashSeed(seed, 'island'));
   const n1 = valueNoise(hashSeed(seed, 'n1'));
   const n2 = valueNoise(hashSeed(seed, 'n2'));
@@ -55,10 +61,26 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
   const T = grid.types;
   const I = (x: number, z: number) => grid.idx(x, z);
 
+  // terraformer: the sites come first, so the mask below reads the flattened heights
+  const imp = terrain ? new ImportedTerrain(terrain) : null;
+  let hp: P = { x: C, z: C }; // the High Place
+  let impVillage: P | null = null;
+  if (imp) {
+    impVillage = imp.placeVillage({ x: Math.round(C + Math.cos(0.75 * Math.PI) * 42), z: Math.round(C + Math.sin(0.75 * Math.PI) * 42) });
+    hp = imp.placeHighPlace(impVillage);
+  }
+
   // 1. Mask
   const hmap = new Float32Array(SIZE * SIZE);
   for (let z = 0; z < SIZE; z++) {
     for (let x = 0; x < SIZE; x++) {
+      if (imp) {
+        // the coast is the terraformer's; low land (hmap < 0.24) becomes beach below
+        const y = imp.h(x, z);
+        hmap[I(x, z)] = y < WATER_Y + 1.5 ? 0.2 : 1;
+        T[I(x, z)] = y >= WATER_Y ? 'grass' : y > WATER_Y - 3 ? 'shallow-water' : 'deep-water';
+        continue;
+      }
       const d = Math.hypot(x - C, z - C) / 58;
       const noise = n1(x / 16, z / 16) * 0.65 + n2(x / 7, z / 7) * 0.35;
       const h = 1 - d * d * 1.1 + (noise - 0.5) * 0.4;
@@ -79,6 +101,10 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     return { x: Math.round(C + Math.cos(ang) * r), z: Math.round(C + Math.sin(ang) * r) };
   });
   seeds.push({ x: C, z: C }); // 6: the High Place
+  if (imp) {
+    seeds[0] = impVillage!;
+    seeds[6] = { ...hp };
+  }
   const village = seeds[0];
 
   const disk = (cx: number, cz: number, r: number, fn: (x: number, z: number, d: number) => void) => {
@@ -88,14 +114,14 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
       if (d <= r) fn(x, z, d);
     }
   };
-  // the village sits on solid land; so does the High Place
-  disk(village.x, village.z, 15, (x, z) => {
+  // the village sits on solid land; so does the High Place (terraformer: flattened above sea level already)
+  if (!imp) disk(village.x, village.z, 15, (x, z) => {
     if (isWater(T[I(x, z)]) && x > 2 && z > 2 && x < SIZE - 3 && z < SIZE - 3) {
       T[I(x, z)] = 'grass';
       hmap[I(x, z)] = Math.max(hmap[I(x, z)], 0.25);
     }
   });
-  disk(C, C, 14, (x, z) => {
+  if (!imp) disk(C, C, 14, (x, z) => {
     T[I(x, z)] = 'grass';
     hmap[I(x, z)] = Math.max(hmap[I(x, z)], 0.5);
   });
@@ -104,7 +130,7 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
   for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
     const i = I(x, z);
     if (isWater(T[i])) continue;
-    if (Math.hypot(x - C, z - C) < 10) {
+    if (Math.hypot(x - hp.x, z - hp.z) < 10) {
       grid.region[i] = 6;
       continue;
     }
@@ -126,7 +152,7 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
       case 0: t = f > 0.72 ? 'scrub' : 'grass'; break;
       case 1:
         t = f > 0.3 ? 'cedar' : 'grass';
-        if (hl > 0.7) { t = 'rock'; grid.elev[i] = 0.6 + (hl - 0.7) * 5; }
+        if (hl > 0.7) { t = 'rock'; if (!imp) grid.elev[i] = 0.6 + (hl - 0.7) * 5; }
         break;
       case 2: {
         const band = Math.floor((x * 0.7 + z * 0.7) / 3) % 3;
@@ -135,21 +161,22 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
       }
       case 3:
         t = f > 0.58 ? 'marsh' : 'salt';
-        if (f > 0.82) t = 'shallow-water';
+        if (f > 0.82 && !imp) t = 'shallow-water';
         break;
       case 4:
         t = 'scrub';
         if (Math.abs(w - 0.5) < 0.035) t = 'wadi';
-        else if (hl > 0.72) { t = 'rock'; grid.elev[i] = 0.6 + (hl - 0.72) * 5; }
+        else if (hl > 0.72) { t = 'rock'; if (!imp) grid.elev[i] = 0.6 + (hl - 0.72) * 5; }
         break;
       case 5: {
         const gx = ((x % 7) + 7) % 7, gz = ((z % 7) + 7) % 7;
         t = (gx === 0 || gz === 0) && f > 0.35 ? 'ruin-floor' : f > 0.6 ? 'ruin-floor' : 'grass';
-        if (f > 0.86) { t = 'rock'; grid.elev[i] = 0.9; }
+        if (f > 0.86) { t = 'rock'; if (!imp) grid.elev[i] = 0.9; }
         break;
       }
       case 6: {
-        const d = Math.hypot(x - C, z - C);
+        const d = Math.hypot(x - hp.x, z - hp.z);
+        if (imp) { t = d < 3.2 ? 'shrine-floor' : d < 5 ? 'rock' : f > 0.4 ? 'olive' : 'grass'; break; }
         if (d < 3.2) { t = 'shrine-floor'; grid.elev[i] = 2.5; }
         else if (d < 8) { t = 'rock'; grid.elev[i] = 0.6 + (1 - (d - 3.2) / 4.8) * 1.8; }
         else t = f > 0.4 ? 'olive' : 'grass';
@@ -159,10 +186,11 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     if (hmap[i] < 0.24 && grid.region[i] !== 3 && t !== 'rock') t = 'sand'; // beaches
     T[i] = t;
   }
+  imp?.markCliffs(grid);
 
   // 5. Village: walls, gates, street, houses, fields
   const wallR = 9;
-  const toCenter = Math.atan2(C - village.z, C - village.x);
+  const toCenter = Math.atan2(hp.z - village.z, hp.x - village.x); // the inner gate faces the High Place
   const gateAng = [toCenter, toCenter + Math.PI];
   const gates: P[] = gateAng.map((a) => ({ x: Math.round(village.x + Math.cos(a) * wallR), z: Math.round(village.z + Math.sin(a) * wallR) }));
   disk(village.x, village.z, wallR + 6, (x, z, d) => {
@@ -193,7 +221,24 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
   // harbor: road from the outer gate out to the sea, then a short pier
   const out = { x: Math.cos(gateAng[1]), z: Math.sin(gateAng[1]) };
   let px = gates[1].x, pz = gates[1].z, pier = 0;
-  for (let k = 0; k < 40 && pier < 4; k++) {
+  if (imp) {
+    // terraformer: a graded road to the nearest shore, then a short pier straight on
+    const sea = new Set<number>();
+    for (let i = 0; i < SIZE * SIZE; i++) if (isWater(T[i])) sea.add(i);
+    const path = imp.path(grid, [I(gates[1].x, gates[1].z)], sea);
+    if (path && path.length > 1) {
+      const a = path[path.length - 2], b = path[path.length - 1];
+      const dx = (b % SIZE) - (a % SIZE), dz = ((b / SIZE) | 0) - ((a / SIZE) | 0);
+      for (let k = 1; k <= 3; k++) {
+        const x = (b % SIZE) + dx * k, z = ((b / SIZE) | 0) + dz * k;
+        if (x < 3 || z < 3 || x > SIZE - 4 || z > SIZE - 4 || !isWater(T[I(x, z)])) break;
+        path.push(I(x, z));
+      }
+      imp.road(grid, path, true, 0);
+      for (const i of path) if (grid.region[i] === 255 || isWater(T[i])) grid.region[i] = 0;
+    }
+  }
+  for (let k = 0; k < 40 && pier < 4 && !imp; k++) {
     px += out.x;
     pz += out.z;
     const x = Math.round(px), z = Math.round(pz);
@@ -234,14 +279,15 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
 
   // 6. Road from the inner gate to the High Place, and a stair up the hill
   const foot = { x: Math.round(C + Math.cos(toCenter + Math.PI) * 8.5), z: Math.round(C + Math.sin(toCenter + Math.PI) * 8.5) };
-  line(gates[0], foot, 'road');
-  for (let k = 0; k <= 9; k++) {
+  if (imp) imp.connect(grid, gates[0], hp, true);
+  else line(gates[0], foot, 'road');
+  for (let k = 0; k <= 9 && !imp; k++) {
     const x = Math.round(foot.x + ((C - foot.x) * k) / 9), z = Math.round(foot.z + ((C - foot.z) * k) / 9);
     const i = I(x, z);
     T[i] = 'shrine-floor';
     grid.elev[i] = Math.max(0.6, Math.min(2.5, 0.6 + (k / 9) * 1.9));
   }
-  const highAltar = { x: C, z: C };
+  const highAltar = { x: hp.x, z: hp.z };
   // the road lines ran over the gateways; make sure each gateway opens in and out along a 4-connected axis
   for (const g of gates) {
     T[I(g.x, g.z)] = 'gate';
@@ -263,7 +309,7 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     for (let step = 0; step < 80; step++) {
       if (grid.inBounds(lx, lz)) {
         const i = I(lx, lz);
-        if (!isWater(T[i]) && grid.region[i] === r && T[i] !== 'wall') break;
+        if (!isWater(T[i]) && grid.region[i] === r && T[i] !== 'wall' && !imp?.solid[i]) break;
       }
       if (step % 2 === 0) lx += Math.sign(C - lx);
       else lz += Math.sign(C - lz);
@@ -271,24 +317,27 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     lairs.push({ x: lx, z: lz });
   }
   const hpA = rng.next() * Math.PI * 2;
-  lairs.push({ x: Math.round(C + Math.cos(hpA) * 4.5), z: Math.round(C + Math.sin(hpA) * 4.5) });
+  lairs.push({ x: Math.round(hp.x + Math.cos(hpA) * 4.5), z: Math.round(hp.z + Math.sin(hpA) * 4.5) });
   const base = ['grass', 'cedar', 'olive', 'salt', 'scrub', 'ruin-floor', 'rock'];
   for (let r = 1; r <= 6; r++) {
     const l = lairs[r];
     disk(l.x, l.z, 1.6, (x, z) => {
       const i = I(x, z);
       if (r === 6) return;
-      if (isWater(T[i]) || T[i] === 'marsh' || T[i] === 'rock') T[i] = base[r];
+      if (isWater(T[i]) || T[i] === 'marsh' || T[i] === 'rock' || T[i] === 'cliff') T[i] = base[r];
       grid.region[i] = r;
     });
-    connectPath(grid, l, highAltar);
+    if (imp) imp.connect(grid, l, highAltar, false);
+    else connectPath(grid, l, highAltar);
   }
 
-  // 8. Reachability from the inner gate: unreachable land becomes shallow water
+  // 8. Reachability from the inner gate: unreachable land becomes shallow water (terraformer: it gets a road, or
+  // becomes cliff when it's a small ledge)
+  if (imp) imp.connectAll(grid, gates[0]);
   const reach = new Uint8Array(SIZE * SIZE);
   const q = [I(gates[0].x, gates[0].z)];
   reach[q[0]] = 1;
-  while (q.length) {
+  while (q.length && !imp) {
     const i = q.pop()!;
     const x = i % SIZE, z = (i / SIZE) | 0;
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -301,7 +350,7 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
     }
   }
   for (let i = 0; i < SIZE * SIZE; i++) {
-    if (!reach[i] && grid.def(T[i]).walkable) T[i] = 'shallow-water';
+    if (!reach[i] && grid.def(T[i]).walkable && !imp) T[i] = 'shallow-water';
     if (isWater(T[i])) grid.region[i] = 255;
     if (T[i] === 'wall') grid.region[i] = 0;
   }
@@ -330,6 +379,7 @@ export function generateIsland(seed: number, grid: TileGrid): IslandLayout {
   const goats = randomIn([4, 1], 8);
   const oxen = randomIn([2, 5], 3);
 
+  imp?.finish(grid);
   grid.changed.clear();
   return { center: { x: C, z: C }, seeds, village, wallRadius: wallR, gates, houses, doors, villageAltar, fold, granary, highAltar, lairs, guardPosts, goats, oxen };
 }

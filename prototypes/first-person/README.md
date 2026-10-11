@@ -72,6 +72,8 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 | `?hideplay=1` | hide the click-to-play card |
 | `?noshadow=1` | shadows off |
 | `?third=1` | start in third person |
+| `?fly=m` | start in fly mode, m meters above the sea (aerial screenshots) |
+| `?terrain=off` | a new island ignores the terraformer's saved terrain (procedural) |
 
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
@@ -81,6 +83,36 @@ force a judgment, skip 8 hours, start a raid, install a reference module or togg
 
 Headless screenshots on the Windows GPU: `ANGLE=d3d11 WIN=1600,900 dev/winshot.sh "<url>&shot=6000" out.png`.
 (SwiftShader, the default, draws some lit terrain black. That's a software-renderer bug, not a game bug.)
+
+## Terraformer islands
+
+`npm run dev`, then open **http://localhost:5201/terraformer.html**: the Monster Island Terraformer (ported from
+`Documents/monster-game/Monster Island Terraformer.html`). Shape the island, then:
+
+- **Save to game** writes the settings to `src/terrain/saved-terrain.json` (`null` = none). Every new island after
+  that takes its ground from them; a game already running keeps its island. The file is source: commit it, and RUN
+  builds ship that terrain too.
+- **Save & start a new island** saves, then opens the game on a new island (`?fresh=1`). Any other tab still running
+  the old island stops saving, so it can't overwrite the new one.
+- **Use procedural islands** sets the file back to `null`.
+- **Height in the game** sets meters per terraformer unit vertically (one unit is one 8 m tile across), and the
+  preview is drawn at that scale. At 8 the proportions are the terraformer's own, but cliffs get very tall.
+
+How the game uses it:
+- The ground is sampled from the terraformer's surface at every ground vertex (`src/sim/terrain-import.ts`).
+- `src/sim/island-import.ts` then:
+  - puts the village on the most level land near the usual south-west site and flattens it;
+  - puts the High Place on a high, level spot near the center;
+  - cuts graded roads, with ramps up cliffs and fords across canyon water, to it and to every lair;
+  - joins every other sizeable area with a road;
+  - marks the rest of the steep ground, and anything under standing rock, as `cliff` (unwalkable and protected).
+- Spires, arches, floating isles and overhangs can't be heightmap ground. `src/render/feature-mesh.ts` draws them in
+  the terraformer's palette from its own mesh, and their footprints are cliff.
+- Saves keep the settings and the finished heights (about 100 KB), so a saved island never changes if the terraformer
+  or its file changes.
+- Known gaps: caves and caverns are only visible where they open at the surface. Distances in the sim are still flat
+  2D, so monsters can see and strike across a cliff edge. The feature mesh is built on the main thread at load
+  (about 1 s).
 
 ## Code map
 

@@ -4,6 +4,10 @@ import type { ChampInput, CombatEvent, CtrlReason } from './sim/champion';
 import type { IslandLayout } from './sim/island-gen';
 import type { SoundEvent } from './sim/sim';
 import type { AwaySummary } from './sim/offline';
+import type { TerrainSettings } from './sim/terrain-import';
+
+/** A terraformer island's ground (sim/terrain-import.ts); null for a procedural one. */
+export type TerrainState = { settings: TerrainSettings; base: Float32Array; orig: Float32Array } | null;
 import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Job, ShapeDef, TileTypeDef } from './sim/types';
 
 // id, shapeIdx, x, y(m), z, yaw, tint, scale, flags, lift(m), roll, squash, ring(m), anim, zoneMask, hpFrac, seen, windup
@@ -38,7 +42,7 @@ export type Action =
   | { kind: 'setJob'; id: number; job: Job };
 
 export type MainToSim =
-  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; clockMs: number; realMs: number; timescale: number; quarantine?: string[]; reveal?: boolean; invincible?: boolean; skip?: number }
+  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; clockMs: number; realMs: number; timescale: number; quarantine?: string[]; reveal?: boolean; invincible?: boolean; skip?: number; terrain?: TerrainSettings | null }
   | { type: 'control'; paused: boolean }
   | { type: 'catchUp'; clockMs: number; realMs: number }
   | { type: 'input'; input: ChampInput }
@@ -188,7 +192,7 @@ export interface ModuleStat {
 
 export type SimToMain =
   | FramePayload
-  | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; explored: Uint8Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere; layout: IslandLayout; epoch: number; walkCost: Uint8Array }
+  | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; explored: Uint8Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere; layout: IslandLayout; epoch: number; walkCost: Uint8Array; terrain: TerrainState }
   | { type: 'walkCost'; cost: Uint8Array }
   | { type: 'names'; names: [number, NameInfo][] }
   | { type: 'defs'; shapes: [string, ShapeDef][]; emitters: [string, EmitterDef][]; tiles: TileTypeDef[]; shapeIndex: string[] }

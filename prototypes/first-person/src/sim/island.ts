@@ -2,6 +2,7 @@
 import { Sim } from './sim';
 import { ModuleRuntime, type ModuleDef, type RuntimeOptions, type SavedModules } from './module-runtime';
 import { deserializeCore, serializeCore, type SavedCore } from './serialize';
+import type { TerrainSettings } from './terrain-import';
 
 export interface ManifestEntry {
   id: string;
@@ -35,9 +36,10 @@ export class Island {
     this.runtime = new ModuleRuntime(sim, opts);
   }
 
-  static create(seed: number, clockMs: number, timescale: number, opts: RuntimeOptions): Island {
+  /** A new island; `terrain` (terraformer settings) shapes its ground, otherwise it is procedural. */
+  static create(seed: number, clockMs: number, timescale: number, opts: RuntimeOptions, terrain: TerrainSettings | null = null): Island {
     const sim = new Sim(seed);
-    sim.generate(clockMs, timescale);
+    sim.generate(clockMs, timescale, terrain);
     return new Island(sim, opts);
   }
 

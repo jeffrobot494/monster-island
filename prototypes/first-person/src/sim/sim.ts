@@ -4,6 +4,7 @@ import { Rng, hashSeed } from './rng';
 import { DAY_MS, HOUR_MS, MS_PER_REAL_TICK, baseLight, calDay, hourOf, isNightHour, type TimeInfo } from './clock';
 import { SIZE, TileGrid } from './world';
 import { generateIsland, type IslandLayout } from './island-gen';
+import type { TerrainSettings } from './terrain-import';
 import { findPath, type CostTable } from './pathfind';
 import { CORE_EMITTERS, CORE_SHAPES } from './core-defs';
 import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Entity, Faction, ShapeDef, Stat } from './types';
@@ -106,6 +107,8 @@ export class Sim {
   rng: Rng;
   grid = new TileGrid();
   layout!: IslandLayout;
+  /** the terraformer settings this island's ground came from (null: procedural) */
+  terrain: TerrainSettings | null = null;
   ents = new Map<number, Entity>();
   nextId = 1;
 
@@ -216,11 +219,12 @@ export class Sim {
   }
 
   /** Create a fresh island. clockMs is local wall time (see clock.ts). */
-  generate(clockMs: number, timescale = 1) {
+  generate(clockMs: number, timescale = 1, terrain: TerrainSettings | null = null) {
     this.clockMs = this.createdClock = clockMs;
     this.timescale = timescale;
     this.msPerTick = MS_PER_REAL_TICK * timescale;
-    this.layout = generateIsland(this.seed, this.grid);
+    this.terrain = terrain;
+    this.layout = generateIsland(this.seed, this.grid, terrain);
     this.ground.rebuild();
     this.grid.groundChanged.clear();
     populate(this);

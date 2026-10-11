@@ -3,6 +3,7 @@
 import { Rng, hashSeed } from './rng';
 import { type BehaviorEntry, type DamageInfo, type DeathInfo, type Sim, type SimListener } from './sim';
 import { SIZE } from './world';
+import { M } from './ground';
 import { DMG_TYPES, JOBS, STATS, type Atmosphere, type EmitterDef, type Entity, type Faction, type Job, type ShapeDef, type ShapePart, type Stat } from './types';
 import { applyDamage, heal, initZones, kill, monsterMaxHp, humanMaxHp } from './combat';
 import { REGION_NAMES } from './island-gen';
@@ -483,7 +484,11 @@ export class ModuleRuntime implements SimListener {
         }
         return best;
       },
-      height: (x: unknown, z: unknown) => sim.grid.height(Math.floor(num(x, 'x')), Math.floor(num(z, 'z'))),
+      // in tiles; a terraformer island's ground is far from its tile heights, so it reports the ground itself
+      height: (x: unknown, z: unknown) => {
+        const tx = Math.floor(num(x, 'x')), tz = Math.floor(num(z, 'z'));
+        return sim.grid.base && sim.grid.inBounds(tx, tz) ? sim.ground.y(tx + 0.5, tz + 0.5) / M : sim.grid.height(tx, tz);
+      },
       walkable: (kind: unknown, x: unknown, z: unknown) => sim.walkableFor(str(kind, 'kind', 40), num(x, 'x'), num(z, 'z')),
       regionAt: (x: unknown, z: unknown) => sim.grid.regionAt(num(x, 'x'), num(z, 'z')),
       regionName: (id: unknown) => REGION_NAMES[int(id, 'region id', 0, 255)] ?? 'the sea',

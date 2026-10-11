@@ -4,6 +4,8 @@ import * as THREE from 'three';
 import type { TileTypeDef } from '../sim/types';
 import { Ground, M, WATER_Y, NV } from '../sim/ground';
 import { SIZE, TileGrid, CORE_TILES } from '../sim/world';
+import type { TerrainState } from '../protocol';
+import { buildFeatureMesh } from './feature-mesh';
 
 const RES = 2; // vertices per tile
 const N = NV;
@@ -119,6 +121,7 @@ const GROUND: Record<string, string> = {
   'ruin-floor': '#cbbea2',
   road: '#d6c8a6',
   'shrine-floor': '#ddd2b8',
+  cliff: '#b4a690',
 };
 
 export class Terrain {
@@ -188,9 +191,26 @@ export class Terrain {
     }
   }
 
-  load(types: string[], elev: Float32Array) {
+  /** terraformer islands: spires, arches, floating isles (render/feature-mesh.ts) */
+  private features: THREE.Mesh | null = null;
+  private featuresKey = '';
+
+  load(types: string[], elev: Float32Array, terrain: TerrainState = null) {
     this.grid.types = [...types];
     this.grid.elev = new Float32Array(elev);
+    this.grid.base = terrain ? new Float32Array(terrain.base) : null;
+    this.grid.orig = terrain ? new Float32Array(terrain.orig) : null;
+    const key = terrain ? JSON.stringify(terrain.settings) : '';
+    if (key !== this.featuresKey) {
+      this.featuresKey = key;
+      if (this.features) {
+        this.group.remove(this.features);
+        this.features.geometry.dispose();
+        (this.features.material as THREE.Material).dispose();
+        this.features = null;
+      }
+      if (terrain) this.group.add((this.features = buildFeatureMesh(terrain.settings)));
+    }
     this.ground.rebuild();
     this.rebuildAll();
     this.ready = true;

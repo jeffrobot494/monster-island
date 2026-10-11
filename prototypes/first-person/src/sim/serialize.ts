@@ -2,6 +2,9 @@
 import { Sim } from './sim';
 import { SIZE } from './world';
 import { ensureSpears } from './spears';
+import { NV } from './ground';
+import { BASE_QUANTUM } from './island-import';
+import type { TerrainSettings } from './terrain-import';
 import type { Atmosphere, CreationRecord, CreationRequest, Entity, Faction } from './types';
 
 export const SCHEMA_VERSION = 3;
@@ -16,6 +19,47 @@ function rle<T>(arr: ArrayLike<T>): [T, number][] {
   }
   return out;
 }
+/**
+ * Terraformer ground heights, in steps of BASE_QUANTUM: each the difference from the previous one, zigzag varint,
+ * base64 (most steps fit a byte; about a third of the raw Int16 size).
+ */
+function packBase(base: Float32Array): string {
+  const bytes: number[] = [];
+  let prev = 0;
+  for (let i = 0; i < base.length; i++) {
+    const q = Math.round(base[i] / BASE_QUANTUM), d = q - prev;
+    prev = q;
+    let z = d >= 0 ? d * 2 : -d * 2 - 1;
+    while (z >= 0x80) {
+      bytes.push((z & 0x7f) | 0x80);
+      z = Math.floor(z / 0x80);
+    }
+    bytes.push(z);
+  }
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.slice(i, i + 0x8000));
+  return btoa(bin);
+}
+function unpackBase(s: string): Float32Array {
+  const bin = atob(s);
+  const out = new Float32Array(NV * NV);
+  let p = 0, prev = 0;
+  for (let i = 0; i < out.length; i++) {
+    let z = 0, mul = 1, b: number;
+    do {
+      if (p >= bin.length) throw new Error('corrupt terrain heights');
+      b = bin.charCodeAt(p++);
+      z += (b & 0x7f) * mul;
+      mul *= 0x80;
+    } while (b & 0x80);
+    prev += z % 2 ? -(z + 1) / 2 : z / 2;
+    // the same float arithmetic as generation's quantizing, so a reloaded island's ground is identical
+    out[i] = prev * BASE_QUANTUM;
+  }
+  if (p !== bin.length) throw new Error('corrupt terrain heights');
+  return out;
+}
+
 function unrle<T>(runs: [T, number][], into: { length: number; [i: number]: T }) {
   let i = 0;
   for (const [v, n] of runs) for (let k = 0; k < n; k++) into[i++] = v;
@@ -61,6 +105,8 @@ export interface SavedCore {
   dragging: number;
   gameOver: Sim['gameOver'];
   stats: Sim['stats'];
+  /** terraformer islands: the settings, the ground heights and each tile's height when the island was made */
+  terrain?: { settings: TerrainSettings; base: string; orig: [number, number][] };
 }
 
 export function serializeCore(sim: Sim): SavedCore {
@@ -108,6 +154,9 @@ export function serializeCore(sim: Sim): SavedCore {
     dragging: sim.dragging,
     gameOver: sim.gameOver ? { ...sim.gameOver } : null,
     stats: { ...sim.stats },
+    terrain: sim.terrain && sim.grid.base && sim.grid.orig
+      ? { settings: { ...sim.terrain }, base: packBase(sim.grid.base), orig: rle(Array.from(sim.grid.orig, (v) => Math.round(v * 1000) / 1000)) }
+      : undefined,
   };
 }
 
@@ -153,6 +202,12 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.gameOver = s.gameOver ? { ...s.gameOver } : null;
   sim.stats = { ...s.stats };
   sim.light = sim.computeLight();
+  if (s.terrain) {
+    sim.terrain = { ...s.terrain.settings };
+    sim.grid.base = unpackBase(s.terrain.base);
+    sim.grid.orig = new Float32Array(SIZE * SIZE);
+    unrle(s.terrain.orig, sim.grid.orig);
+  }
   sim.grid.changed.clear();
   sim.ground.rebuild();
   sim.grid.groundChanged.clear();

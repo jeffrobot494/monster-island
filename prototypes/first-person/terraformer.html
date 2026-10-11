@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Monster Island Terraformer</title>
+<!-- Dev server only (npm run dev → /terraformer.html): "Save to game" writes src/terrain/saved-terrain.json through
+     dev/terrain-middleware.ts, and new islands in the game take their ground from it. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Grenze+Gotisch:wght@600&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-bleed 3D viewport; tool panel docked right on desktop, bottom sheet on phones.
+   Deliberately single dark theme (a level-editor look), colors set explicitly. */
+:root {
+  color-scheme: dark;
+  --bg: #17121f;
+  --panel: rgba(28, 22, 38, 0.92);
+  --line: #3a3048;
+  --fg: #ece4f2;
+  --muted: #a397b2;
+  --accent: #5ef2d6;
+  --accent-ink: #0f2a26;
+  --display: "Grenze Gotisch", "Palatino Linotype", Georgia, serif;
+  --body: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 14px; overflow: hidden; }
+#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#view:active { cursor: grabbing; }
+
+.panel {
+  position: fixed; top: 12px; right: 12px; bottom: 12px; width: 300px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  backdrop-filter: blur(8px); display: flex; flex-direction: column; overflow: hidden;
+}
+.panel header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.panel h1 { font-family: var(--display); font-weight: 600; font-size: 26px; line-height: 1; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+.panel h1 span { color: var(--accent); }
+.scroll { overflow-y: auto; padding: 4px 16px 12px; flex: 1; }
+.group { display: grid; gap: 10px; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.group:last-child { border-bottom: 0; }
+.group > * { min-width: 0; }
+.group { grid-template-columns: minmax(0, 1fr); }
+.group h2 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+.row label { font-size: 13px; }
+.row output { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.row input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); margin: 0; }
+.seed { display: flex; gap: 6px; }
+input[type=text], select {
+  flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 7px 9px; font: 13px var(--mono);
+}
+button {
+  font: 600 13px var(--body); border-radius: 6px; padding: 7px 12px; cursor: pointer;
+  border: 1px solid var(--line); background: transparent; color: var(--fg);
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.check input { accent-color: var(--accent); }
+footer { padding: 10px 16px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#stats { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+#busy { position: fixed; left: 16px; top: 16px; font: 12px var(--mono); color: var(--accent); background: var(--panel); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); }
+.hint { position: fixed; left: 16px; bottom: 16px; font-size: 12px; color: var(--muted); }
+#toggle { display: none; }
+#game { font-size: 12px; color: var(--muted); line-height: 1.4; }
+#game b { color: var(--fg); font-weight: 600; }
+#game.err { color: #ff8f8f; }
+.buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.buttons button { flex: 1 1 auto; }
+
+@media (max-width: 720px) {
+  .panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 58%; border-radius: 12px 12px 0 0; border-width: 1px 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .panel.collapsed .scroll, .panel.collapsed footer { display: none; }
+  #toggle { display: inline-block; }
+  .hint { display: none; }
+  .panel h1 { font-size: 22px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+<style>body { margin: 0; } * { box-sizing: border-box; }</style>
+</head>
+<body>
+<canvas id="view" aria-label="3D terrain preview"></canvas>
+<div id="busy" hidden>Raising stone…</div>
+<div class="hint">Drag to orbit · scroll or pinch to zoom · right-drag to pan</div>
+
+<aside class="panel" id="panel">
+  <header>
+    <h1>Terra<span>former</span></h1>
+    <button id="toggle" type="button" aria-expanded="true">Hide</button>
+  </header>
+  <div class="scroll">
+    <div class="group">
+      <h2>World</h2>
+      <div class="seed">
+        <input type="text" id="seed" value="monster-island" aria-label="Seed">
+        <button type="button" id="reroll" class="primary">Reroll</button>
+      </div>
+      <div class="seed">
+        <select id="palette" aria-label="Biome">
+          <option value="monster">Monster Island</option>
+          <option value="ember">Ember Wastes</option>
+          <option value="frost">Frost Hollow</option>
+        </select>
+        <select id="cell" aria-label="Polygon budget">
+          <option value="3">Chunky (3u)</option>
+          <option value="2" selected>Low (2u)</option>
+          <option value="1.5">Medium (1.5u)</option>
+        </select>
+      </div>
+    </div>
+    <div class="group" id="g-land"><h2>Landform</h2></div>
+    <div class="group" id="g-fant"><h2>Fantastical</h2></div>
+    <div class="group" id="g-mesh"><h2>Mesh &amp; view</h2></div>
+    <div class="group" id="g-game">
+      <h2>In the game</h2>
+      <p id="game">Checking what the game has…</p>
+      <div class="buttons">
+        <button type="button" id="save" class="primary">Save to game</button>
+        <button type="button" id="play">Save &amp; start a new island</button>
+        <button type="button" id="forget">Use procedural islands</button>
+      </div>
+    </div>
+  </div>
+  <footer>
+    <span id="stats">—</span>
+    <button type="button" id="copy">Copy settings</button>
+  </footer>
+</aside>
+<script type="module" src="/src/terraformer/main.ts"></script>
+</body>
+</html>

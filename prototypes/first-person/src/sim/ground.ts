@@ -38,6 +38,8 @@ export class Ground {
 
   private rawAt(x: number, z: number): number {
     const g = this.grid;
+    // terraformer islands: raw is the change since the island was made (base holds the heights)
+    if (g.base && g.orig) return (g.height(x, z) - g.orig[z * SIZE + x]) * M;
     const t = g.get(x, z);
     if (STRUCT.has(t)) {
       // structures sit flush on the surrounding ground
@@ -103,7 +105,8 @@ export class Ground {
 
   private vert(i: number, j: number) {
     const x = i / RES, z = j / RES;
-    this.v[j * NV + i] = this.field(x, z) + detail(x * 1.7, z * 1.7);
+    const b = this.grid.base;
+    this.v[j * NV + i] = b ? b[j * NV + i] + this.field(x, z) : this.field(x, z) + detail(x * 1.7, z * 1.7);
   }
 
   /** Ground height (m) at a point in tile units: exactly the mesh triangle under it. */

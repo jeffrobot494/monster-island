@@ -23,6 +23,24 @@ import { GameAudio } from './audio/audio';
 import { M } from './sim/ground';
 import { zoneFor } from './sim/aim';
 import { REGION_NAMES } from './sim/island-gen';
+import { checkSettings, type TerrainSettings } from './sim/terrain-import';
+import savedTerrainFile from './terrain/saved-terrain.json';
+
+/**
+ * The terraformer's island (src/terrain/saved-terrain.json, written by terraformer.html's "Save to game"; null when
+ * there is none). New islands take their ground from it. Read at boot: the dev server doesn't reload pages when the
+ * terraformer saves (dev/terrain-middleware.ts), so a running game keeps its island until it's reloaded.
+ */
+function savedTerrain(): TerrainSettings | null {
+  const file: unknown = savedTerrainFile;
+  if (file === null) return null;
+  try {
+    return checkSettings(file);
+  } catch (err) {
+    console.warn('[terrain] ignoring src/terrain/saved-terrain.json:', (err as Error).message);
+    return null;
+  }
+}
 import houndsSrc from './god/reference-modules/war-hounds.js?raw';
 import fogSrc from './god/reference-modules/poison-fog.js?raw';
 
@@ -91,7 +109,14 @@ async function boot() {
   };
   const platform = await pickPlatform(params, (p) => ui.askSource(p), autoSource);
   const store = platform.store;
+  // Another tab starting a new island on this save slot (the in-game "new island", the terraformer's "Save & play")
+  // replaces this one: stop saving, or this tab's next save would overwrite the new island.
+  const slot = params.get('slot') ?? 'default';
+  const islands = typeof BroadcastChannel === 'function' ? new BroadcastChannel('humans-monsters/islands') : null;
+  let replaced = () => {};
+  if (islands) islands.onmessage = (e) => { if (e.data?.newIsland === slot) replaced(); };
   if (params.get('fresh') === '1') {
+    islands?.postMessage({ newIsland: slot });
     await store.clear?.();
     params.delete('fresh');
     history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}`);
@@ -591,6 +616,12 @@ async function boot() {
 
   const modulesFor = (w: SavedWorld | null) => (w?.manifest ?? []).filter((x) => sources[x.id] !== undefined).map((x) => ({ id: x.id, source: sources[x.id], status: x.status }));
 
+  replaced = () => {
+    sim.stop();
+    store.set = async () => {};
+    ui.banner('A new island', 'This island was replaced by a new one in another tab. Reload to play it.', 'judgment', 3600);
+  };
+
   function startSim(quarantine: string[] = []) {
     // a new island starts at 07:00 (or ?at=HH:MM), so the first day is a full one
     let clock = localNow();
@@ -600,6 +631,8 @@ async function boot() {
       save: worldJson, seed, modules: modulesFor(world), clockMs: clock, realMs: Date.now(),
       timescale: Math.max(1, Number(params.get('timescale')) || GAME_TIMESCALE), quarantine, reveal: params.has('reveal'), invincible: devMode && params.has('god'),
       skip: devMode ? Number(params.get('skip')) || 0 : 0,
+      // ?terrain=off: a procedural island even when the terraformer has saved one
+      terrain: worldJson || params.get('terrain') === 'off' ? null : savedTerrain(),
     });
   }
 
@@ -933,6 +966,12 @@ async function boot() {
   if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
   if (devMode && params.has('yaw')) setInterval(() => (controller.yaw = (Number(params.get('yaw')) * Math.PI) / 180), 200);
   if (devMode && params.has('hideplay')) hudView.play.style.display = 'none';
+  // dev: ?fly=m — fly mode at m meters above the sea (screenshots of the whole island)
+  const flyAt = devMode ? Number(params.get('fly')) : 0;
+  if (flyAt) setTimeout(() => {
+    controller.setFlying(true);
+    (controller as any).flyY = flyAt;
+  }, 1500);
   const judge = devMode ? params.get('judge') : null;
   if (judge) setTimeout(() => {
     const [g, n] = judge.split(':');

@@ -169,9 +169,9 @@ api.world.tileData(x,z); api.world.defineTile(id, { color, height (-1..3), walka
 api.world.countTiles(type); api.world.findTiles(type, limit?) → [{x,z}]; api.world.nearestTile(x,z,type,maxR)
 api.world.height(x,z); api.world.walkable(kind,x,z); api.world.regionAt(x,z) → 0..6 (255 sea); api.world.regionName(id)
 Regions: 0 village (walled, radius 9), 1 Cedar Heights, 2 Olive Terraces, 3 Salt Flats, 4 Wilderness of Stones,
-5 Ruins of the Anakim, 6 the High Place (center).
+5 Ruins of the Anakim, 6 the High Place (around api.game.highAltar; near the center, not always at it).
 Tile types: deep-water, shallow-water, sand, grass, scrub, wheat, olive, vineyard, cedar, rock, wadi, salt, marsh,
-ruin-floor, road, wall, shrine-floor.
+ruin-floor, road, wall, shrine-floor, cliff (sheer rock: unwalkable and protected, on some islands only).
 
 // Entities: reads (frozen views)
 api.ent.all(); api.ent.get(id); api.ent.query({ kind?, faction?, tag?, state?, job?, near?: {x,z,r}, inhabitant?, owner? })

@@ -22,10 +22,13 @@ export const CORE_TILES: TileTypeDef[] = [
   { id: 'shrine-floor', height: 0.6, walkable: true, moveCost: 1.0, color: '#d8ccb0' },
   { id: 'house', height: 0.2, walkable: false, moveCost: Infinity, color: '#8a6a4a' },
   { id: 'gate', height: 0.18, walkable: true, moveCost: 0.8, color: '#c8b48a' },
+  // terraformer islands only (sim/terrain-import.ts): ground too steep to walk, and rock that stands above the ground
+  { id: 'cliff', height: 0.6, walkable: false, moveCost: Infinity, color: '#8a7f72' },
 ];
 
-/** Core structure tiles modules may not paint or erase (F34). */
-export const PROTECTED_TILES = new Set(['wall', 'house', 'gate']);
+/** Core structure tiles modules may not paint or erase (F34). Cliffs too: painting one away would make a sheer
+ * terraformer cliff walkable. */
+export const PROTECTED_TILES = new Set(['wall', 'house', 'gate', 'cliff']);
 
 /** Tiles whose surface height comes from the elevation map. */
 export const ELEV_TILES = new Set(['rock', 'shrine-floor']);
@@ -38,6 +41,12 @@ export class TileGrid {
   elev: Float32Array;
   /** region index per tile (0–6; 255 = sea) */
   region: Uint8Array;
+  /**
+   * Terraformer islands only: ground heights (m) at every Ground vertex, and each tile's height() when the island
+   * was made. Ground then follows `base`, moved only by later tile changes (height() − orig).
+   */
+  base: Float32Array | null = null;
+  orig: Float32Array | null = null;
   defs = new Map<string, TileTypeDef>();
   /** tile indices changed since the last drain */
   changed = new Set<number>();

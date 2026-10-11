@@ -230,7 +230,8 @@ function sendFullState() {
   sentNames.clear();
   prevPos.clear();
   const ents = packEnts();
-  post({ type: 'fullState', seq: ++seq, tick: sim.tick, tiles: [...sim.grid.types], elev: sim.grid.elev.slice(), explored: sim.explored.slice(), ents, attached: [...sim.attached].map(([id, s]) => [id, [...s]]), atmosphere: { ...sim.atmosphere }, layout: sim.layout, epoch: cs(sim).epoch, walkCost: sim.champCost() }, [ents.buffer]);
+  post({ type: 'fullState', seq: ++seq, tick: sim.tick, tiles: [...sim.grid.types], elev: sim.grid.elev.slice(), explored: sim.explored.slice(), ents, attached: [...sim.attached].map(([id, s]) => [id, [...s]]), atmosphere: { ...sim.atmosphere }, layout: sim.layout, epoch: cs(sim).epoch, walkCost: sim.champCost(),
+    terrain: sim.terrain && sim.grid.base && sim.grid.orig ? { settings: sim.terrain, base: sim.grid.base.slice(), orig: sim.grid.orig.slice() } : null }, [ents.buffer]);
   sim.grid.changed.clear();
   sim.exploredChanged.length = 0;
   flushOut();
@@ -489,7 +490,7 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
           island.sim.timescale = msg.timescale;
           island.sim.msPerTick = MS_PER_REAL_TICK * msg.timescale;
         } else {
-          island = Island.create(msg.seed, msg.clockMs, msg.timescale, runtimeOpts);
+          island = Island.create(msg.seed, msg.clockMs, msg.timescale, runtimeOpts, msg.terrain ?? null);
           island.sim.lastRealMs = msg.realMs;
         }
         island.sim.revealAll = !!msg.reveal;
