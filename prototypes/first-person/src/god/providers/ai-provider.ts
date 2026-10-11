@@ -18,7 +18,9 @@ export type AiProgress = { kind: 'status'; text: string } | { kind: 'delta'; cha
 
 export interface AiResponse {
   data: unknown;
-  usage: { input: number; output: number };
+  usage: { input: number; output: number; cachedInput?: number };
+  /** what the call cost, in US dollars, when the provider reports it */
+  cost?: number;
   model?: string;
   seconds?: number;
 }

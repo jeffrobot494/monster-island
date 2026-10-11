@@ -1,6 +1,6 @@
 {
   "mode": "open",
   "maxOutputTokens": 16000,
-  "dailyCreditCap": 500,
-  "perUserDailyCreditCap": 200
+  "dailyCreditCap": 50000,
+  "perUserDailyCreditCap": 10000
 }

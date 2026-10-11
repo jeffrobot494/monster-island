@@ -118,7 +118,7 @@ npm run deploy   # vite build, vendor the RUN.world SDK into dist/, rundot deplo
   unbundled into `dist/vendor/rundot-sdk/` and adds it as its own `<script type="module">`: it reports ready to the
   host, and builds with the SDK bundled into the game's JS hang at "Processing game file" (see
   `../monster-island/docs/run-world-findings.md`). The game code does not import the SDK.
-- `public/thumbnail.jpg` must be a 512×512 JPEG. `rundot/textGen.config.json` caps hosted-LLM spend.
+- `public/thumbnail.jpg` must be a 512×512 JPEG. `rundot/textGen.config.json` caps hosted-LLM spend, in credits (1 credit = $0.001): $10/player and $50/game per day.
 - Deployed builds have no dev server, so the god is the **manual** one (the Claude Code provider needs
   `dev/claude-code-middleware.ts`). A RUN.world `textGen` provider is the next step.
 - Preflight's `sandbox-blocked-modals` check is skipped: all but two hits are `sim.alert(...)`. The real ones are the

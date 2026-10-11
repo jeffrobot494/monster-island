@@ -31,7 +31,7 @@ export interface PendingState {
   v: 2;
   job: Job | null;
   usedIds: string[];
-  usage: { input: number; output: number; calls: number };
+  usage: { input: number; output: number; calls: number; cost?: number };
 }
 
 export interface TraceEntry {
@@ -115,7 +115,8 @@ export class CreationPipeline {
 
   note(text: string, level: TraceEntry['level'] = 'info', detail?: string) {
     this.trace.push({ t: Date.now(), level, text, detail });
-    console.info(`[god] ${text}`);
+    if (detail && level !== 'info' && level !== 'ok') console.info(`[god] ${text}\n${detail}`);
+    else console.info(`[god] ${text}`);
     if (this.trace.length > 300) this.trace.splice(0, this.trace.length - 300);
     this.traceVersion++;
   }
@@ -143,7 +144,10 @@ export class CreationPipeline {
         },
       });
       const secs = r.seconds ?? (Date.now() - live.startedAt) / 1000;
-      this.note(`${label}: answered in ${secs.toFixed(0)}s${r.model ? ` by ${r.model}` : ''}`, 'ok');
+      const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
+      const tokens = `${k(r.usage.input)} in${r.usage.cachedInput ? ` (${k(r.usage.cachedInput)} cached)` : ''} / ${k(r.usage.output)} out`;
+      const cost = r.cost !== undefined ? ` · $${r.cost.toFixed(3)} (this island so far: $${((this.state.usage.cost ?? 0) + r.cost).toFixed(3)})` : '';
+      this.note(`${label}: answered in ${secs.toFixed(0)}s${r.model ? ` by ${r.model}` : ''} · ${tokens}${cost}`, 'ok');
       return r;
     } catch (err) {
       this.note(`${label}: ${err instanceof AiRateLimitError ? 'usage limit reached' : 'call failed'}: ${(err as Error).message}`, 'error');
@@ -221,7 +225,9 @@ export class CreationPipeline {
     return JSON.parse(await this.host.snapshotWorld());
   }
 
-  private track(u: { input: number; output: number }) {
+  private track(r: AiResponse) {
+    const u = r.usage;
+    if (r.cost !== undefined) this.state.usage.cost = (this.state.usage.cost ?? 0) + r.cost;
     this.state.usage.input += u.input;
     this.state.usage.output += u.output;
     this.state.usage.calls++;
@@ -255,7 +261,7 @@ export class CreationPipeline {
         role: 'propose', system: decreeSystem(j.req.god), messages: [{ role: 'user', content: decreeUser(obs, j.req, j.allowed) }],
         schema: DECREE_SCHEMA, maxTokens: 2000, jobKey: `decree:${j.req.night}:${j.req.god}:${j.decreeRetries}`,
       });
-      this.track(r.usage);
+      this.track(r);
       const d = normalizeDecree(r.data);
       if (!j.allowed.includes(d.domain)) {
         j.decreeRetries++;
@@ -284,7 +290,7 @@ export class CreationPipeline {
       }
       const label = j.attempt === 1 ? `Write "${j.decree!.title}"` : `Repair "${j.decree!.title}" (${j.attempt}/${MAX_ATTEMPTS})`;
       const r = await this.call(label, { role: j.attempt === 1 ? 'implement' : 'repair', system: IMPLEMENT_SYSTEM, messages: j.messages, schema: IMPLEMENT_SCHEMA, maxTokens: 16000, jobKey: `impl:${j.id}:${j.attempt}` });
-      this.track(r.usage);
+      this.track(r);
       const bad = checkAgainstSchema(r.data, IMPLEMENT_SCHEMA);
       if (bad) throw new Error(`implementation did not match the schema: ${bad}`);
       const { source, notes } = r.data as { source: string; notes: string };

@@ -2,6 +2,7 @@
 // itself (its sandbox lacks allow-pointer-lock), so the host locks its own document instead (System API:
 // requestFullscreen({ pointerLock }) / setPointerLock) and forwards mouse moves and buttons to the game.
 // https://series-1.gitbook.io/rundot-docs/readme/system
+import { loadRundot } from '../rundot';
 
 export type HostPointerInput =
   | { type: 'move'; movementX: number; movementY: number; buttons: number }
@@ -29,17 +30,8 @@ export interface HostPointer {
 
 /** The host's pointer lock, or null when this is not a RUN.world build or the host cannot lock the pointer. */
 export async function loadHostPointer(): Promise<HostPointer | null> {
-  if (!import.meta.env.VITE_RUNDOT) return null;
-  // The SDK is vendored beside index.html (scripts/vendor-rundot.mjs), not bundled. The same URL as its <script>
-  // tag, so this is the same, already initialising, module instance.
-  const url = new URL('vendor/rundot-sdk/rundot-game-api/index.js', document.baseURI).href;
-  let sys: SystemApi;
-  try {
-    sys = (await import(/* @vite-ignore */ url)).default.system;
-  } catch (err) {
-    console.warn('[host-pointer] RUN.world SDK failed to load', err);
-    return null;
-  }
+  const sys: SystemApi | undefined = (await loadRundot())?.system;
+  if (!sys) return null;
   // getEnvironment throws until the SDK's on-import initialisation finishes
   let caps: ReturnType<SystemApi['getEnvironment']>['capabilities'];
   for (let i = 0; i < 100 && !caps; i++) {

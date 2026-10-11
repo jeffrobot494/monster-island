@@ -69,6 +69,7 @@ What changes if they enforce it:
 - Structured output: `responseFormat: { type: 'json_schema', schema }` is enforced by the server. On Anthropic models it retries once on a schema failure, then returns HTTP 422.
 - Streaming, tool calling, prompt caching and reasoning effort are supported. Rate limits are set per creator.
 - **Cost:** billed in credits. With no config file the platform's default caps apply (about $500 per game per day, about $10 per user per day). **The first `rundot deploy` that detects textGen writes a permissive `{}` config that removes the caps.** Commit your own `rundot/textGen.config.json` (`maxOutputTokens`, `dailyCreditCap`, `perUserDailyCreditCap`, `allowedModels`). Note: the policy is read from the game's *public* release.
+- **Caps are in credits, and 1 credit = $0.001** (the image-gen price table lists 80 credits as $0.080). The server reserves the worst-case cost (prompt + `maxTokens`) before each call. A cap of 200/user/day ($0.20) let a Sonnet decree through, then refused the Opus implement call (27 KB prompt, 16k max output) with `Daily user credit cap reached for textGen`. That cap applied to a private (unlisted) game too.
 - Measured in `run-llm-test` (Playground): `modelClass: 'standard'` resolved to `gpt-5.6-terra`, and a full rewrite of a roughly 30-line module took 4–6 s.
 - Not yet checked: whether a single call can run as long as our current 15-minute agent calls.
 
