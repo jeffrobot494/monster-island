@@ -29,6 +29,8 @@ const MODELS: Record<string, ModelDef> = {
   },
 };
 
+const HIT = 'hit+';
+
 interface Loaded { scene: THREE.Object3D; clips: Map<string, THREE.AnimationClip>; size: number }
 const loaded = new Map<string, Loaded>();
 const listeners: (() => void)[] = [];
@@ -53,6 +55,12 @@ for (const [shape, def] of Object.entries(MODELS)) {
       }
       clips.set(clip.name, clip);
     }
+    // the hit reaction is layered on top of whatever is playing, so it shows mid-swing and mid-stride
+    const hit = clips.get('hit');
+    if (hit) {
+      clips.delete('hit');
+      clips.set(HIT, THREE.AnimationUtils.makeClipAdditive(hit.clone()));
+    }
     let size = 1;
     g.scene.traverse((o) => {
       const m = o as THREE.SkinnedMesh;
@@ -75,6 +83,7 @@ export function buildModelRig(shape: string, tint: string, seed = 0): Rig {
 }
 
 const FADE = 0.2;
+const HIT_FADE = 0.3;
 
 class GlbRig extends Rig {
   private mixer: THREE.AnimationMixer;
@@ -83,7 +92,7 @@ class GlbRig extends Rig {
   private bones: Partial<Record<Zone, THREE.Object3D>> = {};
   private impact: number;
   private follow = 0; // seconds of attack follow-through left after a strike
-  private hit = 0; // seconds of hit reaction left
+  private hit: THREE.AnimationAction | null;
   private lastStrike = 0;
 
   constructor(m: Loaded, def: ModelDef) {
@@ -105,6 +114,9 @@ class GlbRig extends Rig {
     }
     this.mixer = new THREE.AnimationMixer(model);
     for (const [name, clip] of m.clips) this.actions.set(name, this.mixer.clipAction(clip));
+    this.hit = this.actions.get(HIT) ?? null;
+    this.actions.delete(HIT);
+    this.hit?.setLoop(THREE.LoopOnce, 1);
     this.play('idle');
   }
 
@@ -117,16 +129,13 @@ class GlbRig extends Rig {
   }
 
   override hurt() {
-    const a = this.actions.get('hit');
-    if (a) this.hit = a.getClip().duration;
+    this.hit?.reset().fadeIn(0.05).play();
   }
 
-  private play(name: string, once = false): THREE.AnimationAction | null {
+  private play(name: string): THREE.AnimationAction | null {
     const a = this.actions.get(name) ?? this.actions.get('idle') ?? null;
     if (!a || a === this.current) return a;
     a.reset();
-    a.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
-    a.clampWhenFinished = once;
     a.fadeIn(FADE).play();
     this.current?.fadeOut(FADE);
     this.current = a;
@@ -142,7 +151,8 @@ class GlbRig extends Rig {
     }
     this.lastStrike = strike;
     this.follow = Math.max(0, this.follow - dt);
-    this.hit = Math.max(0, this.hit - dt);
+    const h = this.hit;
+    if (h?.isRunning() && h.time > h.getClip().duration - HIT_FADE && h.getEffectiveWeight() >= 1) h.fadeOut(HIT_FADE);
 
     if (lifeless) {
       // the renderer rolls the body onto its side; hold a still frame
@@ -157,8 +167,6 @@ class GlbRig extends Rig {
         if (a.paused) a.time = this.impact * a.getClip().duration;
         a.paused = false;
       }
-    } else if (this.hit > 0) {
-      this.play('hit', true);
     } else {
       const moving = anim === ANIM.walk || anim === ANIM.run || anim === ANIM.flee;
       const a = this.play(anim === ANIM.run || anim === ANIM.flee ? 'run' : moving ? 'walk' : 'idle');
