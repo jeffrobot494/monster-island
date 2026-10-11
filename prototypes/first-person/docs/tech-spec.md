@@ -123,7 +123,7 @@ matters for a second desktop on the LAN.
 | T | Torch on/off (it takes the shield hand) |
 | Q | Inspect the target: a card with bio, wounds, hours, and lair info |
 | M | World map (toggle) |
-| Tab or Esc | Journal (Village, Monsters, Book, Chronicle, Gods, Settings). It releases the pointer. |
+| Tab | Journal (Village, Monsters, Book, Chronicle, Gods, Settings). It releases the pointer; closing it returns to play. Esc pauses (releases the pointer, shows the paused view). |
 | Enter | When a banner or card is showing, dismiss it |
 
 - Clicking the canvas (or the "Click to play" overlay) requests pointer lock. Losing the lock (Esc, alt-tab) shows
@@ -418,7 +418,7 @@ drop/drag (the sword hand pulls a rope back over the shoulder).
   base's text.
 
 ### 8.2 Screens (they release pointer lock; the world keeps running)
-- **Journal** (Tab or Esc): tabs **Village** (job changes as in the base), **Monsters**, **Book of Creation**,
+- **Journal** (Tab): tabs **Village** (job changes as in the base), **Monsters**, **Book of Creation**,
   **Chronicle**, **Gods**, and **Settings** (controls, video, audio, new island, dev buttons). Its contents are the
   base panels restyled for a wide screen.
 - **Map** (M): a full-screen canvas map of the island, drawn from tile colors and the explored mask. It shows the

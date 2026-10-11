@@ -38,7 +38,7 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | Q | inspect what you're looking at |
 | V | first / third person camera (also the button at the bottom right) |
 | M | map |
-| Tab or Esc | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
+| Tab | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
 
 A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night. The world never pauses, even while the journal is open. Whenever you release the mouse, your
 champion holds his ground and strikes back at anything attacking him.

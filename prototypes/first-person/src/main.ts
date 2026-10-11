@@ -233,7 +233,11 @@ async function boot() {
         map.tilesChanged();
       }
     },
-    panelChanged: () => updateLockUi(),
+    // closing the journal (its × or Tab) goes straight back into the game, not to the paused view
+    panelChanged: (open) => {
+      if (!open && !screenOpen()) lockGame();
+      else updateLockUi();
+    },
   }, devMode);
   // dev hotkey: F8 crowns the next champion now (no waiting for dawn)
   if (devMode) window.addEventListener('keydown', (e) => {
@@ -278,8 +282,6 @@ async function boot() {
   controls.onLockChange = (locked) => {
     input({ type: 'lock', on: locked });
     if (locked) firstPlay = false;
-    // Esc released the pointer: show the journal (spec §3.1)
-    if (!locked && !screenOpen()) ui.openSheet();
     updateLockUi();
   };
   const closeScreens = () => {
@@ -290,10 +292,8 @@ async function boot() {
   };
   controls.onAction = (a) => {
     if (a === 'journal') {
-      if (ui.isSheetOpen()) {
-        closeScreens();
-        lockGame();
-      } else {
+      if (ui.isSheetOpen()) closeScreens();
+      else {
         controls.exitLock();
         ui.openSheet();
       }
