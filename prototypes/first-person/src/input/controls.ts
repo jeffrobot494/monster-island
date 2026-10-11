@@ -1,4 +1,5 @@
 // Keyboard + mouse input with pointer lock and rebindable keys (spec §3).
+import type { HostPointer } from './host-pointer';
 export type ActionName =
   | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'throw' | 'inspect' | 'map'
   | 'journal' | 'confirm' | 'camera';
@@ -81,6 +82,7 @@ export class Controls {
    *  those read as a 180° flick. Track a running average of real motion to spot and drop them. */
   private lockedAt = 0;
   private avgMove = 0;
+  private host: HostPointer | null = null;
 
   constructor(private el: HTMLElement, public settings: Settings) {
     window.addEventListener('keydown', (e) => this.keyDown(e));
@@ -89,27 +91,13 @@ export class Controls {
       this.keys.clear();
       this.mouseL = this.mouseR = false;
     });
-    document.addEventListener('pointerlockchange', () => {
-      this.locked = document.pointerLockElement === this.el;
-      this.lockedAt = performance.now();
-      this.avgMove = 0;
-      if (!this.locked) {
-        this.keys.clear();
-        this.mouseL = this.mouseR = false;
-      }
-      this.onLockChange(this.locked);
-    });
+    document.addEventListener('pointerlockchange', () => this.setLocked(document.pointerLockElement === this.el));
     el.addEventListener('mousedown', (e) => {
       if (!this.active) {
         if (this.noLock) this.dragging = true;
         return;
       }
-      this.lastInput = performance.now();
-      if (e.button === 0) {
-        this.mouseL = true;
-        this.clicked = true;
-      }
-      if (e.button === 2) this.mouseR = true;
+      if (!this.host) this.button(e.button, true);
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseL = false;
@@ -118,19 +106,60 @@ export class Controls {
     });
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('mousemove', (e) => {
-      if (!this.locked && !(this.noLock && this.dragging)) return;
-      const now = performance.now();
-      this.lastInput = now;
-      if (this.locked) {
-        if (now - this.lockedAt < 100) return; // the first events after locking carry the cursor's jump to center
-        const mag = Math.abs(e.movementX) + Math.abs(e.movementY);
-        if (mag > 200 && mag > 6 * this.avgMove + 40) return; // a spike far beyond the recent motion: discard it
-        this.avgMove += (mag - this.avgMove) * 0.2;
-      }
-      const k = this.settings.sensitivity / 1000;
-      this.dYaw -= e.movementX * k;
-      this.dPitch -= e.movementY * k * (this.settings.invertY ? -1 : 1);
+      if (this.host ? !(this.noLock && this.dragging) : !this.locked && !(this.noLock && this.dragging)) return;
+      this.look(e.movementX, e.movementY);
     });
+  }
+
+  /** RUN.world: the host holds the pointer lock and forwards the mouse (input/host-pointer.ts). */
+  useHost(host: HostPointer) {
+    this.host = host;
+    host.onLock = (locked) => this.setLocked(locked);
+    host.onInput = (i) => {
+      if (!this.locked) return;
+      if (i.type === 'move') this.look(i.movementX, i.movementY);
+      else if (i.type === 'button') {
+        if (i.pressed) this.button(i.button, true);
+        else if (i.button === 0) this.mouseL = false;
+        else if (i.button === 2) this.mouseR = false;
+      }
+    };
+  }
+
+  private setLocked(locked: boolean) {
+    if (locked === this.locked) return;
+    this.locked = locked;
+    this.lockedAt = performance.now();
+    this.avgMove = 0;
+    if (!locked) {
+      this.keys.clear();
+      this.mouseL = this.mouseR = false;
+    }
+    this.onLockChange(locked);
+  }
+
+  private button(b: number, down: boolean) {
+    this.lastInput = performance.now();
+    if (b === 0) {
+      this.mouseL = down;
+      if (down) this.clicked = true;
+    }
+    if (b === 2) this.mouseR = down;
+  }
+
+  private look(dx: number, dy: number) {
+    const now = performance.now();
+    this.lastInput = now;
+    // under pointer lock (ours or the RUN host's), drop the bogus spikes described at lockedAt
+    if (this.locked) {
+      if (now - this.lockedAt < 100) return; // the first events after locking carry the cursor's jump to center
+      const mag = Math.abs(dx) + Math.abs(dy);
+      if (mag > 200 && mag > 6 * this.avgMove + 40) return; // a spike far beyond the recent motion: discard it
+      this.avgMove += (mag - this.avgMove) * 0.2;
+    }
+    const k = this.settings.sensitivity / 1000;
+    this.dYaw -= dx * k;
+    this.dPitch -= dy * k * (this.settings.invertY ? -1 : 1);
   }
 
   /** Locked, or in no-lock dev mode. */
@@ -140,6 +169,7 @@ export class Controls {
 
   requestLock() {
     if (this.noLock) return;
+    if (this.host) return this.host.request();
     // raw input where supported: sidesteps the OS acceleration path that produces most of the spikes
     const req = (opts?: object) => (this.el.requestPointerLock as (o?: object) => unknown).call(this.el, opts) as Promise<void> | undefined;
     let p: Promise<void> | undefined;
@@ -152,6 +182,10 @@ export class Controls {
   }
 
   exitLock() {
+    if (this.host) {
+      if (this.locked) this.host.release();
+      return;
+    }
     if (document.pointerLockElement) document.exitPointerLock();
   }
 

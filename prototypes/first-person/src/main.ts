@@ -16,6 +16,7 @@ import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_TELEGRAPH, F
 import { GAME_TIMESCALE } from './sim/clock';
 import type { Alert } from './sim/sim';
 import type { CtrlReason } from './sim/champion';
+import { loadHostPointer } from './input/host-pointer';
 import { Controls, loadSettings, saveSettings, keyLabel, ACTION_LABEL, type ActionName } from './input/controls';
 import { ChampionController, EYE_H } from './input/controller';
 import { GameAudio } from './audio/audio';
@@ -68,6 +69,12 @@ async function boot() {
   }
   const controls = new Controls(canvas, settings);
   controls.noLock = devMode && params.has('nolock');
+  if (import.meta.env.VITE_RUNDOT) {
+    // RUN.world: the iframe cannot lock the pointer, the host does; without that, drag to look
+    const host = await loadHostPointer();
+    if (host) controls.useHost(host);
+    else controls.noLock = true;
+  }
   const audio = new GameAudio();
   audio.setVolumes(settings.volume, settings.fxVolume);
   const uiRoot = document.getElementById('ui')!;
