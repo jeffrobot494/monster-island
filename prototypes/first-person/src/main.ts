@@ -11,8 +11,8 @@ import { KEYS } from './persist/save-store';
 import { CreationPipeline } from './god/pipeline';
 import { runValidation } from './god/validation-host';
 import type { SavedWorld } from './sim/island';
-import type { ChronicleEvent, CreationRecord, Zone } from './sim/types';
-import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
+import type { ChronicleEvent, CreationRecord, Entity, Zone } from './sim/types';
+import { F_ANIMAL, F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
 import { GAME_TIMESCALE } from './sim/clock';
 import type { Alert } from './sim/sim';
 import type { CtrlReason } from './sim/champion';
@@ -21,7 +21,7 @@ import { Controls, loadSettings, saveSettings, keyLabel, ACTION_LABEL, type Acti
 import { ChampionController, EYE_H } from './input/controller';
 import { Mounts, bodyCaps, bodyDist } from './render/climb-rig';
 import { CLIMB, capZone } from './sim/climb-body';
-import { BODY, SHAPE_M } from './sim/body';
+import { BODY, SHAPE_M, axisDist, bodyR } from './sim/body';
 import { GameAudio } from './audio/audio';
 import { M } from './sim/ground';
 import { zoneFor } from './sim/aim';
@@ -751,11 +751,21 @@ async function boot() {
 
   let look: { id: number; t: number; h: number; s: number; f: number } | null = null;
   const champId = () => hud?.champion?.id ?? null;
-  const targetReach = (id: number) => {
+  /**
+   * Is a target in reach of E and F? The sim's own test (champion.ts, near): within INTERACT_M (3 m) of its body (its
+   * axis, less its radius) and, on a terraformer island, less than 3 m above or below the feet. Less 0.4 m: walking up
+   * to it, the sim's champion is a moment behind, and a prompt must never promise what E then calls too far.
+   */
+  const inReach = (id: number) => {
     const v = renderer.ents.views.get(id);
-    if (!v) return Infinity;
-    const box = renderer.ents.boxOf(v, true);
-    return Math.hypot(v.pos.x - controller.x * M, v.pos.z - controller.z * M) - Math.max(box.len, box.wid);
+    if (!v) return false;
+    if (renderer.terrain.grid.base && Math.abs(v.pos.y - controller.feetY) >= 3) return false;
+    const arch = renderer.ents.arch(id);
+    const body = {
+      kind: v.flags & F_HUMAN ? 'human' : 'thing', scale: v.scale, yaw: v.yaw, x: v.pos.x / M, z: v.pos.z / M,
+      monster: v.flags & F_MONSTER && arch ? { archetype: arch } : undefined, animal: v.flags & F_ANIMAL ? { species: v.shape } : undefined,
+    } as unknown as Entity;
+    return (axisDist(body, controller.x, controller.z) - bodyR(body)) * M <= 3.0 - 0.4;
   };
 
   function doSwingContact() {
@@ -875,7 +885,7 @@ async function boot() {
     const v = renderer.ents.views.get(look.id);
     if (!v) return '';
     const n = names.get(look.id)?.name ?? 'it';
-    const close = targetReach(look.id) <= 3.2;
+    const close = inReach(look.id);
     if (v.flags & F_DOWNED && v.flags & F_MONSTER) return close ? `${E} Bind ${n} · ${F} Finish it` : `${n} is down: get closer`;
     if ((v.flags & F_BOUND) || (v.flags & F_CORPSE)) return close ? `${E} Drag ${n}` : '';
     if (v.flags & F_HUMAN && look.t < 6) return `${E} Talk to ${n.split(' ')[0]}`;
