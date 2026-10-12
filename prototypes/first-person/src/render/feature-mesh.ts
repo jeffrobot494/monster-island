@@ -7,7 +7,16 @@ import * as THREE from 'three';
 import FT from '../terrain/fantasy-terrain.js';
 import { M, NV, RES } from '../sim/ground';
 import { SIZE } from '../sim/world';
-import { createField, sampleBase, toMeters, type TerrainSettings } from '../sim/terrain-import';
+import { createField, sampleBase, solidMask, toMeters, type TerrainSettings } from '../sim/terrain-import';
+import { FeatureSurface, WALL_NY } from '../input/feature-surface';
+
+/** the y of a triangle's unit normal, in game meters (terraformer y is scaled by heightScale) */
+function steepNy(P: ArrayLike<number>, o: number, s: TerrainSettings): number {
+  const ax = (P[o + 3] - P[o]) * M, ay = (P[o + 4] - P[o + 1]) * s.heightScale, az = (P[o + 5] - P[o + 2]) * M;
+  const bx = (P[o + 6] - P[o]) * M, by = (P[o + 7] - P[o + 1]) * s.heightScale, bz = (P[o + 8] - P[o + 2]) * M;
+  const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+  return ny / (Math.hypot(nx, ny, nz) || 1);
+}
 
 /** the max of a vertex grid within r vertices (separable, so cheap) */
 function dilate(src: Float32Array, r: number): Float32Array {
@@ -26,11 +35,11 @@ function dilate(src: Float32Array, r: number): Float32Array {
 }
 
 /**
- * The mesh, and `rock`: per tile, 1 where a kept triangle reaching down to within 40 m of the ground overlaps it
- * (spires, arch legs and spans, overhangs; floating isles high overhead don't count). Climbing blocks cliff tiles
- * that have rock on them until the mesh itself is climbable (docs/climbing-phase1-plan.md, Part A).
+ * The mesh, and `surface`: what climbing collides with (docs/climbing-phase2-plan.md, Part A). That's the kept
+ * triangles plus a skirt: the dropped ones steeper than 50° on tiles where rock stands on the ground (spire
+ * footprints, arch legs), so the lowest meters of a spire are solid too. The skirt isn't drawn.
  */
-export function buildFeatureMesh(s: TerrainSettings): { mesh: THREE.Mesh; rock: Uint8Array } {
+export function buildFeatureMesh(s: TerrainSettings): { mesh: THREE.Mesh; surface: FeatureSurface } {
   const t0 = performance.now();
   const field = createField(s);
   const grid = FT.sampleGrid(field, { cell: s.cell });
@@ -38,25 +47,27 @@ export function buildFeatureMesh(s: TerrainSettings): { mesh: THREE.Mesh; rock: 
   // the ground's highest point near each triangle, in meters; a triangle within `margin` of it is ground or cliff
   const base = sampleBase(s, field);
   const ground = dilate(base, Math.ceil(s.cell * 1.2 * RES));
-  const rock = new Uint8Array(SIZE * SIZE);
+  const solid = solidMask(s, field);
   const margin = 1.5 + 0.5 * s.jitter * s.cell * s.heightScale;
   const P = flat.positions, Cl = flat.colors;
-  const pos: number[] = [], col: number[] = [];
+  const pos: number[] = [], col: number[] = [], skirt: number[] = [];
   const c = new THREE.Color();
+  const tri = (out: number[], o: number) => {
+    for (let k = 0; k < 3; k++) out.push(P[o + k * 3] * M, toMeters(s, P[o + k * 3 + 1]), P[o + k * 3 + 2] * M);
+  };
   for (let t = 0; t < flat.triangleCount; t++) {
     const o = t * 9;
     const cx = (P[o] + P[o + 3] + P[o + 6]) / 3, cz = (P[o + 2] + P[o + 5] + P[o + 8]) / 3;
     const gi = Math.min(NV - 1, Math.max(0, Math.round(cx * RES))), gj = Math.min(NV - 1, Math.max(0, Math.round(cz * RES)));
     const top = toMeters(s, Math.max(P[o + 1], P[o + 4], P[o + 7]));
-    if (top <= ground[gj * NV + gi] + margin) continue;
-    if (toMeters(s, Math.min(P[o + 1], P[o + 4], P[o + 7])) < base[gj * NV + gi] + 40) {
-      const x0 = Math.max(0, Math.floor(Math.min(P[o], P[o + 3], P[o + 6]))), x1 = Math.min(SIZE - 1, Math.floor(Math.max(P[o], P[o + 3], P[o + 6])));
-      const z0 = Math.max(0, Math.floor(Math.min(P[o + 2], P[o + 5], P[o + 8]))), z1 = Math.min(SIZE - 1, Math.floor(Math.max(P[o + 2], P[o + 5], P[o + 8])));
-      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) rock[z * SIZE + x] = 1;
+    if (top <= ground[gj * NV + gi] + margin) {
+      const ix = Math.min(SIZE - 1, Math.max(0, Math.floor(cx))), iz = Math.min(SIZE - 1, Math.max(0, Math.floor(cz)));
+      if (solid[iz * SIZE + ix] && Math.abs(steepNy(P, o, s)) < WALL_NY) tri(skirt, o);
+      continue;
     }
+    tri(pos, o);
     for (let k = 0; k < 3; k++) {
       const v = o + k * 3;
-      pos.push(P[v] * M, toMeters(s, P[v + 1]), P[v + 2] * M);
       // fantasy-terrain's colors are sRGB; three works in linear
       c.setRGB(Cl[v], Cl[v + 1], Cl[v + 2], THREE.SRGBColorSpace);
       col.push(c.r, c.g, c.b);
@@ -69,6 +80,7 @@ export function buildFeatureMesh(s: TerrainSettings): { mesh: THREE.Mesh; rock: 
   geo.computeBoundingSphere();
   const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
   mesh.castShadow = mesh.receiveShadow = true;
-  console.info(`[terrain] feature mesh: ${pos.length / 9} of ${flat.triangleCount} triangles, ${Math.round(performance.now() - t0)} ms`);
-  return { mesh, rock };
+  const surface = new FeatureSurface([...pos, ...skirt]);
+  console.info(`[terrain] feature mesh: ${pos.length / 9} of ${flat.triangleCount} triangles (+${skirt.length / 9} skirt), ${Math.round(performance.now() - t0)} ms`);
+  return { mesh, surface };
 }

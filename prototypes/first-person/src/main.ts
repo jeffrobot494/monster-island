@@ -507,7 +507,7 @@ async function boot() {
         map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
         map.setExplored(m.explored);
         controller.walk = m.walkCost;
-        controller.rock = renderer.terrain.rock;
+        controller.feat = renderer.terrain.surface;
         controller.decorSolids = renderer.terrain.colliders;
         controller.epoch = m.epoch;
         if (firstFull) {

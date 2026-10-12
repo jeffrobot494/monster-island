@@ -1,14 +1,21 @@
 // Climbing queries against the ground (docs/climbing-phase1-plan.md, Part B). Positions in tiles, heights and
-// distances in meters, slopes in m/m. Pure: the controller and the tests use them. Phase 2 adds the feature-mesh
-// triangles behind the same functions.
+// distances in meters, slopes in m/m. Pure: the controller and the tests use them. The controller combines them with
+// the feature mesh (feature-surface.ts).
 import { M, type Ground } from '../sim/ground';
 
 export const WALL = Math.tan((50 * Math.PI) / 180); // steeper than this on a cliff tile: a wall
 export const LEDGE = Math.tan((40 * Math.PI) / 180); // flatter than this: somewhere to stand
 export const PROBE = 0.25; // m
 
-/** A face: the horizontal unit vector OUT of it (downhill), and its slope (m/m). */
-export interface Face { nx: number; nz: number; slope: number }
+/** A face: the horizontal unit vector OUT of it (downhill), its slope (m/m), and whether it leans past vertical. */
+export interface Face { nx: number; nz: number; slope: number; over?: boolean }
+
+/** The face of a unit 3D normal (a feature-mesh triangle): 99 for the slope of anything vertical or past it. */
+export function faceOf(nx: number, ny: number, nz: number): Face {
+  const h = Math.hypot(nx, nz);
+  if (h < 1e-6) return { nx: 0, nz: 0, slope: ny > 0 ? 0 : 99, over: ny < 0 };
+  return { nx: nx / h, nz: nz / h, slope: ny > 1e-3 ? h / ny : 99, over: ny < -0.02 };
+}
 
 /** Gradient-based face at (x, z), averaged over a 2 m square (5 samples), so the triangle seams don't jitter it. */
 export function faceAt(g: Ground, x: number, z: number): Face {
@@ -55,23 +62,4 @@ export function distToFace(g: Ground, x: number, z: number, nx: number, nz: numb
     return hi;
   }
   return null;
-}
-
-/**
- * The steepest face around (x, z) that reaches height y within maxM (8 probes), or null: air grabs and re-grabs.
- * 1 m, not the design's 0.6: heightmap faces lean back, so at hand height a 78° face is ~0.7 m from a climber's body.
- */
-export function wallNear(g: Ground, x: number, z: number, y: number, maxM = 1): Face | null {
-  if (g.y(x, z) >= y) return null;
-  let best: Face | null = null;
-  for (let a = 0; a < 8; a++) {
-    const dx = Math.cos((a / 8) * Math.PI * 2), dz = Math.sin((a / 8) * Math.PI * 2);
-    const d = distToFace(g, x, z, -dx, -dz, y, maxM);
-    if (d === null) continue;
-    const f = faceAt(g, x + (dx * d) / M, z + (dz * d) / M);
-    // a wall, and facing us
-    if (f.slope <= WALL || f.nx * dx + f.nz * dz > -0.3) continue;
-    if (!best || f.slope > best.slope) best = f;
-  }
-  return best;
 }

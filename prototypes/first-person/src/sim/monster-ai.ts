@@ -64,11 +64,14 @@ export function vReachOk(sim: Sim, m: Entity, t: Entity): boolean {
   return champReachable(sim.ground, m, t);
 }
 
-/** Up a cliff where m can't follow (D7): on a cliff tile or off the ground, on a tile m can't walk. */
+/** Up where m can't follow (D7): on a cliff tile or off the ground, on a tile m can't walk; or up on the feature
+ *  mesh (an arch span) out of m's reach, whatever the tile under it. */
 function upCliff(sim: Sim, m: Entity, t: Entity): boolean {
   if (t.id !== sim.championId || !sim.grid.base || canFly(m)) return false;
+  const alt = t.human?.alt ?? 0;
   const onCliff = sim.grid.get(Math.floor(t.x), Math.floor(t.z)) === 'cliff';
-  return (onCliff || (t.human?.alt ?? 0) > 0.5) && !sim.walkableFor(m, t.x, t.z);
+  if ((onCliff || alt > 0.5) && !sim.walkableFor(m, t.x, t.z)) return true;
+  return alt > 3 && !champReachable(sim.ground, m, t);
 }
 
 /** Gave up on the champion a while ago and leaves them be. */

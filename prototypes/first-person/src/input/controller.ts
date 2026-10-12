@@ -1,12 +1,14 @@
 // The champion controller (spec §4): client-authoritative movement at frame rate with tile collision, stamina,
-// dodge, climbing (docs/climbing-phase1-plan.md, Part C), and pose messages to the sim. Positions in tiles; speeds
+// dodge, climbing (docs/climbing-phase1-plan.md, Part C; on the feature mesh, docs/climbing-phase2-plan.md, Part B),
+// and pose messages to the sim. Positions in tiles; speeds
 // in m/s are converted with M.
 import { M } from '../sim/ground';
 import { SIZE, TileGrid } from '../sim/world';
 import type { Controls } from './controls';
 import type { Ground } from '../sim/ground';
 import type { CtrlReason } from '../sim/champion';
-import { distToFace, faceAt, LEDGE, localFace, slopeAlong, WALL, wallNear, type Face } from './climb-surface';
+import { distToFace, faceAt, faceOf, LEDGE, localFace, PROBE, WALL, type Face } from './climb-surface';
+import type { FeatureSurface } from './feature-surface';
 
 export const EYE_H = 1.65;
 const R = 0.35 / M; // body radius in tiles
@@ -24,6 +26,11 @@ const LUNGE_M = 2, LUNGE_T = 0.25, LUNGE_COST = 15;
 const WALL_JUMP_V = 4; // m/s horizontally
 const MANTLE_T = 0.5;
 const START_T = 0.15; // pushing into a wall this long starts a climb
+// the feature mesh (docs/climbing-phase2-plan.md)
+const STEP_UP = 0.5; // m: a mesh surface this far above the feet is still the floor
+const BODY_R = 0.33; // m: the body test's spheres, at these heights above the feet
+const BODY_Y = [0.55, 1.1, 1.6];
+const CEIL_NY = -0.7; // facing down more than this: a ceiling, not a wall
 
 export type MoveMode = 'walk' | 'air' | 'wall' | 'mantle';
 
@@ -63,10 +70,10 @@ export class ChampionController {
   onFall: (impact: number) => void = () => {};
   /** every 0.6 m climbed */
   onClimbStep: () => void = () => {};
-  /** set by main.ts: tile types (the renderer's grid, which gets god edits in place), the rock mask (Part A), the
-   *  sim's control reason (hold vs autopilot), and the weather */
+  /** set by main.ts: tile types (the renderer's grid, which gets god edits in place), the feature mesh (terraformer
+   *  islands), the sim's control reason (hold vs autopilot), and the weather */
   grid: TileGrid = new TileGrid();
-  rock: Uint8Array | null = null;
+  feat: FeatureSurface | null = null;
   reason: CtrlReason = 'player';
   rain = false;
   /** the wall being climbed */
@@ -121,12 +128,112 @@ export class ChampionController {
     return this.passable(ix, iz);
   }
 
-  /** Tile type first: cliff tiles are ground the slope rules govern (unless rock stands on them); the champion's
-   *  own tile is always walkable in the sim's table, so the table alone can't be trusted for them. */
+  /** Tile type first: cliff tiles are ground the slope rules and the feature mesh govern; the champion's own tile
+   *  is always walkable in the sim's table, so the table alone can't be trusted for them. */
   private passable(ix: number, iz: number): boolean {
     const i = iz * SIZE + ix;
-    if (this.grid.types[i] === 'cliff') return !this.rock?.[i];
+    if (this.grid.types[i] === 'cliff') return true;
     return this.walk[i] > 0;
+  }
+
+  /** The floor under (x, z): the ground, or the feature mesh at or below `ref` + STEP_UP (a spire top, an arch span;
+   *  under the arch, the span is overhead and the ground is the floor). */
+  gy(x: number, z: number, ref = this.feetY): number {
+    const g = this.ground.y(x, z);
+    if (!this.feat) return g;
+    const f = this.feat.floor(x, z, ref + STEP_UP);
+    return f && f.y > g ? f.y : g;
+  }
+
+  /** The slope right under the feet: the mesh triangle's when it's the floor, else the ground's (localFace). */
+  private floorFace(x: number, z: number, ref = this.feetY): Face {
+    if (this.feat) {
+      const f = this.feat.floor(x, z, ref + STEP_UP);
+      if (f && f.y > this.ground.y(x, z)) {
+        const n = this.feat.nrm;
+        return faceOf(n[f.t * 3], n[f.t * 3 + 1], n[f.t * 3 + 2]);
+      }
+    }
+    return localFace(this.ground, x, z);
+  }
+
+  /** Feet on the feature mesh, above the ground: the slope rules apply whatever the tile. */
+  private onMesh(): boolean {
+    return !!this.feat && this.feetY > this.ground.y(this.x, this.z) + 0.3;
+  }
+
+  /** where cliff rules apply: a cliff tile, or up on the mesh */
+  private steepZone(x: number, z: number): boolean {
+    return this.isCliff(x, z) || this.onMesh();
+  }
+
+  /** the floor's directional slope (m/m) from (x, z) along a horizontal unit direction, over PROBE: + is uphill */
+  private slopeAlong(x: number, z: number, dx: number, dz: number): number {
+    return (this.gy(x + (dx * PROBE) / M, z + (dz * PROBE) / M) - this.gy(x, z)) / PROBE;
+  }
+
+  /** The body (three spheres up from feet y) against the mesh's walls and undersides: the triangle hit, or −1. */
+  private bodyHit(x: number, z: number, y: number, r = BODY_R): number {
+    if (!this.feat) return -1;
+    for (const h of BODY_Y) {
+      const t = this.feat.sphereHit(x, z, y + h, r);
+      if (t >= 0) return t;
+    }
+    return -1;
+  }
+
+  /** Can the body (feet at y) move straight from (x0, z0) to (x1, z1)? The mesh's faces only: the sphere test can't
+   *  see the inside of a spire, so a target past a face needs this. */
+  private pathClear(x0: number, z0: number, x1: number, z1: number, y: number): boolean {
+    if (!this.feat) return true;
+    const d = Math.hypot(x1 - x0, z1 - z0) * M;
+    if (d < 1e-6) return true;
+    const dx = ((x1 - x0) * M) / d, dz = ((z1 - z0) * M) / d;
+    for (const h of BODY_Y) if (this.feat.ray(x0, z0, y + h, dx, dz, d + BODY_R)) return false;
+    return true;
+  }
+
+  /** Something overhead: the top of the head (feet y + 1.85) against an underside. */
+  private headHit(x: number, z: number, y: number): boolean {
+    if (!this.feat) return false;
+    const t = this.feat.sphereHit(x, z, y + 1.85, 0.25);
+    return t >= 0 && this.feat.ny(t) < -0.3;
+  }
+
+  /** The mesh's face at triangle t near a point: smoothed, and null for a ceiling or anything not steep. */
+  private meshFace(x: number, y: number, z: number, t: number): Face | null {
+    const [nx, ny, nz] = this.feat!.normalAt(x, y, z, t);
+    return ny < CEIL_NY ? null : faceOf(nx, ny, nz);
+  }
+
+  /**
+   * Horizontal distance (m) from (x, z) along −n to the nearer of the ground and the mesh at height y, and the face
+   * there; null when neither is within maxM, or the nearer is a ceiling. `mesh`: the face is feature-mesh rock.
+   */
+  private faceDist(x: number, z: number, nx: number, nz: number, y: number, maxM: number): { d: number; f: Face; mesh: boolean } | null {
+    const dh = distToFace(this.ground, x, z, nx, nz, y, maxM);
+    let best: { d: number; f: Face; mesh: boolean } | null = dh === null ? null : { d: dh, f: faceAt(this.ground, x - (nx * dh) / M, z - (nz * dh) / M), mesh: false };
+    const h = this.feat?.ray(x, z, y, -nx, -nz, maxM);
+    if (h && (!best || h.d < best.d)) {
+      const f = this.meshFace(x - (nx * h.d) / M, y, z - (nz * h.d) / M, h.t);
+      best = f ? { d: h.d, f, mesh: true } : null;
+    }
+    return best;
+  }
+
+  /** The steepest face around (x, z) that reaches height y within maxM (8 probes): air grabs and re-grabs. */
+  private wallNear(x: number, z: number, y: number, maxM = 1): { f: Face; mesh: boolean } | null {
+    if (this.gy(x, z, y) >= y) return null;
+    let best: { f: Face; mesh: boolean } | null = null;
+    for (let a = 0; a < 8; a++) {
+      const dx = Math.cos((a / 8) * Math.PI * 2), dz = Math.sin((a / 8) * Math.PI * 2);
+      const h = this.faceDist(x, z, -dx, -dz, y, maxM);
+      if (!h) continue;
+      // a wall, and facing us
+      if (h.f.slope <= WALL || h.f.nx * dx + h.f.nz * dz > -0.3) continue;
+      if (!best || h.f.slope > best.f.slope) best = h;
+    }
+    return best;
   }
 
   private isCliff(x: number, z: number): boolean {
@@ -153,8 +260,13 @@ export class ChampionController {
     return c > 0 ? 1 / Math.min(3, Math.max(0.6, c)) : 1;
   }
 
-  /** Is a circle of radius R at (x, z) clear of unwalkable tiles? */
-  private clear(x: number, z: number): boolean {
+  /** Is a circle of radius R at (x, z) clear of unwalkable tiles, and the body (feet at y; by default on the floor
+   *  there when it's higher, when walking) clear of the mesh? */
+  private clear(x: number, z: number, y = this.mode === 'walk' ? Math.max(this.feetY, this.gy(x, z)) : this.feetY): boolean {
+    return this.clearTiles(x, z) && this.bodyHit(x, z, y) < 0;
+  }
+
+  private clearTiles(x: number, z: number): boolean {
     for (const [dx, dz] of RING) if (!this.walkable(x + dx, z + dz)) return false;
     return true;
   }
@@ -172,7 +284,7 @@ export class ChampionController {
         if (this.clear(nx, nz)) {
           this.x = nx;
           this.z = nz;
-          this.feetY = this.ground.y(nx, nz);
+          this.feetY = this.gy(nx, nz);
           this.inputSince = true;
           return;
         }
@@ -188,7 +300,7 @@ export class ChampionController {
     this.mantle = this.lunge = null;
     this.vy = 0;
     this.unstick();
-    this.feetY = this.ground.y(this.x, this.z);
+    this.feetY = this.gy(this.x, this.z);
     this.smoothEye = this.eyeY;
   }
 
@@ -234,7 +346,7 @@ export class ChampionController {
     }
     const was = this.mode;
     this.mode = 'walk';
-    this.feetY = gy;
+    this.feetY = this.gy(x, z, gy + alt);
     this.unstick();
     if (was !== 'walk') this.smoothEye = this.eyeY;
   }
@@ -273,7 +385,7 @@ export class ChampionController {
     if (this.ctrl !== 'player' || this.flying || this.mode !== 'walk' || this.view !== 'normal' || this.dragging || this.dodgeT >= 0) return false;
     if (!this.spend(8)) return false;
     this.mode = 'air';
-    this.feetY = this.fallFrom = this.ground.y(this.x, this.z);
+    this.feetY = this.fallFrom = this.gy(this.x, this.z);
     this.vy = JUMP_V;
     this.inputSince = true;
     void now;
@@ -397,14 +509,22 @@ export class ChampionController {
       // a fall in progress still falls (and still lands, and still hurts)
       if (this.mode === 'air') this.move(this.vx * dt, this.vz * dt);
     }
-    let gy = this.ground.y(this.x, this.z);
+    let gy = this.gy(this.x, this.z);
     if (this.mode === 'air') {
+      const before = this.feetY;
       this.vy -= GRAVITY * dt;
       this.feetY += this.vy * dt;
+      // a jump into an underside stops there
+      if (this.vy > 0 && this.headHit(this.x, this.z, this.feetY)) {
+        this.feetY = before;
+        this.vy = 0;
+      }
       if (this.ctrl === 'player' && this.reason === 'player' && this.controls.down('jump')) this.tryGrab(now, false);
-      gy = this.ground.y(this.x, this.z);
+      // the floor as of the feet before this frame's fall, so a fast fall can't pass through a spire top
+      const ref = Math.max(this.feetY, before);
+      gy = this.gy(this.x, this.z, ref);
       if (this.mode === 'air' && this.feetY <= gy) {
-        const f = this.isCliff(this.x, this.z) ? localFace(this.ground, this.x, this.z) : null;
+        const f = this.isCliff(this.x, this.z) || gy > this.ground.y(this.x, this.z) ? this.floorFace(this.x, this.z, ref) : null;
         if (f && f.slope > WALL && this.slideT < 3) {
           // landing on a face is a slide, not a landing: you keep falling, carried out along it just fast enough to
           // follow the face down
@@ -419,8 +539,9 @@ export class ChampionController {
           this.vy = 0;
           this.slideT = 0;
           this.fallFrom = null;
+          this.feetY = gy;
           this.unstick();
-          gy = this.ground.y(this.x, this.z);
+          gy = this.gy(this.x, this.z);
           this.feetY = gy;
           // a little knee-bend on landing; the eye smoothing below springs back up
           this.smoothEye = gy + EYE_H - Math.min(0.18, Math.max(0, impact) * 0.02);
@@ -432,7 +553,7 @@ export class ChampionController {
     if (this.mode === 'walk') {
       this.feetY = gy;
       // standing on a face is impossible: you start to fall down it (landings, snaps, loads, corrections)
-      if (this.isCliff(this.x, this.z) && localFace(this.ground, this.x, this.z).slope > WALL) {
+      if (this.steepZone(this.x, this.z) && this.floorFace(this.x, this.z).slope > WALL) {
         this.mode = 'air';
         this.vy = 0;
       }
@@ -457,7 +578,7 @@ export class ChampionController {
     // height only matters on terraformer islands; procedural islands keep sending exactly what they always did
     if (this.grid.base) {
       pose.alt = Math.max(0, this.feetY - this.ground.y(this.x, this.z));
-      const climb = this.climbing ? 'wall' : this.isCliff(this.x, this.z) ? 'perch' : undefined;
+      const climb = this.climbing ? 'wall' : this.steepZone(this.x, this.z) ? 'perch' : undefined;
       if (climb) pose.climb = climb;
     }
     this.send({ type: 'input', input: pose });
@@ -478,7 +599,7 @@ export class ChampionController {
     this.pushT = 0;
     this.climbAcc = 0;
     // a step onto the wall, so the feet are on the face and not the flat at its foot
-    this.feetY = this.ground.y(this.x, this.z) + 0.3;
+    this.feetY = this.gy(this.x, this.z) + 0.3;
     this.inputSince = true;
     if (!this.reanchor()) this.toWalk();
   }
@@ -489,15 +610,16 @@ export class ChampionController {
     if (!force && (now < this.noGrabUntil || !this.canClimb())) return false;
     if (force && (this.stamina <= 0 || this.dragging)) return false;
     const was = { x: this.x, z: this.z, feetY: this.feetY };
-    let f = wallNear(this.ground, this.x, this.z, this.feetY + HANDS);
-    if (!f && !force && this.fallFrom !== null && this.feetY > this.fallFrom - 1.5) {
+    let w = this.wallNear(this.x, this.z, this.feetY + HANDS);
+    if (!w && !force && this.fallFrom !== null && this.feetY > this.fallFrom - 1.5) {
       // just went over an edge: catch the lip, hanging by the hands below it
-      f = wallNear(this.ground, this.x, this.z, this.fallFrom - HANDS, 1.5);
-      if (f) this.feetY = this.fallFrom - HANDS;
+      w = this.wallNear(this.x, this.z, this.fallFrom - HANDS, 1.5);
+      if (w) this.feetY = this.fallFrom - HANDS;
     }
-    if (!f) return false;
+    if (!w) return false;
+    const f = w.f;
     const px = this.x - (f.nx * 0.6) / M, pz = this.z - (f.nz * 0.6) / M;
-    if (!this.isCliff(this.x, this.z) && !this.isCliff(px, pz)) {
+    if (!w.mesh && !this.isCliff(this.x, this.z) && !this.isCliff(px, pz)) {
       this.feetY = was.feetY;
       return false;
     }
@@ -517,32 +639,34 @@ export class ChampionController {
   }
 
   /**
-   * Keep the body STANDOFF out from the face at feet height, and re-read the normal (at the hands when the face is
-   * there, else at the feet). False when there's no face at feet height (above the lip, or the face fell away).
+   * Keep the body STANDOFF out from the face, and re-read the normal (at the hands when the face is there, else at
+   * the feet). The face must be there at feet height: false when it isn't (above the lip, or the face fell away).
+   * The standoff is from the nearest of the face at the feet, mid-body, hands and head: on a heightmap that's always
+   * the feet; on an overhang it's higher up, so the head stays out of the rock.
    */
   private anchor: { x: number; z: number; slope: number } | null = null;
   private reanchor(): boolean {
     const f = this.face!;
-    const g = this.ground;
     const sx = this.x + (f.nx * 2) / M, sz = this.z + (f.nz * 2) / M;
-    const d = distToFace(g, sx, sz, f.nx, f.nz, this.feetY, 4);
-    if (d === null || d === 0) {
+    const feet = this.faceDist(sx, sz, f.nx, f.nz, this.feetY, 4);
+    if (!feet || feet.d === 0) {
       this.anchor = null;
       return false;
     }
-    const ax = sx - (f.nx * d) / M, az = sz - (f.nz * d) / M;
-    const af = faceAt(g, ax, az);
-    this.anchor = { x: ax, z: az, slope: af.slope };
-    const dh = distToFace(g, sx, sz, f.nx, f.nz, this.feetY + HANDS, 4);
-    let nf = af;
-    if (dh !== null && dh > 0) {
-      const hf = faceAt(g, sx - (f.nx * dh) / M, sz - (f.nz * dh) / M);
-      if (hf.slope > LEDGE) nf = hf;
-    }
+    const ax = sx - (f.nx * feet.d) / M, az = sz - (f.nz * feet.d) / M;
+    this.anchor = { x: ax, z: az, slope: feet.f.slope };
+    const hands = this.faceDist(sx, sz, f.nx, f.nz, this.feetY + HANDS, 4);
+    let nf = feet.f;
+    if (hands && hands.d > 0 && hands.f.slope > LEDGE) nf = hands.f;
     if (nf.slope > LEDGE && nf.nx * f.nx + nf.nz * f.nz > 0.2) this.face = nf;
-    else this.face = { nx: f.nx, nz: f.nz, slope: Math.max(nf.slope, af.slope) };
-    this.x = ax + (this.face.nx * STANDOFF) / M;
-    this.z = az + (this.face.nz * STANDOFF) / M;
+    else this.face = { nx: f.nx, nz: f.nz, slope: Math.max(nf.slope, feet.f.slope), over: nf.over };
+    let d = feet.d;
+    for (const h of [0.9, HANDS, 1.8]) {
+      const r = h === HANDS ? hands : this.faceDist(sx, sz, f.nx, f.nz, this.feetY + h, 4);
+      if (r && r.d > 0) d = Math.min(d, r.d);
+    }
+    this.x = sx - (f.nx * d) / M + (this.face.nx * STANDOFF) / M;
+    this.z = sz - (f.nz * d) / M + (this.face.nz * STANDOFF) / M;
     return true;
   }
 
@@ -551,8 +675,9 @@ export class ChampionController {
     const f = this.face!;
     const bx = this.anchor ? this.anchor.x : this.x - (f.nx * STANDOFF) / M, bz = this.anchor ? this.anchor.z : this.z - (f.nz * STANDOFF) / M;
     const tx = bx - (f.nx * 0.8) / M, tz = bz - (f.nz * 0.8) / M;
-    const ty = this.ground.y(tx, tz);
-    if (ty > this.feetY + HANDS || localFace(this.ground, tx, tz).slope >= LEDGE || !this.clear(tx, tz)) return null;
+    const ty = this.gy(tx, tz, this.feetY + HANDS);
+    if (ty > this.feetY + HANDS || this.floorFace(tx, tz, ty).slope >= LEDGE || !this.clear(tx, tz, ty)) return null;
+    if (!this.pathClear(this.x, this.z, tx, tz, Math.max(this.feetY, ty + 0.05))) return null;
     return { x: tx, z: tz, y: ty };
   }
 
@@ -669,7 +794,7 @@ export class ChampionController {
         side = fx * CLIMB_SPEED * dt;
       }
       // stamina
-      const drain = (up || side ? DRAIN_MOVE : DRAIN_HOLD) * (this.rain ? 1.5 : 1) * dt;
+      const drain = (up || side ? DRAIN_MOVE : DRAIN_HOLD) * (this.rain ? 1.5 : 1) * (f0.over ? 2 : 1) * dt;
       this.stamina = Math.max(0, this.stamina - drain);
       this.spentAt = now;
     }
@@ -681,9 +806,11 @@ export class ChampionController {
         this.z = nz;
       }
     }
+    // no climbing up through an underside
+    if (up > 0 && this.headHit(this.x, this.z, this.feetY + up)) up = 0;
     this.feetY += up;
     // feet never below the ground under the body
-    const gyBody = this.ground.y(this.x, this.z);
+    const gyBody = this.gy(this.x, this.z);
     if (this.feetY < gyBody) this.feetY = gyBody;
     if (!this.reanchor()) {
       // nothing at feet height: past the lip (mantle) or the face fell away
@@ -707,8 +834,8 @@ export class ChampionController {
         return;
       }
     }
-    const gy = this.ground.y(this.x, this.z);
-    const standable = localFace(this.ground, this.x, this.z).slope < LEDGE && this.clear(this.x, this.z);
+    const gy = this.gy(this.x, this.z);
+    const standable = this.floorFace(this.x, this.z).slope < LEDGE && this.clear(this.x, this.z, gy);
     if (standable && Math.abs(this.feetY - gy) < 0.15) {
       this.toWalk();
       this.inputSince = true;
@@ -766,17 +893,30 @@ export class ChampionController {
     }
   }
 
-  /** May this sub-step go along one axis? Walk mode on cliff tiles: no walking up a wall (and remember it, for
-   *  starting a climb); walking off a drop starts a fall. In the air, no flying into a face. */
+  /** May this sub-step go along one axis? Walk mode on cliff tiles or the mesh: no walking up a wall (and remember
+   *  it, for starting a climb); walking off a drop starts a fall. In the air, no flying into a face. */
   private stepOk(nx: number, nz: number, ax: number, az: number, dx: number, dz: number): boolean {
     if (this.mode === 'air') {
-      if (!(this.grid.base ? this.freeR(nx, nz) : this.clear(nx, nz))) return false;
+      if (!(this.grid.base ? this.freeR(nx, nz) : this.clearTiles(nx, nz))) return false;
+      if (this.bodyHit(nx, nz, this.feetY) >= 0) return false;
       return !(this.isCliff(nx, nz) && this.ground.y(nx, nz) > this.feetY + 0.3);
     }
-    if (!this.clear(nx, nz)) return false;
-    if (this.mode !== 'walk' || !(this.isCliff(this.x, this.z) || this.isCliff(nx, nz))) return true;
-    const along = slopeAlong(this.ground, this.x, this.z, ax, az);
-    const dir = slopeAlong(this.ground, this.x, this.z, dx, dz);
+    if (!this.clearTiles(nx, nz)) return false;
+    if (this.feat) {
+      // rock in the way: a wall to climb if it's steep enough
+      // at the feet's height, or the step's when it's a step up (walking off a top, the body clears the rock first)
+      const y = Math.max(this.feetY, this.gy(nx, nz)), t = this.bodyHit(nx, nz, y);
+      if (t >= 0) {
+        if (this.mode === 'walk') {
+          const f = this.meshFace(nx, y + 1.1, nz, t);
+          if (f && f.slope > WALL) this.wallHit = f;
+        }
+        return false;
+      }
+    }
+    if (this.mode !== 'walk' || !(this.steepZone(this.x, this.z) || this.isCliff(nx, nz))) return true;
+    const along = this.slopeAlong(this.x, this.z, ax, az);
+    const dir = this.slopeAlong(this.x, this.z, dx, dz);
     if (along > WALL || (dir > WALL && along > 0)) {
       const f = faceAt(this.ground, this.x + (dx * 0.25) / M, this.z + (dz * 0.25) / M);
       this.wallHit = f.slope > WALL ? f : faceAt(this.ground, this.x + (ax * 0.25) / M, this.z + (az * 0.25) / M);
@@ -785,7 +925,7 @@ export class ChampionController {
     if (along < -WALL || dir < -WALL) {
       this.mode = 'air';
       this.vy = 0;
-      this.feetY = this.fallFrom = this.ground.y(this.x, this.z);
+      this.feetY = this.fallFrom = this.gy(this.x, this.z);
     }
     return true;
   }

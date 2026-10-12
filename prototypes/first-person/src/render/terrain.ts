@@ -5,6 +5,7 @@ import type { TileTypeDef } from '../sim/types';
 import { Ground, M, WATER_Y, NV } from '../sim/ground';
 import { SIZE, TileGrid, CORE_TILES } from '../sim/world';
 import type { TerrainState } from '../protocol';
+import type { FeatureSurface } from '../input/feature-surface';
 import { buildFeatureMesh } from './feature-mesh';
 
 const RES = 2; // vertices per tile
@@ -194,8 +195,8 @@ export class Terrain {
   /** terraformer islands: spires, arches, floating isles (render/feature-mesh.ts) */
   private features: THREE.Mesh | null = null;
   private featuresKey = '';
-  /** terraformer islands: cliff tiles with feature-mesh rock on them (climbing blocks these); null elsewhere */
-  rock: Uint8Array | null = null;
+  /** terraformer islands: the feature mesh as climbing collides with it; null elsewhere */
+  surface: FeatureSurface | null = null;
 
   load(types: string[], elev: Float32Array, terrain: TerrainState = null) {
     this.grid.types = [...types];
@@ -211,11 +212,11 @@ export class Terrain {
         (this.features.material as THREE.Material).dispose();
         this.features = null;
       }
-      this.rock = null;
+      this.surface = null;
       if (terrain) {
         const built = buildFeatureMesh(terrain.settings);
         this.group.add((this.features = built.mesh));
-        this.rock = built.rock;
+        this.surface = built.surface;
       }
     }
     this.ground.rebuild();

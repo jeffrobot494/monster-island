@@ -81,3 +81,19 @@ export function solidAbove(s: TerrainSettings, f: Field, x: number, z: number, g
   for (let m = lo; m <= hi + 1e-6; m += (hi - lo) / 2) if (f.densityCol(x, toUnits(s, groundM + m), z, c) > 0) return true;
   return false;
 }
+
+/** Per tile, 1 where rock stands 1–2.5 m above the ground (spires, arch legs), tested at five points. */
+export function solidMask(s: TerrainSettings, f: Field): Uint8Array {
+  const solid = new Uint8Array(SIZE * SIZE);
+  for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
+    for (const [ox, oz] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
+      const px = x + ox, pz = z + oz;
+      // against the exact surface there: the vertex grid cuts under sharp terrace edges
+      if (solidAbove(s, f, px, pz, toMeters(s, surfaceAt(f, px, pz)))) {
+        solid[z * SIZE + x] = 1;
+        break;
+      }
+    }
+  }
+  return solid;
+}

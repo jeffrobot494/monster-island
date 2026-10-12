@@ -60,8 +60,9 @@ champion holds his ground and strikes back at anything attacking him.
 
 ### Climbing (terraformer islands)
 
-Cliffs on terraformer islands can be climbed (design: `docs/climbing-design.md`; this is build step 1 of it,
-`docs/climbing-phase1-plan.md`).
+Cliffs on terraformer islands can be climbed, and so can spires, arch legs and overhangs (design:
+`docs/climbing-design.md`; build steps 1 and 2 of it, `docs/climbing-phase1-plan.md` and
+`docs/climbing-phase2-plan.md`).
 - **Start:** walk into a cliff face (steeper than 50°) and keep pushing forward for a moment. Or hold **Space** while
   you're in the air near one, which also catches the lip if you step off a cliff top holding Space.
 - **On the wall:** W/S climb up and down (1.8 m/s), A/D traverse, Shift + a direction lunges 2 m. Space jumps off if
@@ -74,8 +75,10 @@ Cliffs on terraformer islands can be climbed (design: `docs/climbing-design.md`;
 - **Monsters** can only hit you if you're within their vertical reach: a nephil reaches about 7 m up, a tannin 3 m.
   A ground monster that can't reach or follow you waits at the foot of the cliff, prowling and roaring, for 1.5 game
   hours, then gives up and leaves you alone for an hour (unless you hit it). Flyers come up to your height.
-- You can't swing, block, throw or use E/F while climbing. Cliff tiles with spires, arches or overhangs on them can't
-  be climbed yet.
+- **Rock** (spires, arches, overhangs) is solid: you can't walk through it, you can stand on top of it, and you can
+  walk under an arch. Climbing a face that leans out past vertical drains stamina twice as fast. Undersides that face
+  more than 45° down are ceilings: you can climb up to one but not along it.
+- You can't swing, block, throw or use E/F while climbing.
 
 ## URL parameters (dev)
 
@@ -129,7 +132,8 @@ How the game uses it:
   - marks the rest of the steep ground, and anything under standing rock, as `cliff` (protected; not walkable, but
     the champion can climb it).
 - Spires, arches, floating isles and overhangs can't be heightmap ground. `src/render/feature-mesh.ts` draws them in
-  the terraformer's palette from its own mesh, and their footprints are cliff.
+  the terraformer's palette from its own mesh, and their footprints are cliff. The champion collides with that mesh
+  (plus an undrawn skirt at spire bases, where the drawn mesh stops short of the ground).
 - Saves keep the settings and the finished heights (about 100 KB), so a saved island never changes if the terraformer
   or its file changes.
 - Known gaps: caves and caverns are only visible where they open at the surface. Monster strikes against the
@@ -149,7 +153,8 @@ How the game uses it:
 - `src/input/`:
   - `controls.ts`: keyboard, mouse, pointer lock and bindings;
   - `controller.ts`: client-side movement, collision, stamina and climbing (walk, air, wall and mantle modes);
-  - `climb-surface.ts`: face normals, slopes and face distances on the ground, for climbing.
+  - `climb-surface.ts`: face normals, slopes and face distances on the ground, for climbing;
+  - `feature-surface.ts`: the feature mesh as climbing sees it (floors, rays, normals, the body test), hashed per tile.
 - `src/render/`:
   - `renderer.ts`, `terrain.ts` (heightmap and instanced vegetation), `structures.ts` (village, altars, lairs);
   - `entities.ts`: interpolation buffer, rigs or module shapes, look-ray picking;
@@ -162,7 +167,7 @@ How the game uses it:
 
 ```bash
 npm test                                      # all suites, including test/fp.test.ts (first-person rules)
-                                              # and test/climb-*.test.ts (climbing: controller and sim)
+                                              # and test/climb-*.test.ts (climbing: controller, sim, feature mesh)
 TS=1 DAYS=1 npx vitest run test/smoke.test.ts # balance: a real-time day, no player
 ```
 

@@ -298,7 +298,10 @@ function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
   const elapsed = Math.min(0.25, Math.max(0.1, (sim.tick - S.lastPoseTick) * 0.1));
   const d = Math.hypot(p.x - c.x, p.z - c.z);
   const sameTile = Math.floor(p.x) === Math.floor(c.x) && Math.floor(p.z) === Math.floor(c.z);
-  const ok = (sameTile || sim.walkableFor(c, p.x, p.z) || climbTile(sim, p.x, p.z, climb, alt)) && d <= (1.6 * max * elapsed) / M + 0.2 && alt - (c.human?.alt ?? 0) <= 10 * elapsed + 1;
+  // the feet's rise: of alt, or of their absolute height (walking along an arch over a valley raises alt, not the feet)
+  const oldAlt = c.human?.alt ?? 0;
+  const rise = Math.min(alt - oldAlt, terrain ? sim.ground.y(p.x, p.z) + alt - (sim.ground.y(c.x, c.z) + oldAlt) : 0);
+  const ok = (sameTile || sim.walkableFor(c, p.x, p.z) || climbTile(sim, p.x, p.z, climb, alt)) && d <= (1.6 * max * elapsed) / M + 0.2 && rise <= 10 * elapsed + 1;
   S.lastPoseTick = sim.tick;
   if (!ok) {
     correct(sim, c);
@@ -324,7 +327,9 @@ function climbTile(sim: Sim, x: number, z: number, climb: 'wall' | 'perch' | und
   const ix = Math.floor(x), iz = Math.floor(z);
   const t = sim.grid.get(ix, iz);
   if (t === 'cliff' || (t.endsWith('water') && (climb || alt > 0.3))) return true;
-  if (climb !== 'wall' || t === 'wall' || t === 'house') return false;
+  if (t === 'wall' || t === 'house') return false;
+  if (alt > 3) return true; // up on the feature mesh (an arch span) over any other tile
+  if (climb !== 'wall') return false;
   for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (sim.grid.get(ix + dx, iz + dz) === 'cliff') return true;
   return false;
 }

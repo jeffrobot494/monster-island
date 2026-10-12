@@ -3,7 +3,7 @@
 // fords and causeways over water) and marks unwalkable ground as 'cliff'. Edits go to `base` (m, per Ground vertex).
 import { NV, RES, WATER_Y } from './ground';
 import { SIZE, type TileGrid } from './world';
-import { createField, sampleBase, solidAbove, surfaceAt, toMeters, type TerrainSettings } from './terrain-import';
+import { createField, sampleBase, solidMask, type TerrainSettings } from './terrain-import';
 
 interface P {
   x: number;
@@ -27,23 +27,14 @@ const isWater = (t: string) => t === 'deep-water' || t === 'shallow-water';
 export class ImportedTerrain {
   readonly base: Float32Array;
   /** rock stands 1–2.5 m above the ground here (spires, arch legs): never walkable, never built on */
-  readonly solid = new Uint8Array(SIZE * SIZE);
+  readonly solid: Uint8Array;
   /** tiles on a laid road: kept walkable by markCliffs, whatever grading did to their slopes */
   private laid = new Uint8Array(SIZE * SIZE);
 
   constructor(readonly settings: TerrainSettings) {
     const f = createField(settings);
     this.base = sampleBase(settings, f);
-    for (let z = 0; z < SIZE; z++) for (let x = 0; x < SIZE; x++) {
-      for (const [ox, oz] of [[0.5, 0.5], [0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]]) {
-        const px = x + ox, pz = z + oz;
-        // against the exact surface there: the vertex grid cuts under sharp terrace edges
-        if (solidAbove(settings, f, px, pz, toMeters(settings, surfaceAt(f, px, pz)))) {
-          this.solid[z * SIZE + x] = 1;
-          break;
-        }
-      }
-    }
+    this.solid = solidMask(settings, f);
   }
 
   /** base height (m) at a point (tiles), bilinear between vertices */
