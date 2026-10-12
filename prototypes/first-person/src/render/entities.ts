@@ -38,6 +38,8 @@ export interface View {
   windup: number;
   windupAt: number;
   strike: number;
+  /** performance.now ms when its last blow landed (the recovery window for climbing on, climb-rig.ts) */
+  struckAt: number;
   samples: Sample[];
   /** interpolated render position (m) */
   pos: THREE.Vector3;
@@ -135,7 +137,7 @@ export class Entities {
         root.rotation.order = 'YXZ';
         v = {
           id, root, rig: null, shapeParts: [], key: '', shape, tint: -1, flags: 0, scale: 1, squash: 1, ring: 0, anim: 0, mask: 0, hp: 1, seen: true,
-          windup: -1, windupAt: 0, strike: 0, samples: [], pos: new THREE.Vector3(), yaw: 0, lift: 0, roll: 0, speed: 0, lastFrame: 0, phase: Math.random() * 10,
+          windup: -1, windupAt: 0, strike: 0, struckAt: -1e9, samples: [], pos: new THREE.Vector3(), yaw: 0, lift: 0, roll: 0, speed: 0, lastFrame: 0, phase: Math.random() * 10,
         };
         this.views.set(id, v);
         this.group.add(root);
@@ -161,7 +163,10 @@ export class Entities {
       v.seen = ents[o + O.seen] > 0;
       const w = ents[o + O.windup];
       if (w >= 0 && v.windup < 0) v.windupAt = now;
-      if (w < 0 && v.windup >= 0) v.strike = 1;
+      if (w < 0 && v.windup >= 0) {
+        v.strike = 1;
+        v.struckAt = now;
+      }
       v.windup = w;
       const s: Sample = { t: tick, x: ents[o + O.x] * M, y: ents[o + O.y], z: ents[o + O.z] * M, yaw: ents[o + O.yaw], lift: ents[o + O.lift], roll: ents[o + O.roll] };
       if (full || !v.samples.length || v.lastFrame !== this.frameNo - 1) v.samples = [s];
@@ -201,11 +206,13 @@ export class Entities {
     return Math.hypot(v.pos.x - px, v.pos.z - pz);
   }
 
-  /** Per frame: advance the render clock, interpolate, animate. eye = camera position (m). */
   private poseLast = new THREE.Vector3();
 
-  /** Per frame. champPose (third person): draw the champion where the client predicts him, not where the sim last was. */
-  update(dt: number, t: number, eye: THREE.Vector3, night: number, champId: number | null, champPose: ChampPose | null = null) {
+  /**
+   * Per frame, before the controller runs (so a rider sits on this frame's pose): advance the render clock,
+   * interpolate, animate. eye = camera position (m). `posedChamp`: the champion's view is left for poseChamp.
+   */
+  update(dt: number, t: number, eye: THREE.Vector3, champId: number | null, posedChamp = false) {
     // a smoothed sim clock: 10 ticks/s, pulled toward the newest tick
     this.tickClock += dt * 10;
     const err = this.latestTick - this.tickClock;
@@ -213,59 +220,69 @@ export class Entities {
     else this.tickClock += err * Math.min(1, dt * 2);
     this.renderTick = this.tickClock - 1.5;
     for (const v of this.views.values()) {
-      let moved = this.interp(v);
-      const posed = champPose !== null && v.id === champId;
-      if (posed) {
-        moved = Math.hypot(champPose.x - this.poseLast.x, champPose.z - this.poseLast.z);
-        this.poseLast.set(champPose.x, champPose.y, champPose.z);
-        v.pos.copy(this.poseLast);
-        v.yaw = champPose.yaw;
+      if (posedChamp && v.id === champId) continue;
+      this.animateView(v, dt, t, eye, champId, null);
+    }
+  }
+
+  /** Third person: draw the champion where the client predicts him, not where the sim last was. */
+  poseChamp(dt: number, t: number, eye: THREE.Vector3, champId: number | null, champPose: ChampPose) {
+    const v = champId !== null ? this.views.get(champId) : undefined;
+    if (v) this.animateView(v, dt, t, eye, champId, champPose);
+  }
+
+  private animateView(v: View, dt: number, t: number, eye: THREE.Vector3, champId: number | null, champPose: ChampPose | null) {
+    let moved = this.interp(v);
+    const posed = champPose !== null && v.id === champId;
+    if (posed) {
+      moved = Math.hypot(champPose.x - this.poseLast.x, champPose.z - this.poseLast.z);
+      this.poseLast.set(champPose.x, champPose.y, champPose.z);
+      v.pos.copy(this.poseLast);
+      v.yaw = champPose.yaw;
+    }
+    v.speed = v.speed * 0.8 + (dt > 0 ? moved / dt : 0) * 0.2;
+    const hideChamp = (v.flags & F_CHAMPION) !== 0 && champId === v.id && !posed;
+    const dist = v.pos.distanceTo(eye);
+    v.root.visible = !hideChamp && dist < (v.rig ? 150 : 160);
+    if (!v.root.visible) return;
+    v.root.position.set(v.pos.x, v.pos.y + v.lift, v.pos.z);
+    v.root.rotation.y = v.yaw;
+    if (v.strike > 0) v.strike = Math.max(0, v.strike - dt * 4);
+    if (v.rig) {
+      const r = v.rig;
+      const k = SHAPE_M * v.scale;
+      r.root.scale.set(k, k * v.squash, k);
+      // lying down: roll onto the side, raised by the body's half-thickness
+      r.pose.rotation.z = v.roll * Math.PI * 0.5;
+      r.pose.position.y = v.roll * 0.12 + r.hover * (v.anim === ANIM.dead || v.anim === ANIM.downed || v.anim === ANIM.bound ? 0 : 1);
+      const windup = v.windup >= 0 ? Math.min(1, v.windup + (performance.now() - v.windupAt) / 800) : 0;
+      r.update(dt, t, v.anim, v.speed / k, windup, v.strike, v.mask);
+      const shadows = dist < 40;
+      if (r.castShadow !== shadows) {
+        r.castShadow = shadows;
+        r.root.traverse((o) => ((o as THREE.Mesh).castShadow = shadows));
       }
-      v.speed = v.speed * 0.8 + (dt > 0 ? moved / dt : 0) * 0.2;
-      const hideChamp = (v.flags & F_CHAMPION) !== 0 && champId === v.id && !posed;
-      const dist = v.pos.distanceTo(eye);
-      v.root.visible = !hideChamp && dist < (v.rig ? 150 : 160);
-      if (!v.root.visible) continue;
-      v.root.position.set(v.pos.x, v.pos.y + v.lift, v.pos.z);
-      v.root.rotation.y = v.yaw;
-      if (v.strike > 0) v.strike = Math.max(0, v.strike - dt * 4);
-      if (v.rig) {
-        const r = v.rig;
-        const k = SHAPE_M * v.scale;
-        r.root.scale.set(k, k * v.squash, k);
-        // lying down: roll onto the side, raised by the body's half-thickness
-        r.pose.rotation.z = v.roll * Math.PI * 0.5;
-        r.pose.position.y = v.roll * 0.12 + r.hover * (v.anim === ANIM.dead || v.anim === ANIM.downed || v.anim === ANIM.bound ? 0 : 1);
-        const windup = v.windup >= 0 ? Math.min(1, v.windup + (performance.now() - v.windupAt) / 800) : 0;
-        r.update(dt, t, v.anim, v.speed / k, windup, v.strike, v.mask);
-        const shadows = dist < 40;
-        if (r.castShadow !== shadows) {
-          r.castShadow = shadows;
-          r.root.traverse((o) => ((o as THREE.Mesh).castShadow = shadows));
-        }
-      } else {
-        const k = SHAPE_M * v.scale;
-        v.root.scale.set(k, k * v.squash, k);
-        v.root.rotation.z = v.roll * Math.PI * 0.5;
-        for (const { mesh, part } of v.shapeParts) {
-          mesh.position.set(part.pos[0], part.pos[1], part.pos[2]);
-          mesh.scale.set(part.size[0], part.size[1], part.size[2]);
-          const r = part.rot;
-          mesh.rotation.set(r ? r[0] * DEG : 0, r ? r[1] * DEG : 0, r ? r[2] * DEG : 0);
-          const a = part.anim;
-          if (a) {
-            const ph = t * a.speed + v.phase;
-            switch (a.type) {
-              case 'bob': mesh.position.y += Math.sin(ph) * a.amount; break;
-              case 'spin': mesh.rotation.y += ph; break;
-              case 'pulse': mesh.scale.multiplyScalar(1 + Math.sin(ph) * a.amount); break;
-              case 'sway': mesh.rotation.z += Math.sin(ph) * a.amount; break;
-            }
+    } else {
+      const k = SHAPE_M * v.scale;
+      v.root.scale.set(k, k * v.squash, k);
+      v.root.rotation.z = v.roll * Math.PI * 0.5;
+      for (const { mesh, part } of v.shapeParts) {
+        mesh.position.set(part.pos[0], part.pos[1], part.pos[2]);
+        mesh.scale.set(part.size[0], part.size[1], part.size[2]);
+        const r = part.rot;
+        mesh.rotation.set(r ? r[0] * DEG : 0, r ? r[1] * DEG : 0, r ? r[2] * DEG : 0);
+        const a = part.anim;
+        if (a) {
+          const ph = t * a.speed + v.phase;
+          switch (a.type) {
+            case 'bob': mesh.position.y += Math.sin(ph) * a.amount; break;
+            case 'spin': mesh.rotation.y += ph; break;
+            case 'pulse': mesh.scale.multiplyScalar(1 + Math.sin(ph) * a.amount); break;
+            case 'sway': mesh.rotation.z += Math.sin(ph) * a.amount; break;
           }
         }
       }
     }
-    void night;
   }
 
   heightOf(id: number): number {

@@ -149,7 +149,9 @@ export interface HumanInfo {
   fetchSpear?: number;
   /** champion only, terraformer islands: feet above the ground (m) while climbing or falling, and how */
   alt?: number;
-  climb?: 'wall' | 'perch';
+  climb?: 'wall' | 'perch' | 'mount';
+  /** the monster being ridden, and the climb volume (CLIMB index) the champion is on */
+  mount?: { id: number; cap: number };
 }
 
 /** A spear lying in the world, standing in the rack, or in flight. Heights and velocities in meters. */

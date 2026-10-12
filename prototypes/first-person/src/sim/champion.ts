@@ -9,6 +9,7 @@ import { doorOf } from './village';
 import { M, WATER_Y } from './ground';
 import { axisDist, axisPoint, bearingOff, bodyR, champReachable, feetY, frontPoint, heightM } from './body';
 import { champThrow, takeSpear } from './spears';
+import { climbable } from './climb-body';
 
 /** Internal orders: used by autopilot and by dev/test scripts. */
 export type Order =
@@ -21,7 +22,7 @@ export type Order =
   | { type: 'altar' };
 
 export type ChampInput =
-  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean; fly?: boolean; alt?: number; climb?: 'wall' | 'perch' }
+  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean; fly?: boolean; alt?: number; climb?: 'wall' | 'perch' | 'mount'; mount?: { id: number; cap: number } }
   /** the client landed hard (impact m/s; > 13 hurts), at (x, z): falls are client physics, damage is the sim's */
   | { type: 'land'; impact: number; x?: number; z?: number }
   | { type: 'swing'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
@@ -149,6 +150,14 @@ function correct(sim: Sim, c: Entity) {
   if (c.human?.alt) S.correction.alt = c.human.alt;
 }
 
+/** Forget any climbing: height, how, and the monster being ridden. */
+export function clearClimb(c: Entity) {
+  if (!c.human) return;
+  delete c.human.alt;
+  delete c.human.climb;
+  delete c.human.mount;
+}
+
 /** Off the cliff and back on the ground: for autopilot, captivity and loading (docs/climbing-phase1-plan.md, D3). */
 export function groundChampion(sim: Sim, c: Entity) {
   const onCliff = sim.grid.get(Math.floor(c.x), Math.floor(c.z)) === 'cliff';
@@ -166,10 +175,7 @@ export function groundChampion(sim: Sim, c: Entity) {
       sim.stop(c);
     }
   }
-  if (c.human) {
-    delete c.human.alt;
-    delete c.human.climb;
-  }
+  clearClimb(c);
 }
 
 /** A hard landing (D4): leg damage, or death from high enough; deep water breaks the fall. */
@@ -183,10 +189,7 @@ function land(sim: Sim, c: Entity, i: { impact: number; x?: number; z?: number }
     c.x = Math.min(127.99, Math.max(0, i.x!));
     c.z = Math.min(127.99, Math.max(0, i.z!));
   }
-  if (c.human) {
-    delete c.human.alt;
-    delete c.human.climb;
-  }
+  clearClimb(c);
   if (WATER_Y - sim.ground.y(c.x, c.z) >= 1) return;
   const before = c.hp;
   if (impact > 28) applyDamage(sim, c, 9999, { type: 'crush', zone: 'torso', sourceId: -1, deathType: 'crushed' });
@@ -270,13 +273,10 @@ export function processInputs(sim: Sim) {
   }
 }
 
-function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number; fly?: boolean; alt?: number; climb?: 'wall' | 'perch' }) {
+function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number; fly?: boolean; alt?: number; climb?: 'wall' | 'perch' | 'mount'; mount?: { id: number; cap: number } }) {
   const S = cs(sim);
   if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.yaw)) return;
-  if (p.fly && c.human) {
-    delete c.human.alt;
-    delete c.human.climb;
-  }
+  if (p.fly) clearClimb(c);
   if (p.fly) {
     // dev fly mode: anywhere, any speed, and nothing can touch you up there
     S.iframesUntil = sim.tick + 5;
@@ -285,6 +285,10 @@ function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
     c.z = Math.min(127.99, Math.max(0, p.z));
     c.yaw = p.yaw;
     S.pitch = p.pitch;
+    return;
+  }
+  if (p.climb === 'mount') {
+    mountPose(sim, c, p);
     return;
   }
   const downed = c.state === 'downed';
@@ -316,7 +320,38 @@ function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
     else delete c.human.alt;
     if (climb) c.human.climb = climb;
     else delete c.human.climb;
+    delete c.human.mount;
   }
+  S.poses.push({ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw, ...(alt > 0 ? { alt } : {}) });
+  if (S.poses.length > 6) S.poses.shift();
+}
+
+/**
+ * On a monster (docs/climbing-phase3-plan.md, Part D): the monster moves the rider, so instead of the walk and speed
+ * rules the pose must be on a live, climbable monster, within its height of it and no higher than its top + 1 m.
+ * Terraformer islands only (elsewhere the pose is ignored, like a climb's height).
+ */
+function mountPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number; alt?: number; mount?: { id: number; cap: number } }) {
+  const S = cs(sim);
+  if (!sim.grid.base || !c.human) return;
+  S.lastPoseTick = sim.tick;
+  const m = p.mount && Number.isInteger(p.mount.id) ? sim.ents.get(p.mount.id) : undefined;
+  const alt = Number.isFinite(p.alt) ? Math.min(300, Math.max(0, p.alt!)) : 0;
+  const ok = !!m && m.kind === 'monster' && m.hp > 0 && !m.hidden && m.state !== 'bound' && climbable(m.monster?.archetype) && Number.isInteger(p.mount!.cap) &&
+    Math.hypot(p.x - m.x, p.z - m.z) <= heightM(m) / M + 0.3 &&
+    sim.ground.y(p.x, p.z) + alt <= feetY(sim.ground, m) + heightM(m) + 1;
+  if (!ok) {
+    correct(sim, c);
+    return;
+  }
+  c.x = Math.min(127.99, Math.max(0, p.x));
+  c.z = Math.min(127.99, Math.max(0, p.z));
+  c.yaw = p.yaw;
+  S.pitch = p.pitch;
+  if (alt > 0) c.human.alt = alt;
+  else delete c.human.alt;
+  c.human.climb = 'mount';
+  c.human.mount = { id: m!.id, cap: p.mount!.cap };
   S.poses.push({ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw, ...(alt > 0 ? { alt } : {}) });
   if (S.poses.length > 6) S.poses.shift();
 }
@@ -452,6 +487,8 @@ function finish(sim: Sim, c: Entity, id: number | null): string | null {
 export function releaseOnChampion(sim: Sim, m: Entity, c: Entity, hitR: number): 'iframe' | 'miss' | 'block' | 'hit' {
   const S = cs(sim);
   if (sim.tick <= S.iframesUntil) return 'iframe';
+  // its rider is out of its reach, for now (phase 4: shakes and the grab)
+  if (c.human?.mount?.id === m.id) return 'miss';
   const fp = frontPoint(m);
   const arc = (50 * Math.PI) / 180;
   const recent = S.poses.filter((p) => sim.tick - p.tick <= 2);
@@ -723,8 +760,7 @@ export function crown(sim: Sim) {
   }
   c.hidden = false;
   c.state = 'idle';
-  delete c.human!.alt;
-  delete c.human!.climb;
+  clearClimb(c);
   sim.stop(c);
   c.tags = c.tags.filter((t) => t !== 'elder');
   c.tags.push('champion');

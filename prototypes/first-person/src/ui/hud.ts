@@ -32,6 +32,7 @@ const HINTS: Record<string, string> = {
   night: 'Night falls. T: light a torch (it takes your shield hand).',
   drag: 'Drag it to the altar in the village square, then press E on the altar to offer it.',
   scream: 'A scream! Follow the red ! on the compass. Strike the carrier and it drops its captive.',
+  mount: 'You are on its body. WASD: climb over it · Shift + direction: lunge · Space, looking away: jump off · C: let go.',
   lair: 'You found a lair. Monsters rest here outside their hours: catch one asleep for double damage.',
 };
 

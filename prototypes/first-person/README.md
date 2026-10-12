@@ -60,9 +60,9 @@ champion holds his ground and strikes back at anything attacking him.
 
 ### Climbing (terraformer islands)
 
-Cliffs on terraformer islands can be climbed, and so can spires, arch legs and overhangs (design:
-`docs/climbing-design.md`; build steps 1 and 2 of it, `docs/climbing-phase1-plan.md` and
-`docs/climbing-phase2-plan.md`).
+Cliffs on terraformer islands can be climbed, and so can spires, arch legs, overhangs and the nephil (design:
+`docs/climbing-design.md`; build steps 1–3 of it, `docs/climbing-phase1-plan.md`, `docs/climbing-phase2-plan.md` and
+`docs/climbing-phase3-plan.md`).
 - **Start:** walk into a cliff face (steeper than 50°) and keep pushing forward for a moment. Or hold **Space** while
   you're in the air near one, which also catches the lip if you step off a cliff top holding Space.
 - **On the wall:** W/S climb up and down (1.8 m/s), A/D traverse, Shift + a direction lunges 2 m. Space jumps off if
@@ -78,12 +78,27 @@ Cliffs on terraformer islands can be climbed, and so can spires, arch legs and o
 - **Rock** (spires, arches, overhangs) is solid: you can't walk through it, you can stand on top of it, and you can
   walk under an arch. Climbing a face that leans out past vertical drains stamina twice as fast. Undersides that face
   more than 45° down are ceilings: you can climb up to one but not along it.
+- **The nephil** can be climbed. Getting on:
+  - press **Space** beside a downed one;
+  - jump at it with Space held in the 1.5 s after its blow lands;
+  - or drop onto it from above, which grabs it wherever you land, with no fall damage.
+
+  On its body, WASD moves over it at 1.8 m/s. W goes up a leg, or ahead along its shoulders when you're on top of
+  them. Shift + a direction lunges.
+
+  Your view turns with it, and takes 30 % of its sway. On its shoulders and other tops you stand, and stamina comes
+  back; anywhere else it drains as on rock.
+
+  C lets go, Space while looking away jumps off, and climbing down a leg puts you back on your feet. A hit from another
+  monster knocks you off. The nephil you're on doesn't fight back yet (that's phase 4).
 - You can't swing, block, throw or use E/F while climbing.
 
 ## URL parameters (dev)
 
 All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`, `?at=HH:MM`, `?reveal=1`, `?god=1`,
-`?nogod=1`, `?ai=manual`, `?devinstall=…`, `?judge=human:300`, `?script=fight|downed|drag|carry`, `?debug=1`,
+`?nogod=1`, `?ai=manual`, `?devinstall=…`, `?judge=human:300`, `?script=fight|downed|drag|carry|nephil|nephil-downed`
+(scenarios run once the world is loaded; `nephil` puts the nearest nephil a tile ahead, standing still and leaving
+you be, and `nephil-downed` puts it there downed; seed 1 has a nephil, seed 7 doesn't), `?debug=1`,
 `?shot=ms`, `?panel=village|altar|map`) plus:
 
 | Param | Effect |
@@ -96,8 +111,9 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 | `?third=1` | start in third person |
 | `?fly=m` | start in fly mode, m meters above the sea (aerial screenshots) |
 | `?terrain=off` | a new island ignores the terraformer's saved terrain (procedural) |
-| `?hold=forward:5000:9000,jump:…` | hold actions from/to ms after load (headless climbing checks; use with `?nolock=1`) |
-| `?climblog=1` | log the controller's mode, position, feet and stamina every second |
+| `?hold=forward:5000:9000,jump:…` | hold actions from/to ms after the world loads; a one-shot action like jump is also pressed (headless climbing checks; use with `?nolock=1`) |
+| `?climblog=1` | log the controller's mode, position, feet and stamina every second, the body being ridden, and the nearest nephil |
+| `?mountany=1` | any way of getting onto a body works, so you can climb a standing nephil (headless checks) |
 
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
@@ -141,7 +157,7 @@ How the game uses it:
   strike each other and villagers across one. The feature mesh is built on the main thread at load (about 1 s).
 - Climbing's known 2D leftovers: blood from a hit on a climber bursts at ground level; the god-module API doesn't see
   the champion's height; a flyer stooping on a climber can clip into the rock face; there's no climbing animation in
-  third person yet.
+  third person yet (on a monster, the champion's body just stands at the eye's spot).
 
 ## Code map
 
@@ -149,16 +165,18 @@ How the game uses it:
   - `ground.ts`: the shared height function, exactly matching the terrain mesh;
   - `body.ts`: bodies in meters;
   - `aim.ts`: hit zones by aim;
-  - `champion.ts`: poses, swings, dodge, block, interact, hold and autopilot, rope trail.
+  - `champion.ts`: poses, swings, dodge, block, interact, hold and autopilot, rope trail;
+  - `climb-body.ts`: climb volumes, capsules between named body points, per climbable archetype.
 - `src/input/`:
   - `controls.ts`: keyboard, mouse, pointer lock and bindings;
-  - `controller.ts`: client-side movement, collision, stamina and climbing (walk, air, wall and mantle modes);
+  - `controller.ts`: client-side movement, collision, stamina and climbing (walk, air, wall, mantle and mount modes);
   - `climb-surface.ts`: face normals, slopes and face distances on the ground, for climbing;
   - `feature-surface.ts`: the feature mesh as climbing sees it (floors, rays, normals, the body test), hashed per tile.
 - `src/render/`:
   - `renderer.ts`, `terrain.ts` (heightmap and instanced vegetation), `structures.ts` (village, altars, lairs);
   - `entities.ts`: interpolation buffer, rigs or module shapes, look-ray picking;
-  - `rigs.ts` (procedural creature rigs), `viewmodel.ts` (sword arm and shield or torch), `sky.ts`, `particles.ts`.
+  - `rigs.ts` (procedural creature rigs), `viewmodel.ts` (sword arm and shield or torch), `sky.ts`, `particles.ts`;
+  - `climb-rig.ts`: a monster's climb volumes on its current pose, a rider's place on them, and the rules for getting on.
 - `src/audio/audio.ts`: positional sound, played from CC0 recordings in `public/audio` (credits in `public/audio/credits.md`).
 - `src/ui/`: `hud.ts` (crosshair, compass, bars, prompts, hints), `map.ts`, `ui.ts` (journal, altar, cards).
 - `src/god/`: the decree → implement → validate → install pipeline (prompts updated for first person).
@@ -167,7 +185,7 @@ How the game uses it:
 
 ```bash
 npm test                                      # all suites, including test/fp.test.ts (first-person rules)
-                                              # and test/climb-*.test.ts (climbing: controller, sim, feature mesh)
+                                              # and test/climb-*.test.ts (climbing: controller, sim, feature mesh, monsters)
 TS=1 DAYS=1 npx vitest run test/smoke.test.ts # balance: a real-time day, no player
 ```
 

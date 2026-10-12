@@ -635,6 +635,26 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
               sim.dragging = m.id;
             }
           }
+        } else if (msg.name === 'nephil' || msg.name === 'nephil-downed') {
+          // climbing on (docs/climbing-phase3-plan.md): the nearest nephil a tile ahead, standing still and leaving you be, or down
+          const n = sim.monsters().filter((e) => e.monster!.archetype === 'nephil').sort((a, b) => Math.hypot(a.x - c.x, a.z - c.z) - Math.hypot(b.x - c.x, b.z - c.z))[0];
+          if (n) {
+            put(n, c.x + Math.sin(c.yaw) * 1.2, c.z + Math.cos(c.yaw) * 1.2);
+            n.yaw = Math.atan2(c.x - n.x, c.z - n.z);
+            sim.toast(`${n.name} is ${(Math.hypot(n.x - c.x, n.z - c.z) * 8).toFixed(1)} m ahead.`);
+            n.target = -1;
+            n.monster!.ignoreChampUntil = sim.clockMs + 3_600_000;
+            if (msg.name === 'nephil') {
+              n.state = 'rest';
+              n.stateUntil = sim.tick + 36_000;
+            }
+            else {
+              n.hp = sim.maxHp(n) * 0.15;
+              n.state = 'downed';
+              n.roll = 1;
+              n.monster!.downedAt = sim.tick;
+            }
+          } else sim.toast('No nephil on this island.');
         } else if (msg.name === 'carry') {
           const v = sim.humans().find((h) => h.id !== c.id && !h.hidden)!;
           put(v, c.x + 3, c.z + 1.5);

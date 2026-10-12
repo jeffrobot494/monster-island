@@ -168,9 +168,21 @@ export class Renderer {
     return { eye: this.camera.position, dir: this.dir };
   }
 
-  render(cam: CamPose, o: { champId: number | null; sightTiles: number; torch: boolean; fold: number; lairsHome: Set<number>; viewModel: boolean; moveSpeed: number; sprinting: boolean; blocking: boolean; dragging: boolean; roll?: number; champPose?: ChampPose | null }) {
+  private frameDt: { dt: number; t: number } | null = null;
+
+  /** Advance the clock and animate the entities. main.ts calls this before the controller, so a champion riding a
+   *  monster is placed on this frame's pose (docs/climbing-phase3-plan.md, Part B); otherwise render() does. */
+  animate(champId: number | null, posedChamp: boolean) {
     const dt = Math.min(0.1, this.clock.getDelta());
     const t = (this.t = this.clock.elapsedTime);
+    this.ents.update(dt, t, this.eye, champId, posedChamp);
+    this.frameDt = { dt, t };
+  }
+
+  render(cam: CamPose, o: { champId: number | null; sightTiles: number; torch: boolean; fold: number; lairsHome: Set<number>; viewModel: boolean; moveSpeed: number; sprinting: boolean; blocking: boolean; dragging: boolean; roll?: number; champPose?: ChampPose | null }) {
+    if (!this.frameDt) this.animate(o.champId, !!o.champPose);
+    const { dt, t } = this.frameDt!;
+    this.frameDt = null;
     this.camera.position.set(cam.x, cam.y, cam.z);
     this.kickP *= Math.exp(-dt * 18);
     this.kickR *= Math.exp(-dt * 18);
@@ -186,7 +198,7 @@ export class Renderer {
     particleUniforms.fogFar.value = fog.far;
     this.terrain.update(dt, t);
     this.structures.update(t, this.sky.night, o.fold, o.lairsHome);
-    this.ents.update(dt, t, this.eye, this.sky.night, o.champId, o.champPose ?? null);
+    if (o.champPose) this.ents.poseChamp(dt, t, this.eye, o.champId, o.champPose);
     const pos = (id: number) => this.ents.positionOf(id);
     const h = (id: number) => this.ents.heightOf(id);
     this.particles.update(dt, pos, h, this.eye);

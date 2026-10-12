@@ -796,6 +796,12 @@ function fight(sim: Sim, m: Entity, t: Entity) {
   const fp = frontPoint(m);
   const d = Math.hypot(t.x - fp.x, t.z - fp.z);
   const isChamp = t.id === sim.championId;
+  if (isChamp && t.human?.mount?.id === m.id) {
+    // its own rider: no blows, and no turning to face someone on its back (phase 4: shakes and the grab)
+    M.windup = -1;
+    sim.stop(m);
+    return;
+  }
   if (M.windup >= 0) {
     // turn toward the target (180°/s), then freeze the facing for the last 2 ticks
     if (sim.tick - M.windup < 6) {

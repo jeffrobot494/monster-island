@@ -7,7 +7,7 @@ import { PRODUCTION, doorOf, onShift, pickSite, productionMul } from './village'
 import { boldness, isEnraged, raiding } from './monster-ai';
 import { applyDamage, firstName, gainXp, heal, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
-import { cs } from './champion';
+import { clearClimb, cs } from './champion';
 
 export interface AwaySummary {
   hours: number;
@@ -80,10 +80,7 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     if (sim.dragging >= 0 && sim.ents.get(sim.dragging)?.kind !== 'monster') sim.dragging = -1;
     champ.x = V.x + 0.5;
     champ.z = V.z + 1.5;
-    if (champ.human) {
-      delete champ.human.alt;
-      delete champ.human.climb;
-    }
+    clearClimb(champ);
     heal(sim, champ, 9999);
   }
   sim.repathQueue.length = 0;

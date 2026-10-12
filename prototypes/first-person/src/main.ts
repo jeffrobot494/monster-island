@@ -19,6 +19,9 @@ import type { CtrlReason } from './sim/champion';
 import { loadHostPointer } from './input/host-pointer';
 import { Controls, loadSettings, saveSettings, keyLabel, ACTION_LABEL, type ActionName } from './input/controls';
 import { ChampionController, EYE_H } from './input/controller';
+import { Mounts, bodyCaps, bodyDist } from './render/climb-rig';
+import { CLIMB } from './sim/climb-body';
+import { BODY, SHAPE_M } from './sim/body';
 import { GameAudio } from './audio/audio';
 import { M } from './sim/ground';
 import { zoneFor } from './sim/aim';
@@ -142,7 +145,12 @@ async function boot() {
   const controller = new ChampionController(controls, renderer.terrain.ground, (m) => sim.post(m as never));
   renderer.terrain.onColliders = () => (controller.decorSolids = renderer.terrain.colliders);
   controller.grid = renderer.terrain.grid;
-  controller.onClimbStep = () => audio.play('step', undefined, { surface: 'rock' });
+  controller.onClimbStep = () => audio.play('step', undefined, { surface: controller.mount ? 'grass' : 'rock' });
+  // climbing on monsters (docs/climbing-phase3-plan.md)
+  const mounts = new Mounts(renderer.ents);
+  mounts.any = devMode && params.has('mountany');
+  controller.findMount = (x, y, z, maxM, how) => mounts.find(new THREE.Vector3(x, y, z), maxM, how);
+  controller.onMount = () => hudView.hintOnce('mount');
   // a hard landing: the sim decides the damage (it also hears falls that end while the game is paused)
   controller.onFall = (impact) => input({ type: 'land', impact, x: controller.x, z: controller.z });
   controller.onStep = () => audio.play('step', undefined, { surface: renderer.terrain.tileAt(controller.x, controller.z) });
@@ -495,6 +503,7 @@ async function boot() {
     if (f.actionError) ui.toast(f.actionError, 'info', 3);
   }
 
+  const scenario = devMode ? params.get('script') : null;
   let firstFull = true;
   sim.onMessage = (m: SimToMain) => {
     switch (m.type) {
@@ -525,6 +534,9 @@ async function boot() {
             const cx = L.villageAltar.x + 0.5, cz = L.villageAltar.z + 1;
             controller.yaw = Math.atan2(L.highAltar.x - cx, L.highAltar.z - cz);
           }
+          // a dev scenario once the world is there (it acts on the champion's pose, so after the first one)
+          if (scenario) setTimeout(() => sim.post({ type: 'devScenario', name: scenario }), 500);
+          startHolds();
         }
         break;
       }
@@ -838,6 +850,8 @@ async function boot() {
       doSwingContact();
     }
 
+    // the bodies move first, so a champion riding one is placed on this frame's pose
+    renderer.animate(champId(), settings.thirdPerson && ctrlReason !== 'dead');
     // camera
     let cam: { x: number; y: number; z: number; yaw: number; pitch: number };
     let roll = 0;
@@ -865,7 +879,8 @@ async function boot() {
         const box = renderer.ents.boxOf(v);
         // only bodies at your height: a monster at the foot of a cliff doesn't shove you around on top of it
         if (v.pos.y > controller.feetY + 1.8 || v.pos.y + box.hgt < controller.feetY) return;
-        const r = box.wid / M;
+        // a body you can climb is its trunk (the sim's radius), so its legs are in reach; others keep the hit box
+        const r = (CLIMB[v.shape] ? BODY[v.shape].r * SHAPE_M * v.scale : box.wid) / M;
         const half = Math.max(0, box.len - box.wid) / M;
         // two circles along a long body (F12)
         for (const k of half > 0 ? [-half, half] : [0]) controller.solids.push({ x: v.pos.x / M + Math.sin(v.yaw) * k, z: v.pos.z / M + Math.cos(v.yaw) * k, r });
@@ -881,7 +896,8 @@ async function boot() {
           controller.z = cv.pos.z / M;
         }
       }
-      cam = { x: controller.x * M, y: controller.eyeY, z: controller.z * M, yaw: controller.yaw, pitch: controller.pitch };
+      cam = { x: controller.x * M, y: controller.eyeY, z: controller.z * M, yaw: controller.yaw, pitch: controller.pitch + controller.tiltP };
+      roll = controller.tiltR;
       if (ctrlReason === 'downed') roll = 0.35;
       if (settings.thirdPerson) {
         champPose = { x: cam.x, y: cam.y - EYE_H, z: cam.z, yaw: cam.yaw };
@@ -981,19 +997,37 @@ async function boot() {
   if (devMode && params.get('devinstall')) setTimeout(() => devInstall(params.get('devinstall')!), 1500);
   const panel = devMode ? params.get('panel') : null;
   if (panel) setTimeout(() => (panel === 'altar' ? ui.openAltar() : panel === 'map' ? map.toggle(true, { x: controller.x, z: controller.z }) : ui.openSheet(panel)), 2500);
-  const scenario = devMode ? params.get('script') : null;
-  if (scenario) setTimeout(() => sim.post({ type: 'devScenario', name: scenario }), 1200);
   if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
   if (devMode && params.has('yaw')) setInterval(() => (controller.yaw = (Number(params.get('yaw')) * Math.PI) / 180), 200);
   if (devMode && params.has('hideplay')) hudView.play.style.display = 'none';
-  if (devMode && params.has('climblog')) setInterval(() => console.info(`[climb] ${controller.mode} ${controller.x.toFixed(2)},${controller.z.toFixed(2)} feet ${controller.feetY.toFixed(1)} ground ${renderer.terrain.y(controller.x, controller.z).toFixed(1)} st ${controller.stamina.toFixed(0)} yaw ${controller.yaw.toFixed(2)} ${ctrlReason} ${controller.ctrl} tile ${renderer.terrain.tileAt(controller.x, controller.z)}`), 1000);
-  // dev: ?hold=forward:2000:9000,jump:9000:9500 — hold actions from/to ms after boot (headless climbing checks)
-  if (devMode && params.get('hold')) for (const spec of params.get('hold')!.split(',')) {
-    const [a, from, to] = spec.split(':');
-    const code = settings.bindings[a as keyof typeof settings.bindings];
-    if (!code) continue;
-    setTimeout(() => controls.keys.add(code), Number(from) || 0);
-    setTimeout(() => controls.keys.delete(code), Number(to) || 1e9);
+  if (devMode && params.has('climblog')) setInterval(() => console.info(`[climb] ${controller.mode} ${controller.x.toFixed(2)},${controller.z.toFixed(2)} feet ${controller.feetY.toFixed(1)} ground ${renderer.terrain.y(controller.x, controller.z).toFixed(1)} st ${controller.stamina.toFixed(0)} yaw ${controller.yaw.toFixed(2)} ${ctrlReason} ${controller.ctrl} tile ${renderer.terrain.tileAt(controller.x, controller.z)}${controller.mount ? ` on ${controller.mount.id} cap ${controller.mount.cap}${controller.perched ? ' perched' : ''}` : ''}${nearestClimbable()}`), 1000);
+  /** the nearest nephil and how far the hands are from its body (docs/climbing-phase3-plan.md) */
+  function nearestClimbable() {
+    let best = '', bd = Infinity;
+    renderer.ents.each((v) => {
+      if (!(v.flags & F_MONSTER) || v.shape !== 'nephil') return;
+      const d = Math.hypot(v.pos.x - controller.x * M, v.pos.z - controller.z * M);
+      if (d >= bd) return;
+      bd = d;
+      const caps = bodyCaps(v);
+      const hands = caps ? bodyDist(caps, new THREE.Vector3(controller.x * M, controller.feetY + 1.3, controller.z * M)).toFixed(2) : 'none';
+      best = ` | ${v.shape} ${d.toFixed(1)} m${v.flags & F_DOWNED ? ' downed' : ''}, hands ${hands} m from its body`;
+    });
+    return best;
+  }
+  // dev: ?hold=forward:2000:9000,jump:9000:9500 — hold actions from/to ms after the world is ready (headless
+  // climbing checks; loading takes a varying few seconds)
+  function startHolds() {
+    if (devMode && params.get('hold')) for (const spec of params.get('hold')!.split(',')) {
+      const [a, from, to] = spec.split(':');
+      const code = settings.bindings[a as keyof typeof settings.bindings];
+      if (!code) continue;
+      setTimeout(() => {
+        controls.keys.add(code);
+        (controls as unknown as { pressed: Set<string> }).pressed.add(a); // one-shot actions (jump) too
+      }, Number(from) || 0);
+      setTimeout(() => controls.keys.delete(code), Number(to) || 1e9);
+    }
   }
   // dev: ?fly=m — fly mode at m meters above the sea (screenshots of the whole island)
   const flyAt = devMode ? Number(params.get('fly')) : 0;

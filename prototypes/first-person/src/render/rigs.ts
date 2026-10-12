@@ -1,7 +1,7 @@
 // Procedural creature rigs (spec §7.5): primitives on pivoted joints, animated from the pack's anim enum.
 // Rigs are built in shape units (a human is ~0.8 units tall); the renderer scales the root by UNIT_M × entity scale.
 import * as THREE from 'three';
-
+import type { BodyPoint } from '../sim/climb-body';
 
 export const ANIM = { idle: 0, walk: 1, run: 2, work: 3, windup: 4, strike: 5, flee: 6, downed: 7, bound: 8, carried: 9, dead: 10, sleep: 11 } as const;
 
@@ -69,6 +69,8 @@ export class Rig {
   wings: THREE.Group[] = [];
   tail?: THREE.Group;
   zoneObjs: Partial<Record<Zone, THREE.Object3D[]>> = {};
+  /** named body points for the climb volumes (sim/climb-body.ts) */
+  points: Partial<Record<BodyPoint, THREE.Object3D>> = {};
   stumps: Partial<Record<Zone, THREE.Mesh>> = {};
   height = 0.8;
   length = 0.4;
@@ -287,6 +289,18 @@ function biped(o: BipedOpts): Rig {
   r.shR = limb(spine, [-o.shoulderX, topY - 0.03, 0], o.armLen, o.armW, o.tint);
   r.height = hipY + topY + o.head[1];
   r.strideLen = o.legLen * 0.9;
+  const P = r.points;
+  P.hips = spine;
+  P.chest = P.neck = r.neck;
+  P.headTop = joint(r.neck, [0, o.head[1], 0]);
+  for (const [s, sh, hip] of [['L', r.shL, r.hipL], ['R', r.shR, r.hipR]] as const) {
+    P[`sh${s}`] = sh;
+    P[`elbow${s}`] = joint(sh, [0, -o.armLen / 2, 0]);
+    P[`hand${s}`] = joint(sh, [0, -o.armLen, 0]);
+    P[`hip${s}`] = hip;
+    P[`knee${s}`] = joint(hip, [0, -o.legLen / 2, 0]);
+    P[`foot${s}`] = joint(hip, [0, -o.legLen, 0]);
+  }
   r.mark('head', head);
   r.mark('torso', torso);
   r.mark('armL', r.shL);

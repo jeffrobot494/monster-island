@@ -1,6 +1,6 @@
 // The champion controller (spec §4): client-authoritative movement at frame rate with tile collision, stamina,
-// dodge, climbing (docs/climbing-phase1-plan.md, Part C; on the feature mesh, docs/climbing-phase2-plan.md, Part B),
-// and pose messages to the sim. Positions in tiles; speeds
+// dodge, climbing (docs/climbing-phase1-plan.md, Part C; on the feature mesh, docs/climbing-phase2-plan.md, Part B;
+// on monsters, docs/climbing-phase3-plan.md, Part C), and pose messages to the sim. Positions in tiles; speeds
 // in m/s are converted with M.
 import { M } from '../sim/ground';
 import { SIZE, TileGrid } from '../sim/world';
@@ -31,8 +31,30 @@ const STEP_UP = 0.5; // m: a mesh surface this far above the feet is still the f
 const BODY_R = 0.33; // m: the body test's spheres, at these heights above the feet
 const BODY_Y = [0.55, 1.1, 1.6];
 const CEIL_NY = -0.7; // facing down more than this: a ceiling, not a wall
+// monsters (docs/climbing-phase3-plan.md)
+const HANG_OUT = 0.45; // m: the eye out from the body where you hang
+const PERCH_NY = 0.8; // a body surface facing up more than this is a top: you stand on it
+const DROP_VY = -5; // m/s: falling at least this fast into a body grabs it
 
-export type MoveMode = 'walk' | 'air' | 'wall' | 'mantle';
+export type MoveMode = 'walk' | 'air' | 'wall' | 'mantle' | 'mount';
+
+/** A monster body the champion rides (render/climb-rig.ts): the controller's whole view of it. Meters. */
+export interface MountBody {
+  readonly id: number;
+  /** the capsule you're on (an index into CLIMB[archetype]) */
+  readonly cap: number;
+  /** this frame: the anchor (where the hands are) and the surface's outward normal; null when the body is gone */
+  place(): { p: [number, number, number]; n: [number, number, number] } | null;
+  /** slide the anchor along the body by a world displacement */
+  move(dx: number, dy: number, dz: number): void;
+  /** the body's facing, to carry the view round as it turns */
+  yaw(): number;
+  /** a share of the body's pitch and roll, in the frame of a view facing `viewYaw` */
+  tilt(viewYaw: number): [number, number];
+}
+
+/** ground: Space beside it; air: Space held in a jump; drop: falling into it from above */
+export type MountHow = 'ground' | 'air' | 'drop';
 
 export interface Solid { x: number; z: number; r: number } // tiles
 
@@ -59,8 +81,9 @@ export class ChampionController {
   get air() {
     return this.mode === 'air';
   }
+  /** on a wall, pulling up, or on a monster: no swinging, blocking or interacting */
   get climbing() {
-    return this.mode === 'wall' || this.mode === 'mantle';
+    return this.mode === 'wall' || this.mode === 'mantle' || this.mode === 'mount';
   }
   /** feet height (m, absolute) and vertical speed (m/s); the sim sees the feet as `alt` above the ground */
   feetY = 0;
@@ -78,6 +101,19 @@ export class ChampionController {
   rain = false;
   /** the wall being climbed */
   face: Face | null = null;
+  /** set by main.ts: the monster bodies in reach (render/climb-rig.ts) */
+  findMount: ((x: number, y: number, z: number, maxM: number, how: MountHow) => MountBody | null) | null = null;
+  /** the body being ridden */
+  mount: MountBody | null = null;
+  /** on a body's top: standing, so no drain */
+  perched = false;
+  /** a share of the ridden body's pitch and roll, for the camera (rad) */
+  tiltP = 0;
+  tiltR = 0;
+  /** every time you get on a body */
+  onMount: () => void = () => {};
+  private mountYaw = 0;
+  private mountN: [number, number, number] = [0, 1, 0];
   private noGrabUntil = 0;
   private pushT = 0;
   private wallHit: Face | null = null;
@@ -295,6 +331,7 @@ export class ChampionController {
   /** Enter walk mode on the ground here. */
   private toWalk() {
     this.mode = 'walk';
+    this.leaveMount();
     this.fallFrom = null;
     this.face = null;
     this.mantle = this.lunge = null;
@@ -336,6 +373,7 @@ export class ChampionController {
     this.dodgeT = -1;
     this.mantle = this.lunge = null;
     this.face = null;
+    this.leaveMount();
     const gy = this.ground.y(x, z);
     if (alt > 0.3 && this.grid.base) {
       this.mode = 'air';
@@ -361,6 +399,7 @@ export class ChampionController {
       this.flyY = this.eyeY;
       this.mode = 'walk';
       this.face = null;
+      this.leaveMount();
       this.mantle = this.lunge = null;
       return;
     }
@@ -383,6 +422,8 @@ export class ChampionController {
 
   tryJump(now: number): boolean {
     if (this.ctrl !== 'player' || this.flying || this.mode !== 'walk' || this.view !== 'normal' || this.dragging || this.dodgeT >= 0) return false;
+    // beside a downed monster, Space climbs on instead
+    if (this.tryMount('ground', now)) return true;
     if (!this.spend(8)) return false;
     this.mode = 'air';
     this.feetY = this.fallFrom = this.gy(this.x, this.z);
@@ -438,8 +479,8 @@ export class ChampionController {
     if (this.yaw > Math.PI) this.yaw -= Math.PI * 2;
     if (this.yaw < -Math.PI) this.yaw += Math.PI * 2;
 
-    // stamina regeneration (none while on a wall)
-    if (!this.climbing && now - this.spentAt > 0.8) this.stamina = Math.min(100, this.stamina + 25 * dt);
+    // stamina regeneration (none while on a wall, or hanging on a body)
+    if ((!this.climbing || this.perched) && now - this.spentAt > 0.8) this.stamina = Math.min(100, this.stamina + 25 * dt);
     if (this.winded && this.stamina >= 25) this.winded = false;
 
     if (this.ctrl === 'player' && this.flying) {
@@ -519,6 +560,8 @@ export class ChampionController {
         this.feetY = before;
         this.vy = 0;
       }
+      // onto a monster: falling into its body from above, or Space held in reach of one you may climb
+      if (this.ctrl === 'player' && this.reason === 'player' && ((this.vy < DROP_VY && this.tryMount('drop', now)) || (this.controls.down('jump') && this.tryMount('air', now)))) return;
       if (this.ctrl === 'player' && this.reason === 'player' && this.controls.down('jump')) this.tryGrab(now, false);
       // the floor as of the feet before this frame's fall, so a fast fall can't pass through a spire top
       const ref = Math.max(this.feetY, before);
@@ -578,8 +621,9 @@ export class ChampionController {
     // height only matters on terraformer islands; procedural islands keep sending exactly what they always did
     if (this.grid.base) {
       pose.alt = Math.max(0, this.feetY - this.ground.y(this.x, this.z));
-      const climb = this.climbing ? 'wall' : this.steepZone(this.x, this.z) ? 'perch' : undefined;
+      const climb = this.mode === 'mount' ? 'mount' : this.climbing ? 'wall' : this.steepZone(this.x, this.z) ? 'perch' : undefined;
       if (climb) pose.climb = climb;
+      if (this.mode === 'mount' && this.mount) pose.mount = { id: this.mount.id, cap: this.mount.cap };
     }
     this.send({ type: 'input', input: pose });
     this.inputSince = false;
@@ -690,8 +734,9 @@ export class ChampionController {
   /** Let go of the wall: a fall, pushed a little off the face. */
   letGo(now = performance.now() / 1000) {
     if (!this.climbing) return;
-    const f = this.face;
+    const f = this.mode === 'mount' ? { nx: this.mountN[0], nz: this.mountN[2] } : this.face;
     this.mode = 'air';
+    this.leaveMount();
     this.mantle = this.lunge = null;
     this.vx = this.vz = this.vy = 0;
     if (f) {
@@ -714,12 +759,14 @@ export class ChampionController {
 
   /** Space on a wall: a jump away when looking away from the face, otherwise a lunge up. */
   wallJump(now = performance.now() / 1000) {
-    if (this.mode !== 'wall' || this.ctrl !== 'player' || this.reason !== 'player' || !this.face) return;
+    if ((this.mode !== 'wall' && this.mode !== 'mount') || this.ctrl !== 'player' || this.reason !== 'player') return;
+    const f = this.mode === 'mount' ? { nx: this.mountN[0], nz: this.mountN[2] } : this.face;
+    if (!f) return;
     const s = Math.sin(this.yaw), co = Math.cos(this.yaw);
-    const f = this.face;
     if (s * f.nx + co * f.nz > 0.3) {
       if (!this.spend(8)) return;
       this.mode = 'air';
+      this.leaveMount();
       this.face = null;
       this.lunge = null;
       this.vx = (s * WALL_JUMP_V) / M;
@@ -752,6 +799,10 @@ export class ChampionController {
     }
     if (this.view === 'downed') {
       this.letGo(now);
+      return;
+    }
+    if (this.mode === 'mount') {
+      this.ride(dt, now);
       return;
     }
     const active = this.ctrl === 'player' && this.reason === 'player';
@@ -860,6 +911,148 @@ export class ChampionController {
     }
     if (up || side) this.inputSince = true;
     this.eyeY = this.smoothEye = this.feetY + EYE_H;
+    if (active) this.sendPose(now);
+  }
+
+  // ---- on monsters (docs/climbing-phase3-plan.md, Part C) ----
+
+  /** Get on a body in reach, by the rule for `how`. */
+  private tryMount(how: MountHow, now: number): boolean {
+    if (!this.findMount || !this.grid.base || !this.canClimb() || now < this.noGrabUntil) return false;
+    const y = how === 'drop' ? this.feetY : this.feetY + HANDS;
+    const reach = how === 'drop' ? 0.3 : how === 'air' ? 1 : 1.2;
+    let m = this.findMount(this.x * M, y, this.z * M, reach, how);
+    // a downed body lies low: reach down to it from the waist too
+    if (!m && how === 'ground') m = this.findMount(this.x * M, this.feetY + 0.6, this.z * M, reach, how);
+    if (!m) return false;
+    if (how === 'ground') {
+      // facing it, unless it's right there (underfoot, beside you)
+      const pl = m.place();
+      if (!pl) return false;
+      const dx = pl.p[0] - this.x * M, dz = pl.p[2] - this.z * M, l = Math.hypot(dx, dz);
+      if (l > 1 && (Math.sin(this.yaw) * dx + Math.cos(this.yaw) * dz) / l < 0.3) return false;
+    }
+    this.mode = 'mount';
+    this.mount = m;
+    this.mountYaw = m.yaw();
+    this.vx = this.vz = this.vy = 0;
+    this.dodgeT = -1;
+    this.pushT = 0;
+    this.face = null;
+    this.mantle = this.lunge = null;
+    this.fallFrom = null;
+    this.climbAcc = 0;
+    this.inputSince = true;
+    // you face what you grabbed (not a top you dropped onto)
+    const pl = m.place();
+    if (pl && Math.hypot(pl.n[0], pl.n[2]) > 0.3) this.yaw = Math.atan2(-pl.n[0], -pl.n[2]);
+    this.onMount();
+    this.ride(0, now);
+    return true;
+  }
+
+  private leaveMount() {
+    this.mount = null;
+    this.perched = false;
+    this.tiltP = this.tiltR = 0;
+  }
+
+  /** Mount mode: follow the body, move over it, pay for it. */
+  private ride(dt: number, now: number) {
+    const c = this.controls;
+    const m = this.mount!;
+    let pl = m.place();
+    if (!pl) {
+      this.letGo(now);
+      return;
+    }
+    // the view turns with the body
+    const by = m.yaw();
+    let dy = by - this.mountYaw;
+    if (dy > Math.PI) dy -= Math.PI * 2;
+    if (dy < -Math.PI) dy += Math.PI * 2;
+    this.yaw += dy;
+    this.mountYaw = by;
+    const active = this.ctrl === 'player' && this.reason === 'player';
+    const y0 = pl.p[1];
+    let moved = 0;
+    if (active) {
+      let fz = 0, fx = 0;
+      if (c.down('forward')) fz += 1;
+      if (c.down('back')) fz -= 1;
+      if (c.down('left')) fx += 1;
+      if (c.down('right')) fx -= 1;
+      const sprint = c.down('sprint');
+      if (sprint && !this.sprintWas && (fx || fz)) this.startLunge(fx, fz);
+      this.sprintWas = sprint;
+      let step = CLIMB_SPEED * dt;
+      if (this.lunge) {
+        step = Math.min(dt, LUNGE_T - this.lunge.t) * (LUNGE_M / LUNGE_T);
+        fz = this.lunge.ly;
+        fx = this.lunge.lx;
+        this.lunge.t += dt;
+        if (this.lunge.t >= LUNGE_T) this.lunge = null;
+      }
+      if ((fx || fz) && step > 0) {
+        // W: the camera's up plus forward, on the surface (up a leg; ahead along the shoulders); A/D: its right
+        const [nx, ny, nz] = pl.n;
+        const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw), sp = Math.sin(this.pitch), cp = Math.cos(this.pitch);
+        const tang = (x: number, y: number, z: number): [number, number, number] => {
+          const k = x * nx + y * ny + z * nz;
+          x -= nx * k; y -= ny * k; z -= nz * k;
+          const l = Math.hypot(x, y, z) || 1;
+          return [x / l, y / l, z / l];
+        };
+        const w = tang(sy * cp - sy * sp, sp + cp, cy * cp - cy * sp);
+        const a = tang(cy, 0, -sy);
+        let mx = w[0] * fz + a[0] * fx, my = w[1] * fz + a[1] * fx, mz = w[2] * fz + a[2] * fx;
+        const l = Math.hypot(mx, my, mz) || 1;
+        mx *= step / l; my *= step / l; mz *= step / l;
+        m.move(mx, my, mz);
+        pl = m.place();
+        if (!pl) {
+          this.letGo(now);
+          return;
+        }
+        moved = Math.hypot(mx, my, mz);
+      }
+      if (!this.perched) {
+        this.stamina = Math.max(0, this.stamina - (moved ? DRAIN_MOVE : DRAIN_HOLD) * (this.rain ? 1.5 : 1) * dt);
+        this.spentAt = now;
+      }
+    }
+    // the eye: hanging out from the body on a steep part (hands 1.3 m above the feet), standing on a top
+    const [px, py, pz] = pl.p, [nx, ny, nz] = pl.n;
+    const k = Math.min(1, Math.max(0, (ny - 0.6) / (PERCH_NY + 0.05 - 0.6)));
+    this.perched = ny > PERCH_NY;
+    const out = HANG_OUT * (1 - k);
+    const ex = px + nx * out, ez = pz + nz * out;
+    let ey = py + ny * out + (EYE_H - HANDS) * (1 - k) + EYE_H * k;
+    this.x = Math.min(SIZE - 0.01, Math.max(0, ex / M));
+    this.z = Math.min(SIZE - 0.01, Math.max(0, ez / M));
+    this.mountN = [nx, ny, nz];
+    const gy = this.gy(this.x, this.z, ey);
+    // climbed down to the ground: on your feet again
+    if (moved && py < y0 && ey - EYE_H <= gy + 0.05) {
+      this.toWalk();
+      this.inputSince = true;
+      return;
+    }
+    ey = Math.max(ey, gy + 0.5);
+    this.feetY = Math.max(gy, ey - EYE_H);
+    this.eyeY = this.smoothEye = ey;
+    [this.tiltP, this.tiltR] = m.tilt(this.yaw);
+    if (this.stamina <= 0) {
+      this.winded = true;
+      this.letGo(now);
+      return;
+    }
+    this.climbAcc += moved;
+    if (this.climbAcc > 0.6) {
+      this.climbAcc = 0;
+      this.onClimbStep();
+    }
+    if (moved || dy) this.inputSince = true;
     if (active) this.sendPose(now);
   }
 

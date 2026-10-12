@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import { Rig, ANIM, ZONE_BIT, buildRig, type Zone } from './rigs';
+import type { BodyPoint } from '../sim/climb-body';
 
 interface ModelDef {
   url: string;
@@ -16,15 +17,22 @@ interface ModelDef {
   height: number;
   /** bone shrunk to nothing when that zone is severed */
   bones: Partial<Record<Zone, string>>;
+  /** the bone at each named body point (climb volumes, sim/climb-body.ts) */
+  points: Partial<Record<BodyPoint, string>>;
   /** fraction of the attack clip where the blow lands: the windup scrubs up to it, the strike plays on from it */
   impact: number;
 }
 
-const MODELS: Record<string, ModelDef> = {
+export const MODELS: Record<string, ModelDef> = {
   nephil: {
     url: new URL('./models/nephil.glb', import.meta.url).href,
     height: 1.0,
     bones: { head: 'Head', armL: 'LeftArm', armR: 'RightArm', legL: 'LeftUpLeg', legR: 'RightUpLeg', sig: 'RightHand' },
+    points: {
+      hips: 'Hips', chest: 'Spine', neck: 'neck', headTop: 'head_end',
+      shL: 'LeftArm', elbowL: 'LeftForeArm', handL: 'LeftHand', shR: 'RightArm', elbowR: 'RightForeArm', handR: 'RightHand',
+      hipL: 'LeftUpLeg', kneeL: 'LeftLeg', footL: 'LeftFoot', hipR: 'RightUpLeg', kneeR: 'RightLeg', footR: 'RightFoot',
+    },
     impact: 0.5,
   },
 };
@@ -111,6 +119,10 @@ class GlbRig extends Rig {
     for (const [z, name] of Object.entries(def.bones) as [Zone, string][]) {
       const b = model.getObjectByName(name);
       if (b) this.bones[z] = b;
+    }
+    for (const [p, name] of Object.entries(def.points) as [BodyPoint, string][]) {
+      const b = model.getObjectByName(name);
+      if (b) this.points[p] = b;
     }
     this.mixer = new THREE.AnimationMixer(model);
     for (const [name, clip] of m.clips) this.actions.set(name, this.mixer.clipAction(clip));
