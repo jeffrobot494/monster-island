@@ -725,7 +725,7 @@ export class Sim {
     const cells = new Map<number, Entity[]>();
     const list: Entity[] = [];
     for (const e of this.ents.values()) {
-      if (!e.inhabitant || e.hidden || e.carriedBy !== undefined || LOCKED_STATES.has(e.state) || e.state === 'sleep' || (e.monster?.alt ?? 0) > 3) continue;
+      if (!e.inhabitant || e.hidden || e.carriedBy !== undefined || LOCKED_STATES.has(e.state) || e.state === 'sleep' || (e.monster?.alt ?? 0) > 3 || (e.human?.alt ?? 0) > 3) continue;
       list.push(e);
       const k = Math.floor(e.x / 2) * 1000 + Math.floor(e.z / 2);
       let c = cells.get(k);

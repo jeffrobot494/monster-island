@@ -8,7 +8,7 @@ import { rollRestless } from './populate';
 import { offerFavor } from './favor';
 import { SIZE } from './world';
 import { M as MPT } from './ground';
-import { bodyR, frontPoint, heightM, reachT } from './body';
+import { bodyR, champReachable, feetY, frontPoint, heightM, reachT } from './body';
 import { cs, releaseOnChampion } from './champion';
 import { breachHouse, doorOf, houseBreached, occupants } from './village';
 
@@ -58,6 +58,28 @@ const altOf = (m: Entity) => m.monster?.alt ?? 0;
 /** Too high to strike or grab. */
 const aloft = (m: Entity) => altOf(m) > 3;
 
+/** Can m reach t vertically? Only a climbing champion on a terraformer island can be out of reach. */
+export function vReachOk(sim: Sim, m: Entity, t: Entity): boolean {
+  if (t.id !== sim.championId || !sim.grid.base) return true;
+  return champReachable(sim.ground, m, t);
+}
+
+/** Up a cliff where m can't follow (D7): on a cliff tile or off the ground, on a tile m can't walk. */
+function upCliff(sim: Sim, m: Entity, t: Entity): boolean {
+  if (t.id !== sim.championId || !sim.grid.base || canFly(m)) return false;
+  const onCliff = sim.grid.get(Math.floor(t.x), Math.floor(t.z)) === 'cliff';
+  return (onCliff || (t.human?.alt ?? 0) > 0.5) && !sim.walkableFor(m, t.x, t.z);
+}
+
+/** Gave up on the champion a while ago and leaves them be. */
+const ignoring = (sim: Sim, m: Entity, t: Entity | undefined) => !!t && t.id === sim.championId && (m.monster!.ignoreChampUntil ?? 0) > sim.clockMs;
+
+function clearBesiege(m: Entity) {
+  const M = m.monster!;
+  if (M.besiegeUntil !== undefined) delete M.besiegeUntil;
+  if (M.besiegeSince !== undefined) delete M.besiegeSince;
+}
+
 function targetAlt(sim: Sim, m: Entity): number {
   const M = m.monster!;
   if (!canFly(m)) return 0;
@@ -68,7 +90,10 @@ function targetAlt(sim: Sim, m: Entity): number {
       // stoop on the quarry: lower the closer it is
       const t = sim.ents.get(m.state === 'fight' || m.state === 'raid' ? m.target : M.prey);
       if (!t) return m.state === 'raid' ? CRUISE_M : 0;
-      return Math.min(CRUISE_M, Math.max(0, (Math.hypot(t.x - m.x, t.z - m.z) - 1.2) * 7));
+      const stoop = Math.min(CRUISE_M, Math.max(0, (Math.hypot(t.x - m.x, t.z - m.z) - 1.2) * 7));
+      // a climber: come down (or up) to its height
+      if (t.id === sim.championId && (t.human?.alt ?? 0) > 0) return Math.min(120, Math.max(stoop, feetY(sim.ground, t) - sim.ground.y(m.x, m.z)));
+      return stoop;
     }
   }
   // coming home: glide down onto the lair
@@ -195,6 +220,7 @@ function preyScore(sim: Sim, m: Entity, h: Entity): number {
   if (!bold(sim, m) && insideWalls(sim, h, 1.5)) return -Infinity;
   const isChamp = h.id === sim.championId;
   if (isChamp && h.state !== 'downed' && h.hp > sim.maxHp(h) * 0.4) return -Infinity;
+  if (isChamp && upCliff(sim, m, h)) return -Infinity;
   const d = Math.hypot(h.x - m.x, h.z - m.z);
   if (d > sightOf(sim, m)) return -Infinity;
   let lone = true;
@@ -275,7 +301,7 @@ function stepMonsterAI(sim: Sim, m: Entity) {
   const t = m.target >= 0 ? sim.ents.get(m.target) : undefined;
   // raiders don't chase a runaway across the island: they stay on the village
   const strayed = !!t && raiding(sim) && Math.hypot(t.x - sim.layout.village.x, t.z - sim.layout.village.z) > sim.layout.wallRadius + 12;
-  if (t && !strayed && t.kind === 'human' && t.state !== 'captive' && !t.hidden && Math.hypot(t.x - m.x, t.z - m.z) < 14 && (bold(sim, m) || !insideWalls(sim, t, 1))) {
+  if (t && !strayed && !ignoring(sim, m, t) && t.kind === 'human' && t.state !== 'captive' && !t.hidden && Math.hypot(t.x - m.x, t.z - m.z) < 14 && (bold(sim, m) || !insideWalls(sim, t, 1))) {
     if (t.state === 'downed' && !raiding(sim)) {
       m.target = -1;
       M.prey = t.id;
@@ -291,9 +317,10 @@ function stepMonsterAI(sim: Sim, m: Entity) {
     }
   } else if (m.target >= 0) {
     m.target = -1;
+    clearBesiege(m);
     if (m.state === 'fight') setState(sim, m, raiding(sim) ? 'raid' : 'return');
   }
-  if (champ && champ.state !== 'downed' && champ.state !== 'captive' && Math.hypot(champ.x - m.x, champ.z - m.z) < (m.state === 'rest' ? 3.5 : 5) && !['flee'].includes(m.state) && (bold(sim, m) || !insideWalls(sim, champ, 1))) {
+  if (champ && !ignoring(sim, m, champ) && champ.state !== 'downed' && champ.state !== 'captive' && Math.hypot(champ.x - m.x, champ.z - m.z) < (m.state === 'rest' ? 3.5 : 5) && !['flee'].includes(m.state) && (bold(sim, m) || !insideWalls(sim, champ, 1))) {
     m.target = champ.id;
     setState(sim, m, 'fight');
     return fight(sim, m, champ);
@@ -311,7 +338,7 @@ function stepMonsterAI(sim: Sim, m: Entity) {
     const r = M.respondTo;
     if (Math.hypot(r.x - m.x, r.z - m.z) < 3) {
       M.respondTo = null;
-      if (champ && Math.hypot(champ.x - m.x, champ.z - m.z) < sightOf(sim, m)) {
+      if (champ && !ignoring(sim, m, champ) && Math.hypot(champ.x - m.x, champ.z - m.z) < sightOf(sim, m)) {
         m.target = champ.id;
         setState(sim, m, 'fight');
       } else setState(sim, m, 'return');
@@ -435,6 +462,7 @@ export function startRaid(sim: Sim, hours = 9) {
     const M = m.monster!;
     M.batterId = undefined;
     M.respondTo = null;
+    clearBesiege(m);
     if (['downed', 'bound', 'carry', 'sacrifice'].includes(m.state)) continue;
     M.prey = -1;
     m.target = -1;
@@ -463,7 +491,7 @@ function raid(sim: Sim, m: Entity) {
   if (sim.tick % 5 === m.id % 5) {
     let best: Entity | null = null, bd = RAID_SIGHT;
     for (const h of sim.humans()) {
-      if (h.hidden || h.state === 'captive' || h.carriedBy !== undefined) continue;
+      if (h.hidden || h.state === 'captive' || h.carriedBy !== undefined || ignoring(sim, m, h)) continue;
       const d = Math.hypot(h.x - m.x, h.z - m.z) + (h.id === sim.championId ? 4 : 0);
       if (d < bd) { bd = d; best = h; }
     }
@@ -587,7 +615,7 @@ function hunt(sim: Sim, m: Entity) {
     setState(sim, m, 'fight');
     return;
   }
-  if (m.state !== 'grab' && (d > reach || aloft(m))) {
+  if (m.state !== 'grab' && (d > reach || aloft(m) || !vReachOk(sim, m, prey))) {
     m.state = 'stalk';
     const near = Math.hypot(prey.x - m.x, prey.z - m.z);
     if (near < 2 && sim.lineOk(m.x, m.z, prey.x, prey.z, sim.costsFor(sim.moveKey(m)), 99)) {
@@ -799,8 +827,11 @@ function fight(sim: Sim, m: Entity, t: Entity) {
     } else sim.burst('whiff', fp.x + Math.sin(m.yaw) * reachT(m) * 0.6, fp.z + Math.cos(m.yaw) * reachT(m) * 0.6);
     return;
   }
+  if (isChamp && besiege(sim, m, t, d, hitR)) return;
   const stop = Math.max(bodyR(m) + bodyR(t) + 0.1 / MPT, reachT(m) * 0.8);
-  if (d <= hitR - 0.4 / MPT && sim.tick >= M.attackReadyAt && !aloft(m)) {
+  // a flyer can't strike from aloft, unless it has come up to a climber's height
+  const canStrike = vReachOk(sim, m, t) && (isChamp && (t.human?.alt ?? 0) > 0 ? true : !aloft(m));
+  if (d <= hitR - 0.4 / MPT && sim.tick >= M.attackReadyAt && canStrike) {
     sim.stop(m);
     M.windup = sim.tick;
     m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
@@ -818,6 +849,46 @@ function fight(sim: Sim, m: Entity, t: Entity) {
     sim.stop(m);
     m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
   }
+}
+
+const PACE: [number, number][] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+
+/**
+ * The champion is up a cliff where m can't reach or follow (D7): prowl at the foot, roaring, for 1.5 game hours,
+ * then give up for an hour. The state stays 'fight' (setState would stop the path every tick). True while besieging.
+ */
+function besiege(sim: Sim, m: Entity, t: Entity, d: number, hitR: number): boolean {
+  const M = m.monster!;
+  const sieging = M.besiegeUntil !== undefined;
+  const arrived = sieging || !sim.moving(m) || Math.hypot(t.x - m.x, t.z - m.z) < 3;
+  if (!(upCliff(sim, m, t) && (!vReachOk(sim, m, t) || d > hitR) && arrived)) {
+    clearBesiege(m);
+    return false;
+  }
+  M.besiegeSince ??= sim.tick;
+  if (sim.tick - M.besiegeSince < 20) return false;
+  if (!sieging) {
+    M.besiegeUntil = sim.clockMs + Math.max(1.5 * HOUR_MS, 90_000 * sim.timescale);
+    sim.emote(m, '💢', 2);
+    sim.stop(m);
+  }
+  if (sim.clockMs > M.besiegeUntil!) {
+    clearBesiege(m);
+    m.target = -1;
+    M.ignoreChampUntil = sim.clockMs + HOUR_MS;
+    setState(sim, m, 'return');
+    sim.toast(`${M.seen ? firstName(m) : 'The monster'} gives up and slinks off.`);
+    return true;
+  }
+  // prowl: a few steps along the foot every 8 s (no rng: the offsets follow the clock)
+  if ((sim.tick + m.id) % 80 === 0) {
+    const [ox, oz] = PACE[Math.floor((sim.tick + m.id) / 80) % 4];
+    const n = sim.nearestWalkable(m, m.x + ox, m.z + oz, 2);
+    if (n) sim.goTo(m, n.x + 0.5, n.z + 0.5);
+  }
+  if (sim.moving(m)) sim.advancePath(m, monsterSpeed(sim, m) * 0.5);
+  else m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
+  return true;
 }
 
 /** Telegraph radius as drawn by the renderer: equals the real hit radius. */

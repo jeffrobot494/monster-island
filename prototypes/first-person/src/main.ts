@@ -141,6 +141,10 @@ async function boot() {
   const sim = new SimClient();
   const controller = new ChampionController(controls, renderer.terrain.ground, (m) => sim.post(m as never));
   renderer.terrain.onColliders = () => (controller.decorSolids = renderer.terrain.colliders);
+  controller.grid = renderer.terrain.grid;
+  controller.onClimbStep = () => audio.play('step', undefined, { surface: 'rock' });
+  // a hard landing: the sim decides the damage (it also hears falls that end while the game is paused)
+  controller.onFall = (impact) => input({ type: 'land', impact, x: controller.x, z: controller.z });
   controller.onStep = () => audio.play('step', undefined, { surface: renderer.terrain.tileAt(controller.x, controller.z) });
   controller.onLand = (impact) => {
     controller.onStep();
@@ -454,10 +458,13 @@ async function boot() {
     if (f.champ && (f.epoch !== controller.epoch || f.correction || (prev === 'sim' && f.ctrl === 'player'))) {
       controller.epoch = f.epoch;
       const p = f.correction ?? f.champ;
-      controller.snap(p.x, p.z);
+      controller.snap(p.x, p.z, p.alt ?? 0);
       if (!f.correction) controller.yaw = f.champ.yaw;
     }
-    if (f.ctrl === 'sim' && f.champ) {
+    controller.reason = f.ctrlReason;
+    // paused (hold) on a wall or mid-fall: the client keeps the climber where it is and finishes the fall
+    const keep = f.ctrlReason === 'hold' && (controller.climbing || controller.air);
+    if (f.ctrl === 'sim' && f.champ && !keep) {
       controller.x = f.champ.x;
       controller.z = f.champ.z;
     }
@@ -476,6 +483,7 @@ async function boot() {
         ui.toast(c.killed ? 'A killing blow!' : `You sever its ${c.zone === 'sig' ? 'signature limb' : c.zone}!`, 'info', 3);
       } else if (c.kind === 'hit' && c.downed) hudView.hintOnce('downed');
     }
+    if (f.hurt > 0) controller.knock();
     if (f.hurt > 0 && performance.now() - lastHurtAt > 150) {
       lastHurtAt = performance.now();
       hudView.flashHurt();
@@ -499,6 +507,7 @@ async function boot() {
         map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
         map.setExplored(m.explored);
         controller.walk = m.walkCost;
+        controller.rock = renderer.terrain.rock;
         controller.decorSolids = renderer.terrain.colliders;
         controller.epoch = m.epoch;
         if (firstFull) {
@@ -791,12 +800,19 @@ async function boot() {
     const busy = screenOpen();
     // one-shot actions
     if (controls.active && !busy) {
-      if (controls.take('jump')) controller.tryJump(now);
-      if (controls.take('dodge') && controller.tryDodge(now)) {
-        renderer.view.dodge();
-        renderer.particles.burst('dust', controller.x * M, controller.eyeY - EYE_H + 0.2, controller.z * M);
+      // on a wall, Space jumps off or lunges up and the dodge key lets go
+      if (controls.take('jump')) {
+        if (controller.climbing) controller.wallJump(now);
+        else controller.tryJump(now);
       }
-      if (controls.mouseL) {
+      if (controls.take('dodge')) {
+        if (controller.climbing) controller.letGo(now);
+        else if (controller.tryDodge(now)) {
+          renderer.view.dodge();
+          renderer.particles.burst('dust', controller.x * M, controller.eyeY - EYE_H + 0.2, controller.z * M);
+        }
+      }
+      if (controls.mouseL && !controller.climbing) {
         if (hud?.champion?.dragging) {
           if (controls.takeClick()) ui.toast(`${keyLabel(settings.bindings.interact)} to let go`, 'info', 2);
         } else if (!pendingSwing && controller.trySwing(now)) {
@@ -807,13 +823,13 @@ async function boot() {
       }
       controls.takeClick();
       controller.setBlocking(controls.mouseR);
-      if (controls.take('interact')) interact();
-      if (controls.take('finish') && look) {
+      if (controls.take('interact') && !controller.climbing) interact();
+      if (controls.take('finish') && look && !controller.climbing) {
         const v = renderer.ents.views.get(look.id);
         if (v && v.flags & F_DOWNED) input({ type: 'finish', id: look.id });
       }
       if (controls.take('torch')) input({ type: 'torch', on: !hud?.champion?.torch });
-      if (controls.take('throw')) throwSpear(now);
+      if (controls.take('throw') && !controller.climbing) throwSpear(now);
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);
     controls.clearFrame();
@@ -847,14 +863,18 @@ async function boot() {
         if (!(v.flags & F_MONSTER) || v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) return;
         if (v.pos.y - renderer.terrain.y(v.pos.x / M, v.pos.z / M) > 3) return; // flying overhead
         const box = renderer.ents.boxOf(v);
+        // only bodies at your height: a monster at the foot of a cliff doesn't shove you around on top of it
+        if (v.pos.y > controller.feetY + 1.8 || v.pos.y + box.hgt < controller.feetY) return;
         const r = box.wid / M;
         const half = Math.max(0, box.len - box.wid) / M;
         // two circles along a long body (F12)
         for (const k of half > 0 ? [-half, half] : [0]) controller.solids.push({ x: v.pos.x / M + Math.sin(v.yaw) * k, z: v.pos.z / M + Math.cos(v.yaw) * k, r });
       });
+      controller.rain = renderer.particles.weather === 'rain';
       controller.update(fdt, now);
       renderer.view.vy = controller.air ? controller.vy : 0;
-      if (controller.ctrl === 'sim' && hud?.champion) {
+      renderer.view.climbing = controller.climbing;
+      if (controller.ctrl === 'sim' && hud?.champion && !(ctrlReason === 'hold' && (controller.climbing || controller.air))) {
         const cv = renderer.ents.views.get(hud.champion.id);
         if (cv) {
           controller.x = cv.pos.x / M;
@@ -966,6 +986,15 @@ async function boot() {
   if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
   if (devMode && params.has('yaw')) setInterval(() => (controller.yaw = (Number(params.get('yaw')) * Math.PI) / 180), 200);
   if (devMode && params.has('hideplay')) hudView.play.style.display = 'none';
+  if (devMode && params.has('climblog')) setInterval(() => console.info(`[climb] ${controller.mode} ${controller.x.toFixed(2)},${controller.z.toFixed(2)} feet ${controller.feetY.toFixed(1)} ground ${renderer.terrain.y(controller.x, controller.z).toFixed(1)} st ${controller.stamina.toFixed(0)} yaw ${controller.yaw.toFixed(2)} ${ctrlReason} ${controller.ctrl} tile ${renderer.terrain.tileAt(controller.x, controller.z)}`), 1000);
+  // dev: ?hold=forward:2000:9000,jump:9000:9500 — hold actions from/to ms after boot (headless climbing checks)
+  if (devMode && params.get('hold')) for (const spec of params.get('hold')!.split(',')) {
+    const [a, from, to] = spec.split(':');
+    const code = settings.bindings[a as keyof typeof settings.bindings];
+    if (!code) continue;
+    setTimeout(() => controls.keys.add(code), Number(from) || 0);
+    setTimeout(() => controls.keys.delete(code), Number(to) || 1e9);
+  }
   // dev: ?fly=m — fly mode at m meters above the sea (screenshots of the whole island)
   const flyAt = devMode ? Number(params.get('fly')) : 0;
   if (flyAt) setTimeout(() => {

@@ -182,6 +182,7 @@ function packEnts(): Float32Array {
       const t = sim.grid.get(Math.floor(e.x), Math.floor(e.z));
       y += Math.max(e.monster.alt ?? 0, t === 'wall' || t === 'house' ? 5 : 0);
     } else if (e.monster?.alt) y += e.monster.alt; // falling out of the sky
+    if (e.human?.alt) y += e.human.alt; // a climber
     arr[o++] = e.id;
     arr[o++] = shapeLookup.get(e.shape) ?? -1;
     arr[o++] = e.x;
@@ -348,7 +349,7 @@ function tickOnce() {
   sim.actionError = null;
   post({
     type: 'frame', seq: ++seq, tick: sim.tick, ents, tiles, explored, emitterOps: out.emitterOps, emotes: out.emotes, atmosphere: out.atmosphereDirty ? { ...sim.atmosphere } : undefined,
-    ctrl: isPlayerCtrl(reason) ? 'player' : 'sim', ctrlReason: reason, epoch: S.epoch, champ: c ? { x: c.x, z: c.z, yaw: c.yaw } : null,
+    ctrl: isPlayerCtrl(reason) ? 'player' : 'sim', ctrlReason: reason, epoch: S.epoch, champ: c ? { x: c.x, z: c.z, yaw: c.yaw, ...(c.human?.alt ? { alt: c.human.alt } : {}) } : null,
     correction: S.correction ?? undefined, screams, sounds, combat: S.combat.splice(0), toasts: out.toasts, hurt: out.hurt ?? 0, actionError,
   }, [ents.buffer]);
   S.correction = null;

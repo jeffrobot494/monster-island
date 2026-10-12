@@ -4,7 +4,7 @@
 import type { Sim } from './sim';
 import type { Entity, Zone } from './types';
 import { M } from './ground';
-import { axisDist, bodyR, heightM } from './body';
+import { axisDist, bodyR, feetY, heightM } from './body';
 import { applyDamage, armFactor, firstName } from './combat';
 import { monsterSpeed } from './monster-ai';
 import { cs } from './champion';
@@ -117,7 +117,7 @@ function launch(sim: Sim, thrower: Entity, yaw: number, pitch: number, v: number
   const s = spawnSpear(sim, x, z, 'ground', yaw);
   s.shape = 'spear';
   s.spear = {
-    st: 'flying', y: sim.ground.y(thrower.x, thrower.z) + 1.6,
+    st: 'flying', y: feetY(sim.ground, thrower) + 1.6, // a climber throws from the wall
     vx: Math.sin(yaw) * Math.cos(pitch) * v, vy: Math.sin(pitch) * v, vz: Math.cos(yaw) * Math.cos(pitch) * v,
     thrower: thrower.id, aimId, aimZone, t: 0,
   };
@@ -129,7 +129,7 @@ function launch(sim: Sim, thrower: Entity, yaw: number, pitch: number, v: number
 /** The champion throws along the view, or (with a target under the crosshair) on the arc that reaches it. */
 export function champThrow(sim: Sim, c: Entity, i: { yaw: number; pitch: number; targetId: number | null; zone: Zone | null }): string | null {
   if (spearsOf(c) <= 0) return 'No spears left. Pick one up: the village rack has more.';
-  const y = sim.ground.y(c.x, c.z) + 1.6;
+  const y = feetY(sim.ground, c) + 1.6;
   const t = i.targetId !== null ? sim.ents.get(i.targetId) : undefined;
   let sol: { yaw: number; pitch: number } | null = null;
   if (t && !t.hidden && t.hp > 0 && (t.kind === 'monster' || t.tags.includes('hittable')) && Math.hypot(t.x - c.x, t.z - c.z) * M < 100) {
@@ -191,7 +191,7 @@ export function stepSpear(sim: Sim, s: Entity) {
   if (S.st !== 'flying') {
     if (S.st === 'ground' && sim.tick % 2 === 0) {
       const c = sim.champion();
-      if (c && c.state !== 'downed' && c.state !== 'captive' && Math.hypot(c.x - s.x, c.z - s.z) < PICKUP_T && spearsOf(c) < CHAMP_SPEARS) takeSpear(sim, c, s);
+      if (c && c.state !== 'downed' && c.state !== 'captive' && Math.hypot(c.x - s.x, c.z - s.z) < PICKUP_T && spearsOf(c) < CHAMP_SPEARS && (!sim.grid.base || Math.abs(feetY(sim.ground, c) - feetY(sim.ground, s)) < 3)) takeSpear(sim, c, s);
     }
     return;
   }
@@ -237,6 +237,7 @@ function strike(sim: Sim, s: Entity, t: Entity, thrower: Entity | undefined, h: 
   const r = applyDamage(sim, t, dmg, { type: 'pierce', sourceId: thrower?.id, zone });
   if (thrower && t.monster && sim.ents.has(t.id) && t.state !== 'downed' && t.state !== 'bound') {
     t.target = thrower.id;
+    if (champ) delete t.monster.ignoreChampUntil; // hit it and the fight is back on
     if (t.state === 'rest') t.state = 'fight';
   }
   if (champ) {

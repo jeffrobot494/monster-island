@@ -2,6 +2,7 @@
 import { Sim } from './sim';
 import { SIZE } from './world';
 import { ensureSpears } from './spears';
+import { groundChampion } from './champion';
 import { NV } from './ground';
 import { BASE_QUANTUM } from './island-import';
 import type { TerrainSettings } from './terrain-import';
@@ -212,6 +213,9 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.ground.rebuild();
   sim.grid.groundChanged.clear();
   ensureSpears(sim);
+  // a champion saved up a cliff starts on the ground nearby (the client snaps to it)
+  const champ = sim.champion();
+  if (champ) groundChampion(sim, champ);
   const S = (sim as any).champState;
   if (S) {
     S.combat = [];

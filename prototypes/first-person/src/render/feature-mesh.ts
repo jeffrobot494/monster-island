@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import FT from '../terrain/fantasy-terrain.js';
 import { M, NV, RES } from '../sim/ground';
+import { SIZE } from '../sim/world';
 import { createField, sampleBase, toMeters, type TerrainSettings } from '../sim/terrain-import';
 
 /** the max of a vertex grid within r vertices (separable, so cheap) */
@@ -24,13 +25,20 @@ function dilate(src: Float32Array, r: number): Float32Array {
   return out;
 }
 
-export function buildFeatureMesh(s: TerrainSettings): THREE.Mesh {
+/**
+ * The mesh, and `rock`: per tile, 1 where a kept triangle reaching down to within 40 m of the ground overlaps it
+ * (spires, arch legs and spans, overhangs; floating isles high overhead don't count). Climbing blocks cliff tiles
+ * that have rock on them until the mesh itself is climbable (docs/climbing-phase1-plan.md, Part A).
+ */
+export function buildFeatureMesh(s: TerrainSettings): { mesh: THREE.Mesh; rock: Uint8Array } {
   const t0 = performance.now();
   const field = createField(s);
   const grid = FT.sampleGrid(field, { cell: s.cell });
   const flat = FT.buildFlatMesh(FT.surfaceNets(grid, { jitter: s.jitter, seed: FT.hashStr(String(s.seed)) }), field, s.palette);
   // the ground's highest point near each triangle, in meters; a triangle within `margin` of it is ground or cliff
-  const ground = dilate(sampleBase(s, field), Math.ceil(s.cell * 1.2 * RES));
+  const base = sampleBase(s, field);
+  const ground = dilate(base, Math.ceil(s.cell * 1.2 * RES));
+  const rock = new Uint8Array(SIZE * SIZE);
   const margin = 1.5 + 0.5 * s.jitter * s.cell * s.heightScale;
   const P = flat.positions, Cl = flat.colors;
   const pos: number[] = [], col: number[] = [];
@@ -41,6 +49,11 @@ export function buildFeatureMesh(s: TerrainSettings): THREE.Mesh {
     const gi = Math.min(NV - 1, Math.max(0, Math.round(cx * RES))), gj = Math.min(NV - 1, Math.max(0, Math.round(cz * RES)));
     const top = toMeters(s, Math.max(P[o + 1], P[o + 4], P[o + 7]));
     if (top <= ground[gj * NV + gi] + margin) continue;
+    if (toMeters(s, Math.min(P[o + 1], P[o + 4], P[o + 7])) < base[gj * NV + gi] + 40) {
+      const x0 = Math.max(0, Math.floor(Math.min(P[o], P[o + 3], P[o + 6]))), x1 = Math.min(SIZE - 1, Math.floor(Math.max(P[o], P[o + 3], P[o + 6])));
+      const z0 = Math.max(0, Math.floor(Math.min(P[o + 2], P[o + 5], P[o + 8]))), z1 = Math.min(SIZE - 1, Math.floor(Math.max(P[o + 2], P[o + 5], P[o + 8])));
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) rock[z * SIZE + x] = 1;
+    }
     for (let k = 0; k < 3; k++) {
       const v = o + k * 3;
       pos.push(P[v] * M, toMeters(s, P[v + 1]), P[v + 2] * M);
@@ -57,5 +70,5 @@ export function buildFeatureMesh(s: TerrainSettings): THREE.Mesh {
   const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
   mesh.castShadow = mesh.receiveShadow = true;
   console.info(`[terrain] feature mesh: ${pos.length / 9} of ${flat.triangleCount} triangles, ${Math.round(performance.now() - t0)} ms`);
-  return mesh;
+  return { mesh, rock };
 }

@@ -194,6 +194,8 @@ export class Terrain {
   /** terraformer islands: spires, arches, floating isles (render/feature-mesh.ts) */
   private features: THREE.Mesh | null = null;
   private featuresKey = '';
+  /** terraformer islands: cliff tiles with feature-mesh rock on them (climbing blocks these); null elsewhere */
+  rock: Uint8Array | null = null;
 
   load(types: string[], elev: Float32Array, terrain: TerrainState = null) {
     this.grid.types = [...types];
@@ -209,7 +211,12 @@ export class Terrain {
         (this.features.material as THREE.Material).dispose();
         this.features = null;
       }
-      if (terrain) this.group.add((this.features = buildFeatureMesh(terrain.settings)));
+      this.rock = null;
+      if (terrain) {
+        const built = buildFeatureMesh(terrain.settings);
+        this.group.add((this.features = built.mesh));
+        this.rock = built.rock;
+      }
     }
     this.ground.rebuild();
     this.rebuildAll();

@@ -57,6 +57,8 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     M.respondTo = null;
     M.windup = -1;
     M.prey = -1;
+    delete M.besiegeUntil;
+    delete M.besiegeSince;
   }
   for (const e of sim.ents.values()) {
     if (e.burnUntil !== undefined) {
@@ -78,6 +80,10 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     if (sim.dragging >= 0 && sim.ents.get(sim.dragging)?.kind !== 'monster') sim.dragging = -1;
     champ.x = V.x + 0.5;
     champ.z = V.z + 1.5;
+    if (champ.human) {
+      delete champ.human.alt;
+      delete champ.human.climb;
+    }
     heal(sim, champ, 9999);
   }
   sim.repathQueue.length = 0;

@@ -58,6 +58,25 @@ champion holds his ground and strikes back at anything attacking him.
 - **Judgment** falls at midnight (every 8 minutes): the god with more favor today adds a creation to the world.
 - You win when all six monsters are dead, and lose when every villager is.
 
+### Climbing (terraformer islands)
+
+Cliffs on terraformer islands can be climbed (design: `docs/climbing-design.md`; this is build step 1 of it,
+`docs/climbing-phase1-plan.md`).
+- **Start:** walk into a cliff face (steeper than 50°) and keep pushing forward for a moment. Or hold **Space** while
+  you're in the air near one, which also catches the lip if you step off a cliff top holding Space.
+- **On the wall:** W/S climb up and down (1.8 m/s), A/D traverse, Shift + a direction lunges 2 m. Space jumps off if
+  you're looking away from the wall, otherwise it's a lunge up. C lets go. At the top you pull yourself over the lip
+  automatically, if there's room to stand there.
+- **Stamina** drains while you hang (6/s moving, 3/s still, ×1.5 in rain) and doesn't regenerate on the wall. At 0
+  you fall. A hit knocks you off.
+- **Falls** hurt: from about 4 m up your legs take damage, and falling from about 18 m kills. Water at least 1 m deep
+  breaks any fall. Walking off a cliff edge drops you; steep faces can't be stood on, so you slide down them.
+- **Monsters** can only hit you if you're within their vertical reach: a nephil reaches about 7 m up, a tannin 3 m.
+  A ground monster that can't reach or follow you waits at the foot of the cliff, prowling and roaring, for 1.5 game
+  hours, then gives up and leaves you alone for an hour (unless you hit it). Flyers come up to your height.
+- You can't swing, block, throw or use E/F while climbing. Cliff tiles with spires, arches or overhangs on them can't
+  be climbed yet.
+
 ## URL parameters (dev)
 
 All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`, `?at=HH:MM`, `?reveal=1`, `?god=1`,
@@ -74,6 +93,8 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 | `?third=1` | start in third person |
 | `?fly=m` | start in fly mode, m meters above the sea (aerial screenshots) |
 | `?terrain=off` | a new island ignores the terraformer's saved terrain (procedural) |
+| `?hold=forward:5000:9000,jump:…` | hold actions from/to ms after load (headless climbing checks; use with `?nolock=1`) |
+| `?climblog=1` | log the controller's mode, position, feet and stamina every second |
 
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
@@ -105,14 +126,18 @@ How the game uses it:
   - puts the High Place on a high, level spot near the center;
   - cuts graded roads, with ramps up cliffs and fords across canyon water, to it and to every lair;
   - joins every other sizeable area with a road;
-  - marks the rest of the steep ground, and anything under standing rock, as `cliff` (unwalkable and protected).
+  - marks the rest of the steep ground, and anything under standing rock, as `cliff` (protected; not walkable, but
+    the champion can climb it).
 - Spires, arches, floating isles and overhangs can't be heightmap ground. `src/render/feature-mesh.ts` draws them in
   the terraformer's palette from its own mesh, and their footprints are cliff.
 - Saves keep the settings and the finished heights (about 100 KB), so a saved island never changes if the terraformer
   or its file changes.
-- Known gaps: caves and caverns are only visible where they open at the surface. Distances in the sim are still flat
-  2D, so monsters can see and strike across a cliff edge. The feature mesh is built on the main thread at load
-  (about 1 s).
+- Known gaps: caves and caverns are only visible where they open at the surface. Monster strikes against the
+  champion are 3D (climbing), but everything else in the sim is still flat 2D: monsters see across a cliff edge, and
+  strike each other and villagers across one. The feature mesh is built on the main thread at load (about 1 s).
+- Climbing's known 2D leftovers: blood from a hit on a climber bursts at ground level; the god-module API doesn't see
+  the champion's height; a flyer stooping on a climber can clip into the rock face; there's no climbing animation in
+  third person yet.
 
 ## Code map
 
@@ -123,7 +148,8 @@ How the game uses it:
   - `champion.ts`: poses, swings, dodge, block, interact, hold and autopilot, rope trail.
 - `src/input/`:
   - `controls.ts`: keyboard, mouse, pointer lock and bindings;
-  - `controller.ts`: client-side movement, collision and stamina.
+  - `controller.ts`: client-side movement, collision, stamina and climbing (walk, air, wall and mantle modes);
+  - `climb-surface.ts`: face normals, slopes and face distances on the ground, for climbing.
 - `src/render/`:
   - `renderer.ts`, `terrain.ts` (heightmap and instanced vegetation), `structures.ts` (village, altars, lairs);
   - `entities.ts`: interpolation buffer, rigs or module shapes, look-ray picking;
@@ -136,6 +162,7 @@ How the game uses it:
 
 ```bash
 npm test                                      # all suites, including test/fp.test.ts (first-person rules)
+                                              # and test/climb-*.test.ts (climbing: controller and sim)
 TS=1 DAYS=1 npx vitest run test/smoke.test.ts # balance: a real-time day, no player
 ```
 

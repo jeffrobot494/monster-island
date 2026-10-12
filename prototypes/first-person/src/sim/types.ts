@@ -122,6 +122,11 @@ export interface MonsterInfo {
   batterAt?: number;
   /** the house this raider is breaking into */
   batterId?: number;
+  /** besieging a climber it can't reach (clockMs it gives up), and the tick the siege condition began */
+  besiegeUntil?: number;
+  besiegeSince?: number;
+  /** clockMs: gave up on the champion; leaves them be until then */
+  ignoreChampUntil?: number;
 }
 
 export interface HumanInfo {
@@ -142,6 +147,9 @@ export interface HumanInfo {
   spears?: number;
   /** the spear a guard is walking to pick up */
   fetchSpear?: number;
+  /** champion only, terraformer islands: feet above the ground (m) while climbing or falling, and how */
+  alt?: number;
+  climb?: 'wall' | 'perch';
 }
 
 /** A spear lying in the world, standing in the rack, or in flight. Heights and velocities in meters. */

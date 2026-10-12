@@ -158,8 +158,9 @@ export interface FramePayload {
   ctrl: 'player' | 'sim';
   ctrlReason: CtrlReason;
   epoch: number;
-  champ: { x: number; z: number; yaw: number } | null;
-  correction?: { x: number; z: number; epoch: number };
+  /** alt: a climber's feet above the ground (m), terraformer islands */
+  champ: { x: number; z: number; yaw: number; alt?: number } | null;
+  correction?: { x: number; z: number; epoch: number; alt?: number };
   screams: { id: number; x: number; z: number }[];
   sounds: SoundEvent[];
   combat: CombatEvent[];

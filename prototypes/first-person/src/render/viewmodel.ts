@@ -36,6 +36,9 @@ export class ViewModel {
   private bobT = 0;
   torchOn = false;
   dragging = false;
+  /** on a wall: hands are on the rock, so the weapons drop out of view */
+  climbing = false;
+  private climbK = 0;
   visible = true;
 
   constructor() {
@@ -146,6 +149,8 @@ export class ViewModel {
     let by = -Math.abs(Math.cos(this.bobT * 0.5)) * bobA;
     // arms trail a jump (up when falling, down when rising), then dip on landing
     by += Math.max(-0.04, Math.min(0.04, -this.vy * 0.006));
+    this.climbK += ((this.climbing ? 1 : 0) - this.climbK) * Math.min(1, dt * 8);
+    by -= 0.6 * this.climbK;
     if (this.landT >= 0) {
       this.landT += dt / 0.25;
       if (this.landT >= 1) this.landT = -1;

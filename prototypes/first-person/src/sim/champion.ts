@@ -6,8 +6,8 @@ import type { Entity, Zone } from './types';
 import { applyDamage, armFactor, firstName, heal, legFactor, releaseDragged, kill, spawnSevered } from './combat';
 import { JOB_TINT } from './core-defs';
 import { doorOf } from './village';
-import { M } from './ground';
-import { axisDist, axisPoint, bearingOff, bodyR, frontPoint } from './body';
+import { M, WATER_Y } from './ground';
+import { axisDist, axisPoint, bearingOff, bodyR, champReachable, feetY, frontPoint, heightM } from './body';
 import { champThrow, takeSpear } from './spears';
 
 /** Internal orders: used by autopilot and by dev/test scripts. */
@@ -21,7 +21,9 @@ export type Order =
   | { type: 'altar' };
 
 export type ChampInput =
-  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean; fly?: boolean }
+  | { type: 'pose'; x: number; z: number; yaw: number; pitch: number; epoch: number; input: boolean; fly?: boolean; alt?: number; climb?: 'wall' | 'perch' }
+  /** the client landed hard (impact m/s; > 13 hurts), at (x, z): falls are client physics, damage is the sim's */
+  | { type: 'land'; impact: number; x?: number; z?: number }
   | { type: 'swing'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
   | { type: 'throw'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
   | { type: 'dodge' }
@@ -68,11 +70,13 @@ interface ChampState {
   lastPoseTick: number;
   pitch: number;
   /** recent accepted poses for favorable release checks (F7) */
-  poses: { tick: number; x: number; z: number; yaw: number }[];
+  poses: { tick: number; x: number; z: number; yaw: number; alt?: number }[];
   /** breadcrumb trail for dragging (F8), oldest first */
   trail: { x: number; z: number }[];
   reason: CtrlReason;
-  correction: { x: number; z: number; epoch: number } | null;
+  correction: { x: number; z: number; epoch: number; alt?: number } | null;
+  /** tick of the last hard landing (one fall, one hurt) */
+  landTick?: number;
   combat: CombatEvent[];
   ambushed: number[];
 }
@@ -142,6 +146,58 @@ function correct(sim: Sim, c: Entity) {
   const S = cs(sim);
   S.epoch++;
   S.correction = { x: c.x, z: c.z, epoch: S.epoch };
+  if (c.human?.alt) S.correction.alt = c.human.alt;
+}
+
+/** Off the cliff and back on the ground: for autopilot, captivity and loading (docs/climbing-phase1-plan.md, D3). */
+export function groundChampion(sim: Sim, c: Entity) {
+  const onCliff = sim.grid.get(Math.floor(c.x), Math.floor(c.z)) === 'cliff';
+  if (onCliff || (c.human?.alt ?? 0) > 0) {
+    if (!sim.walkableFor(c, c.x, c.z)) {
+      const n = sim.nearestWalkable(c, c.x, c.z, 24);
+      if (n) {
+        c.x = n.x + 0.5;
+        c.z = n.z + 0.5;
+      } else {
+        const V = sim.layout.village;
+        c.x = V.x + 0.5;
+        c.z = V.z + 1.5;
+      }
+      sim.stop(c);
+    }
+  }
+  if (c.human) {
+    delete c.human.alt;
+    delete c.human.climb;
+  }
+}
+
+/** A hard landing (D4): leg damage, or death from high enough; deep water breaks the fall. */
+function land(sim: Sim, c: Entity, i: { impact: number; x?: number; z?: number }, reason: CtrlReason) {
+  const S = cs(sim);
+  const impact = Math.min(60, Math.max(0, Number(i.impact) || 0));
+  if (impact <= 13 || sim.tick - (S.landTick ?? -99) < 5) return;
+  S.landTick = sim.tick;
+  // paused mid-fall: the client finished the fall, so the champion is where it landed
+  if (reason === 'hold' && Number.isFinite(i.x) && Number.isFinite(i.z) && (sim.walkableFor(c, i.x!, i.z!) || sim.grid.get(Math.floor(i.x!), Math.floor(i.z!)) === 'cliff')) {
+    c.x = Math.min(127.99, Math.max(0, i.x!));
+    c.z = Math.min(127.99, Math.max(0, i.z!));
+  }
+  if (c.human) {
+    delete c.human.alt;
+    delete c.human.climb;
+  }
+  if (WATER_Y - sim.ground.y(c.x, c.z) >= 1) return;
+  const before = c.hp;
+  if (impact > 28) applyDamage(sim, c, 9999, { type: 'crush', zone: 'torso', sourceId: -1, deathType: 'crushed' });
+  else {
+    const d = (impact - 13) * 4;
+    applyDamage(sim, c, d / 2, { type: 'crush', zone: 'legL', sourceId: -1, deathType: 'crushed' });
+    applyDamage(sim, c, d / 2, { type: 'crush', zone: 'legR', sourceId: -1, deathType: 'crushed' });
+  }
+  const dealt = Math.max(0, before - Math.max(0, c.hp));
+  if (dealt > 0) sim.out.hurt = (sim.out.hurt ?? 0) + dealt;
+  if (sim.ents.has(c.id) && c.hp > 0) sim.toast('You land badly.');
 }
 
 function pushTrail(S: ChampState, x: number, z: number) {
@@ -187,6 +243,10 @@ export function processInputs(sim: Sim) {
       applyPose(sim, c, i);
       continue;
     }
+    if (i.type === 'land') {
+      if (isPlayerCtrl(reason) || reason === 'hold') land(sim, c, i, reason);
+      continue;
+    }
     S.lastInput = sim.tick;
     if (reason !== 'player') continue;
     switch (i.type) {
@@ -210,9 +270,13 @@ export function processInputs(sim: Sim) {
   }
 }
 
-function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number; fly?: boolean }) {
+function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; pitch: number; fly?: boolean; alt?: number; climb?: 'wall' | 'perch' }) {
   const S = cs(sim);
   if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.yaw)) return;
+  if (p.fly && c.human) {
+    delete c.human.alt;
+    delete c.human.climb;
+  }
   if (p.fly) {
     // dev fly mode: anywhere, any speed, and nothing can touch you up there
     S.iframesUntil = sim.tick + 5;
@@ -224,12 +288,17 @@ function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
     return;
   }
   const downed = c.state === 'downed';
+  // climbing (terraformer islands only): the client reports the feet's height and whether it's on a wall or a cliff
+  const terrain = !!sim.grid.base;
+  const alt = terrain && Number.isFinite(p.alt) ? Math.min(300, Math.max(0, p.alt!)) : 0;
+  const climb = terrain && (p.climb === 'wall' || p.climb === 'perch') ? p.climb : undefined;
   let max = downed ? CRAWL_MS : SPRINT_MS * Math.max(0.3, champSpeedMul(sim)) * 1.15;
+  if (climb === 'wall') max = Math.max(max, 9.5); // lunges are 8 m/s whatever the legs
   if (sim.tick - S.dodgeTick <= 4) max += 17.5;
   const elapsed = Math.min(0.25, Math.max(0.1, (sim.tick - S.lastPoseTick) * 0.1));
   const d = Math.hypot(p.x - c.x, p.z - c.z);
   const sameTile = Math.floor(p.x) === Math.floor(c.x) && Math.floor(p.z) === Math.floor(c.z);
-  const ok = (sameTile || sim.walkableFor(c, p.x, p.z)) && d <= (1.6 * max * elapsed) / M + 0.2;
+  const ok = (sameTile || sim.walkableFor(c, p.x, p.z) || climbTile(sim, p.x, p.z, climb, alt)) && d <= (1.6 * max * elapsed) / M + 0.2 && alt - (c.human?.alt ?? 0) <= 10 * elapsed + 1;
   S.lastPoseTick = sim.tick;
   if (!ok) {
     correct(sim, c);
@@ -239,8 +308,25 @@ function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
   c.z = Math.min(127.99, Math.max(0, p.z));
   c.yaw = p.yaw;
   S.pitch = p.pitch;
-  S.poses.push({ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw });
+  if (terrain && c.human) {
+    if (alt > 0) c.human.alt = alt;
+    else delete c.human.alt;
+    if (climb) c.human.climb = climb;
+    else delete c.human.climb;
+  }
+  S.poses.push({ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw, ...(alt > 0 ? { alt } : {}) });
   if (S.poses.length > 6) S.poses.shift();
+}
+
+/** Where a climber may be: a cliff tile, or water below one (a sea-cliff foot), or beside a cliff while on the wall. */
+function climbTile(sim: Sim, x: number, z: number, climb: 'wall' | 'perch' | undefined, alt: number): boolean {
+  if (!climb && alt <= 0.3) return false;
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const t = sim.grid.get(ix, iz);
+  if (t === 'cliff' || (t.endsWith('water') && (climb || alt > 0.3))) return true;
+  if (climb !== 'wall' || t === 'wall' || t === 'house') return false;
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (sim.grid.get(ix + dx, iz + dz) === 'cliff') return true;
+  return false;
 }
 
 function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; zone: Zone | null }) {
@@ -255,6 +341,11 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
     if (!hittable || t.hidden) return false;
     const p = axisPoint(t, c.x, c.z);
     const dist = axisDist(t, c.x, c.z) - bodyR(t);
+    if (sim.grid.base) {
+      // the sword's vertical band, from the champion's hand
+      const hand = feetY(sim.ground, c) + 1.65, ft = feetY(sim.ground, t);
+      if (ft > hand + SWORD_M || ft + heightM(t) < hand - SWORD_M) return false;
+    }
     return dist <= (SWORD_M + 1.0) / M && bearingOff(i.yaw, c.x, c.z, p.x, p.z) <= (70 * Math.PI) / 180 + Math.atan2(bodyR(t), Math.max(0.05, Math.hypot(p.x - c.x, p.z - c.z)));
   };
   let t = i.targetId !== null ? sim.ents.get(i.targetId) : undefined;
@@ -285,13 +376,17 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
     S.ambushed.push(t.id);
     sim.toast(`You catch ${t.monster.seen ? firstName(t) : 'it'} resting in its lair. Double damage!`);
   }
-  if (t.monster && t.state !== 'downed') t.target = c.id;
+  if (t.monster && t.state !== 'downed') {
+    t.target = c.id;
+    delete t.monster.ignoreChampUntil; // hit it and the fight is back on
+  }
   const r = applyDamage(sim, t, dmg, { type: S.weapon.type, sourceId: c.id, mul, zone });
   if (t.monster && sim.ents.has(t.id) && t.state === 'rest') t.state = 'fight';
   S.combat.push({ kind: 'hit', id: t.id, zone: r.zone, x: t.x, z: t.z, killed: r.killed, severed: r.severed, downed: r.downed, amount: Math.round(r.dealt) });
 }
 
-function near(c: Entity, t: Entity, m = INTERACT_M) {
+function near(sim: Sim, c: Entity, t: Entity, m = INTERACT_M) {
+  if (sim.grid.base && Math.abs(feetY(sim.ground, t) - feetY(sim.ground, c)) >= 3) return false;
   return axisDist(t, c.x, c.z) - bodyR(t) <= m / M;
 }
 
@@ -321,11 +416,11 @@ function interact(sim: Sim, c: Entity, id: number | null): string | null {
   const t = id !== null ? sim.ents.get(id) : undefined;
   if (!t) return null;
   if (t.kind === 'spear') {
-    if (!near(c, t)) return 'Too far away.';
+    if (!near(sim, c, t)) return 'Too far away.';
     return takeSpear(sim, c, t);
   }
   if ((t.kind === 'monster' && (t.state === 'downed' || t.state === 'bound')) || t.kind === 'corpse') {
-    if (!near(c, t)) return 'Too far away.';
+    if (!near(sim, c, t)) return 'Too far away.';
     bind(sim, c, t);
     return null;
   }
@@ -339,7 +434,7 @@ function interact(sim: Sim, c: Entity, id: number | null): string | null {
 function finish(sim: Sim, c: Entity, id: number | null): string | null {
   const t = id !== null ? sim.ents.get(id) : undefined;
   if (!t || t.kind !== 'monster' || (t.state !== 'downed' && t.state !== 'bound')) return 'Nothing to finish.';
-  if (!near(c, t)) return 'Too far away.';
+  if (!near(sim, c, t)) return 'Too far away.';
   if (sim.dragging === t.id) releaseDragged(sim);
   if (t.zones?.head) t.zones.head.state = 'severed';
   spawnSevered(sim, t, 'head');
@@ -355,8 +450,9 @@ export function releaseOnChampion(sim: Sim, m: Entity, c: Entity, hitR: number):
   const fp = frontPoint(m);
   const arc = (50 * Math.PI) / 180;
   const recent = S.poses.filter((p) => sim.tick - p.tick <= 2);
-  const cands = recent.length && isPlayerCtrl(S.reason) ? recent : [{ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw }];
+  const cands = recent.length && isPlayerCtrl(S.reason) ? recent : [{ tick: sim.tick, x: c.x, z: c.z, yaw: c.yaw, alt: c.human?.alt }];
   for (const p of cands) {
+    if (sim.grid.base && !champReachable(sim.ground, m, c, sim.ground.y(p.x, p.z) + (p.alt ?? 0))) return 'miss';
     const out = Math.hypot(p.x - fp.x, p.z - fp.z) > hitR;
     const behind = bearingOff(m.yaw, m.x, m.z, p.x, p.z) > arc + Math.atan2(bodyR(c), Math.max(0.05, Math.hypot(p.x - m.x, p.z - m.z)));
     if (out || behind) return 'miss';
@@ -412,6 +508,7 @@ export function stepChampion(sim: Sim, c: Entity) {
   const prev = S.reason;
   if (c.state === 'captive') {
     S.reason = 'captive';
+    if (c.human?.alt !== undefined || c.human?.climb) groundChampion(sim, c);
     return;
   }
   if (c.state === 'downed') {
@@ -445,6 +542,8 @@ export function stepChampion(sim: Sim, c: Entity) {
   const reason = ctrlReason(sim);
   S.reason = reason;
   if (isPlayerCtrl(reason) && !isPlayerCtrl(prev)) S.epoch++;
+  // the sim walks the champion now: off the cliff first (and only once: then it's on walkable ground)
+  if (reason === 'autopilot' && ((c.human?.alt ?? 0) > 0 || sim.grid.get(Math.floor(c.x), Math.floor(c.z)) === 'cliff')) groundChampion(sim, c);
   if (reason === 'hold') holdGround(sim, c);
   else if (reason === 'autopilot') runOrder(sim, c);
   else c.state = sim.dragging >= 0 ? 'drag' : 'idle';
@@ -547,7 +646,7 @@ function runOrder(sim: Sim, c: Entity) {
         return;
       }
       c.state = 'walk';
-      if (!near(c, t, INTERACT_M * 0.8)) {
+      if (!near(sim, c, t, INTERACT_M * 0.8)) {
         if (axisDist(t, c.x, c.z) < 1.5) {
           sim.stop(c);
           sim.moveToward(c, t.x, t.z, speed(sim, c));
@@ -619,6 +718,8 @@ export function crown(sim: Sim) {
   }
   c.hidden = false;
   c.state = 'idle';
+  delete c.human!.alt;
+  delete c.human!.climb;
   sim.stop(c);
   c.tags = c.tags.filter((t) => t !== 'elder');
   c.tags.push('champion');
