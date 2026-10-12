@@ -129,10 +129,16 @@ export class HudView {
         row(keyLabel(b.map), 'map'),
         row(keyLabel(b.camera), 'first / third person'),
         row(keyLabel(b.journal), 'journal'),
-        row('Esc', 'pause'),
+        row('Esc', 'pause / resume'),
       ),
       h('div', { class: 'play-go' }, firstTime ? 'Click to play' : 'Click to resume'),
     ));
+  }
+
+  /** The browser wouldn't give the mouse back for a key (it wants a click after Esc): say so on the card. */
+  needClick() {
+    const go = this.play.querySelector('.play-go');
+    if (go) go.textContent = 'Click to resume: the browser wants a click to give the mouse back';
   }
 
   /** A one-time contextual hint (F28). */

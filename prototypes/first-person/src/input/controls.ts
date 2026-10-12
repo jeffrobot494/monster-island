@@ -77,6 +77,8 @@ export class Controls {
   private pressed = new Set<ActionName>();
   private clicked = false;
   onLockChange: (locked: boolean) => void = () => {};
+  /** the browser wouldn't hand over the pointer: after the player's own Esc it takes a click, which a key isn't */
+  onLockRefused: () => void = () => {};
   onAction: (a: ActionName) => void = () => {};
   rebinding: ActionName | null = null;
   onRebound: () => void = () => {};
@@ -97,6 +99,7 @@ export class Controls {
       this.mouseL = this.mouseR = false;
     });
     document.addEventListener('pointerlockchange', () => this.setLocked(document.pointerLockElement === this.el));
+    document.addEventListener('pointerlockerror', () => this.onLockRefused());
     el.addEventListener('mousedown', (e) => {
       if (!this.active) {
         if (this.noLock) this.dragging = true;

@@ -176,7 +176,7 @@ async function boot() {
   let pendingSwing: { at: number } | null = null;
   const spectator = { x: 0, y: 30, z: 0, yaw: 0, pitch: -0.4 };
   let lastHurtAt = 0;
-  let paused = false;
+  let paused = false, pausedAt = 0;
   // a paused load holds only once the view has settled: half a second drawn since the first frame arrived
   let sawFrame = false, settleT = 0, viewReady = false;
 
@@ -317,6 +317,7 @@ async function boot() {
   function setPause(on: boolean) {
     if (on === paused) return;
     paused = on;
+    if (on) pausedAt = performance.now();
     sim.setPaused(on || document.hidden);
     renderer.frozen = on;
     audio.hold(on);
@@ -360,6 +361,9 @@ async function boot() {
   canvas.addEventListener('click', () => {
     if (!controls.active) lockGame();
   });
+  controls.onLockRefused = () => {
+    if (!controls.active) hudView.needClick();
+  };
   controls.onLockChange = (locked) => {
     input({ type: 'lock', on: locked });
     if (locked) firstPlay = false;
@@ -402,6 +406,8 @@ async function boot() {
     if (e.code !== 'Escape') return;
     if (map.open) map.toggle(false);
     else if (screenOpen()) return;
+    // Esc again on the pause card: back into the game (not the Esc that just paused it, should the page hear that one)
+    else if (paused && performance.now() - pausedAt > 300) return lockGame();
     // Esc releases the pointer, which pauses; with no pointer lock to release, pause here
     if (controls.noLock && !hidePlay) setPause(true);
     updateLockUi();

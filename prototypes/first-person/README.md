@@ -41,7 +41,7 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | V | first / third person camera (also the button at the bottom right) |
 | M | map |
 | Tab | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
-| Esc | pause; click to resume |
+| Esc | pause; Esc again (or a click) resumes. After you've pressed Esc, Chrome only gives the mouse back to the game for a recent click, so if Esc can't resume, the pause card says to click |
 
 A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night.
 

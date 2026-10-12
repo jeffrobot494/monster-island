@@ -134,8 +134,10 @@ matters for a second desktop on the LAN.
   renderer's clock stops (bodies, particles and the view model hold still), the controller doesn't run, and the audio
   context is suspended. A load starts paused at the click-to-play card, once half a second has been drawn since the
   first frame (the frames place the camera). Screens opened from the pause keep it paused; closing one goes back into
-  play. Getting the pointer back resumes, with no catch-up. With `?nolock` there is no lock to lose: Esc pauses, and
-  the card resumes.
+  play. Getting the pointer back resumes, with no catch-up: a click, or Esc again on the pause card (an Esc within
+  300 ms of pausing is the one that paused). After the user's own Esc, Chrome re-locks only with transient user
+  activation, which an Esc keydown doesn't give (a click in the last few seconds does): on `pointerlockerror` the card
+  says to click. With `?nolock` there is no lock to lose: Esc pauses, and Esc again or the card resumes.
 - Screens opened during play don't pause: the world runs on real time (design) while you read.
 - The worker also pauses while the page is hidden, and catches up on return (R1) unless the game was paused: a
   paused island waits. Closing the game is still time away: saves keep `lastRealMs` current while paused, so the
