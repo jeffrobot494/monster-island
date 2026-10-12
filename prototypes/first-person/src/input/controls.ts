@@ -66,6 +66,11 @@ export class Controls {
   /** accumulated look deltas since the last read (radians) */
   dYaw = 0;
   dPitch = 0;
+  /** the mouse wheel: a notch since the last frame (+1 down, -1 up), what's been scrolled toward the next, and when
+   *  the next can come (a trackpad's flick is many small events) */
+  private wheelStep = 0;
+  private wheelAcc = 0;
+  private wheelReady = 0;
   locked = false;
   lastInput = performance.now();
   /** one-shot presses since the last frame */
@@ -109,6 +114,10 @@ export class Controls {
       if (this.host ? !(this.noLock && this.dragging) : !this.locked && !(this.noLock && this.dragging)) return;
       this.look(e.movementX, e.movementY);
     });
+    // under the RUN host's lock the wheel comes through it (useHost)
+    window.addEventListener('wheel', (e) => {
+      if (!this.host || this.noLock) this.wheel(e.deltaY, e.deltaMode);
+    }, { passive: true });
   }
 
   /** RUN.world: the host holds the pointer lock and forwards the mouse (input/host-pointer.ts). */
@@ -118,6 +127,7 @@ export class Controls {
     host.onInput = (i) => {
       if (!this.locked) return;
       if (i.type === 'move') this.look(i.movementX, i.movementY);
+      else if (i.type === 'wheel') this.wheel(i.deltaY, i.deltaMode);
       else if (i.type === 'button') {
         if (i.pressed) this.button(i.button, true);
         else if (i.button === 0) this.mouseL = false;
@@ -238,7 +248,26 @@ export class Controls {
     return r;
   }
 
+  /** One wheel notch is a step (a mouse sends ~100 px or 3 lines a notch); at most one every 150 ms. */
+  private wheel(dy: number, mode: number) {
+    if (!this.active || !dy) return;
+    this.lastInput = performance.now();
+    this.wheelAcc += mode === 1 ? dy * 40 : mode === 2 ? dy * 800 : dy;
+    if (Math.abs(this.wheelAcc) < 50 || performance.now() < this.wheelReady) return;
+    this.wheelStep = Math.sign(this.wheelAcc);
+    this.wheelAcc = 0;
+    this.wheelReady = performance.now() + 150;
+  }
+
+  /** Consume a wheel notch: +1 (down), -1 (up) or 0. */
+  takeWheel(): number {
+    const s = this.wheelStep;
+    this.wheelStep = 0;
+    return s;
+  }
+
   clearFrame() {
     this.pressed.clear();
+    this.wheelStep = 0;
   }
 }

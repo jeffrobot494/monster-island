@@ -942,6 +942,11 @@ async function boot() {
         if (v && v.flags & F_DOWNED) input({ type: 'finish', id: look.id });
       }
       if (controls.take('torch')) input({ type: 'torch', on: !hud?.champion?.torch });
+      // the mouse wheel cycles weapons, as in Counter-Strike: either way it's the other one (with no spears, the sword)
+      if (controls.takeWheel() && (wield === 'spear' || (hud?.champion?.spears ?? 0) > 0)) {
+        setWield(wield === 'sword' ? 'spear' : 'sword');
+        if (wield === 'spear') hudView.hintOnce('spear');
+      }
       // 1 and 2: the sword (and shield), or a spear
       if (controls.take('sword')) setWield('sword');
       if (controls.take('spear')) {

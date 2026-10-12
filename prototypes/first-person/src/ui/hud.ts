@@ -111,6 +111,7 @@ export class HudView {
       h('div', { class: 'ctls' },
         row(`${keyLabel(b.forward)} ${keyLabel(b.left)} ${keyLabel(b.back)} ${keyLabel(b.right)}`, 'move'),
         row('Mouse', 'look'),
+        row('Mouse wheel', 'switch weapon'),
         row(keyLabel(b.sprint), 'sprint'),
         row('Left click', 'swing the sword or thrust the spear — aim high for the head, low for the legs'),
         row('Right mouse', 'shield'),

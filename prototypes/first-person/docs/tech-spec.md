@@ -112,6 +112,7 @@ matters for a second desktop on the LAN.
 | Input | Action |
 |---|---|
 | Mouse | Look (pointer lock). Pitch is clamped to ±85°. |
+| Mouse wheel | The next weapon, either way (with two, the other; with no spears, none). A notch is a step (≥ 50 px, or a line), one every 150 ms at most; under the RUN host's lock its forwarded `wheel` input |
 | W A S D | Move (relative to the camera's yaw) |
 | Shift (hold) | Sprint |
 | Space | Jump (client-only: a ~0.85 m hop, 8 stamina, momentum kept in the air; not while dragging, downed or mid-dodge; the sim never sees height) |

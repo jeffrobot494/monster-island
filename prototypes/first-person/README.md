@@ -25,6 +25,7 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | Input | Action |
 |---|---|
 | Mouse | look (click the game to capture the mouse) |
+| Mouse wheel | switch weapon (sword, spear), either way, as in Counter-Strike. With no spears it stays on the sword |
 | W A S D | move |
 | Shift | sprint (uses stamina) |
 | Left click | swing the sword, or thrust the spear. **Where you aim picks the wound**: head (×1.5), arms, legs, or the monster's signature limb (club arm, horns, wings, jaws…) |
