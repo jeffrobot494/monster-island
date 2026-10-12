@@ -60,6 +60,8 @@ A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night.
 - **Fight.** A red ring on the ground (and a red arc at the screen edge) means a blow is coming in 0.8 s: dodge (C) out of
   it, step behind the beast, or take it on your shield. Cripple legs to slow a monster, cripple its signature limb to
   blunt its special.
+- **Spears.** Picking one up when you carry none puts it straight into your hand (thrown your last? walk over it and
+  it's ready again). With others carried, what's in hand stays your choice.
 - **Capture.** At 20 % HP a monster collapses (yellow ring). Press **E** to bind it and walk it home: it follows on a
   rope, and villagers who see you help pull. Press **E** at the altar to burn it alive for its full HP in favor, or
   **F** to finish it where it lies.

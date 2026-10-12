@@ -4,7 +4,7 @@ import { Island } from '../src/sim/island';
 import { cs, crown } from '../src/sim/champion';
 import { CRUISE_M, startRaid, raidHour, RAID_CHANCE } from '../src/sim/monster-ai';
 import { houseBreached } from '../src/sim/village';
-import { RACK_SPEARS, spearsOf } from '../src/sim/spears';
+import { RACK_SPEARS, spawnSpear, spearsOf } from '../src/sim/spears';
 import { serializeCore, deserializeCore } from '../src/sim/serialize';
 import { generateMonsters } from '../src/sim/monsters-gen';
 import type { Entity } from '../src/sim/types';
@@ -237,6 +237,28 @@ describe('the spear in hand', () => {
     expect((deserializeCore(core) as unknown as { champState: { wield: string } }).champState.wield).toBe('spear');
     delete (core.champState as { wield?: string }).wield;
     expect((deserializeCore(core) as unknown as { champState: { wield: string } }).champState.wield).toBe('sword');
+  });
+
+  it('picking up your only spear puts it in hand; with others carried, the sword stays', () => {
+    const { island, sim, c } = duel(7);
+    const S = cs(sim);
+    const pickUp = () => {
+      const s = spawnSpear(sim, c.x, c.z, 'ground');
+      island.step();
+      island.step();
+      expect(sim.ents.has(s.id)).toBe(false);
+    };
+    c.human!.spears = 0;
+    island.step();
+    expect(S.wield).toBe('sword');
+    pickUp();
+    expect(spearsOf(c)).toBe(1);
+    expect(S.wield).toBe('spear');
+    sim.inputs.push({ type: 'wield', weapon: 'sword' });
+    island.step();
+    pickUp();
+    expect(spearsOf(c)).toBe(2);
+    expect(S.wield).toBe('sword');
   });
 });
 

@@ -140,6 +140,8 @@ matters for a second desktop on the LAN.
 - The worker also pauses while the page is hidden, and catches up on return (R1) unless the game was paused: a
   paused island waits. Closing the game is still time away: saves keep `lastRealMs` current while paused, so the
   next load catches up from when it was closed.
+- Picking up a spear when the champion carries none puts it in hand (`takeSpear` sets `wield`; the client follows the
+  HUD). With others carried, `wield` is left alone.
 - Settings: mouse sensitivity, invert Y, FOV 60–100° (default 75°), master and effects volume, shadow quality
   (off/low/high), and key bindings.
 

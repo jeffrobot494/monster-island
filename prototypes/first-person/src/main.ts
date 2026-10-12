@@ -799,6 +799,7 @@ async function boot() {
     if (w === wield) return;
     wield = w;
     renderer.view.weapon = w;
+    if (w === 'spear') hudView.hintOnce('spear'); // however it came to hand (2, a pickup)
     if (send) input({ type: 'wield', weapon: w });
   }
   /** how far a blow reaches from the eye: the sim's SWORD_M or SPEAR_M, plus a body's depth */

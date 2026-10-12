@@ -78,8 +78,13 @@ export function takeSpear(sim: Sim, e: Entity, s: Entity): string | null {
   if (!s.spear || s.spear.st === 'flying') return null;
   if (spearsOf(e) >= spearCap(sim, e)) return 'You cannot carry more spears.';
   sim.remove(s);
-  setSpears(e, spearsOf(e) + 1);
-  if (e.id === sim.championId) sim.toast(`You take a spear (${spearsOf(e)}/${CHAMP_SPEARS}).`);
+  const had = spearsOf(e);
+  setSpears(e, had + 1);
+  if (e.id === sim.championId) {
+    // your only spear goes straight into your hand; carrying others, what's in hand stays your choice
+    if (!had) cs(sim).wield = 'spear';
+    sim.toast(`You take a spear (${spearsOf(e)}/${CHAMP_SPEARS})${had ? '' : ', in hand'}.`);
+  }
   return null;
 }
 
