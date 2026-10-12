@@ -74,6 +74,9 @@ export interface ZoneState {
   state: 'ok' | 'crippled' | 'severed';
 }
 
+/** where a ridden flyer is taking its rider: tiles, and the height in meters (absolute); land: down at its lair */
+export interface RideGoal { x: number; z: number; alt: number; land?: boolean }
+
 export interface MonsterInfo {
   archetype: string;
   epithet: string;
@@ -127,6 +130,16 @@ export interface MonsterInfo {
   besiegeSince?: number;
   /** clockMs: gave up on the champion; leaves them be until then */
   ignoreChampUntil?: number;
+  /** ridden (docs/climbing-phase4-plan.md, Part A): the tick the rider got on, the tick the current shake began
+   *  shuddering (-1 none), the tick the next one lands, the shakes so far, and where a flyer is taking its rider (tiles; alt in meters) */
+  ride?: { since: number; next: number; shakeAt: number; shakes: number; goal?: RideGoal };
+  /** tick a blow to the head from its back stops staggering it */
+  staggerUntil?: number;
+  /** the windup is a grab at its rider, not a blow, reaching for the rider on capsule grabCap */
+  grabbing?: boolean;
+  grabCap?: number;
+  /** its wing went while it was ridden aloft: coming down to a crash landing */
+  crashing?: boolean;
 }
 
 export interface HumanInfo {

@@ -2,8 +2,9 @@
 
 Status: build step 1 (climbing the heightmap ground, falls, height in the sim, 3D reach against the champion,
 besiege) is built: see `docs/climbing-phase1-plan.md` and its build notes. Step 2 (the feature mesh) is built: see
-`docs/climbing-phase2-plan.md`. Step 3 (mounting the nephil) is built: see `docs/climbing-phase3-plan.md`. Steps 4–5
-are still proposals.
+`docs/climbing-phase2-plan.md`. Step 3 (mounting the nephil) is built: see `docs/climbing-phase3-plan.md`. Step 4
+(monsters fighting back: shakes and holding on, the nephil's grab, attacks from the body, flyers carrying you to the
+floating isles) is built: see `docs/climbing-phase4-plan.md`. Step 5 is still a proposal.
 
 ## Why
 

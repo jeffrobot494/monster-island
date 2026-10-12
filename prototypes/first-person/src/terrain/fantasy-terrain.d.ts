@@ -28,6 +28,8 @@ export interface Field {
   densityCol(x: number, y: number, z: number, c: Column): number;
   density(x: number, y: number, z: number): number;
   groundHeight(x: number, z: number): number;
+  /** the floating isles: centre (units), flat top height (units), radius, depth below the top */
+  isles: { x: number; z: number; top: number; R: number; depth: number; k: number }[];
 }
 
 export interface Palette {

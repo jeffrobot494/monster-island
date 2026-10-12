@@ -2,7 +2,7 @@
 // meters on this frame's pose, a rider's place on them, and the rules for getting on. The controller sees only
 // MountBody, so it stays free of three.js.
 import * as THREE from 'three';
-import { CLIMB } from '../sim/climb-body';
+import { CLIMB, RIDE } from '../sim/climb-body';
 import { SHAPE_M } from '../sim/body';
 import { F_BOUND, F_CORPSE, F_DOWNED, F_MONSTER } from '../protocol';
 import { ZONE_BIT, type Rig } from './rigs';
@@ -85,7 +85,11 @@ export class Rider implements MountBody {
   private q0 = new THREE.Quaternion();
   private yaw0 = 0;
 
-  constructor(private ents: Entities, readonly id: number) {}
+  readonly perchNy: number | undefined;
+
+  constructor(private ents: Entities, readonly id: number) {
+    this.perchNy = RIDE[ents.views.get(id)?.shape ?? '']?.perch;
+  }
 
   private caps(): Cap[] | null {
     const v = this.ents.views.get(this.id);
@@ -149,10 +153,9 @@ export class Rider implements MountBody {
     const caps = this.caps();
     if (!caps) return null;
     const c = caps.find((k) => k.i === this.cap);
-    if (!c) {
-      // the limb went (severed): onto whatever is nearest
-      this.project(caps, this.p);
-    } else {
+    // the limb you were on went (severed): you go with it (docs/climbing-phase4-plan.md, Part B)
+    if (!c) return null;
+    {
       const ax = c.a.clone().lerp(c.b, this.u);
       const n = this.dir.clone().applyQuaternion(c.frame.getWorldQuaternion(new THREE.Quaternion()));
       // along the axis only round an end cap, outward
@@ -179,7 +182,7 @@ export class Rider implements MountBody {
   }
 
   private hips(v: View): THREE.Object3D | undefined {
-    return v.rig?.points.hips;
+    return v.rig?.points.hips ?? v.rig?.body;
   }
 
   /** TILT of the body's pitch and roll since you got on, in the view's frame (rad). */

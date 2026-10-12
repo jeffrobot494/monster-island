@@ -1,14 +1,16 @@
 // Monster AI (§6 + R6–R14): hours, pre-rolled hunts, prowling, stalking, grabbing, carrying, sacrifice, fighting,
 // roars and responses, visits, feeding, fleeing, downed.
 import type { Sim } from './sim';
-import type { Entity } from './types';
+import type { Entity, RideGoal } from './types';
 import { DAY_MS, HOUR_MS, inWindow } from './clock';
-import { applyDamage, armFactor, dropCarried, firstName, gainXp, heal, kill, legFactor, regionName, sigLost } from './combat';
+import { applyDamage, armFactor, dropCarried, firstName, gainXp, heal, kill, legFactor, regionName, setDowned, sigLost } from './combat';
 import { rollRestless } from './populate';
 import { offerFavor } from './favor';
 import { SIZE } from './world';
 import { M as MPT } from './ground';
-import { bodyR, champReachable, feetY, frontPoint, heightM, reachT } from './body';
+import { bearingOff, bodyR, champReachable, feetY, frontPoint, heightM, reachT } from './body';
+import { RIDE, SHAKE_TELL, type RideRules } from './climb-body';
+import { islesOf } from './terrain-import';
 import { cs, releaseOnChampion } from './champion';
 import { breachHouse, doorOf, houseBreached, occupants } from './village';
 
@@ -48,6 +50,8 @@ function bold(sim: Sim, m: Entity) {
 /** Soaring height (m): high enough to look over the whole of a region. */
 export const CRUISE_M = 45;
 const CLIMB_M = 0.5; // per tick (5 m/s)
+const RIDDEN_CLIMB_M = 1; // carrying a rider up to an isle (10 m/s)
+const CRASH_M = 1; // per tick: its wing gone under a rider, it comes down hard but not like a stone
 const STOOP_M = 1.4; // per tick (14 m/s)
 
 export function canFly(m: Entity) {
@@ -86,6 +90,12 @@ function clearBesiege(m: Entity) {
 function targetAlt(sim: Sim, m: Entity): number {
   const M = m.monster!;
   if (!canFly(m)) return 0;
+  const g = M.ride?.goal;
+  if (g) {
+    if (!g.land) return Math.max(0, g.alt - sim.ground.y(m.x, m.z));
+    // taking its rider home: glide down onto the lair
+    return Math.min(CRUISE_M, Math.max(0, (Math.hypot(m.x - g.x, m.z - g.z) - 0.8) * 9));
+  }
   switch (m.state) {
     case 'rest': case 'downed': case 'bound': case 'sacrifice': case 'feed': case 'batter': return 0;
     case 'carry': return 7;
@@ -95,7 +105,8 @@ function targetAlt(sim: Sim, m: Entity): number {
       if (!t) return m.state === 'raid' ? CRUISE_M : 0;
       const stoop = Math.min(CRUISE_M, Math.max(0, (Math.hypot(t.x - m.x, t.z - m.z) - 1.2) * 7));
       // a climber: come down (or up) to its height
-      if (t.id === sim.championId && (t.human?.alt ?? 0) > 0) return Math.min(120, Math.max(stoop, feetY(sim.ground, t) - sim.ground.y(m.x, m.z)));
+      // (as high as a pose can be: up on a floating isle too)
+      if (t.id === sim.championId && (t.human?.alt ?? 0) > 0) return Math.min(300, Math.max(stoop, feetY(sim.ground, t) - sim.ground.y(m.x, m.z)));
       return stoop;
     }
   }
@@ -110,8 +121,17 @@ function updateAltitude(sim: Sim, m: Entity) {
   if (!M.flies && !M.alt) return;
   const a = M.alt ?? 0, want = targetAlt(sim, m);
   // a crippled wing drops it out of the sky
-  const fall = !canFly(m) || m.state === 'downed' || m.state === 'bound' ? 3 : STOOP_M;
-  M.alt = want > a ? Math.min(want, a + CLIMB_M) : Math.max(want, a - fall);
+  const fall = M.crashing ? CRASH_M : !canFly(m) || m.state === 'downed' || m.state === 'bound' ? 3 : STOOP_M;
+  M.alt = want > a ? Math.min(want, a + (M.ride ? RIDDEN_CLIMB_M : CLIMB_M)) : Math.max(want, a - fall);
+  if (M.crashing && M.alt <= 0) {
+    // the crash landing: down, and the rider (if still on) with it
+    delete M.crashing;
+    if (m.hp > 0 && m.state !== 'downed' && m.state !== 'bound') {
+      setDowned(sim, m);
+      sim.sound('thud', m.x, m.z, m.scale * 2);
+      sim.toast(`${M.seen ? firstName(m) : 'The flyer'} crashes to the ground!`);
+    }
+  }
 }
 
 /** Active hours (clock windows, widened by boldness) and the light rule (R8). */
@@ -276,6 +296,11 @@ function stepMonsterAI(sim: Sim, m: Entity) {
   const max = sim.maxHp(m);
   const champ = sim.champion();
 
+  // something on its back (docs/climbing-phase4-plan.md, Part A): whatever it was doing, unless it's down
+  const rider = m.state !== 'downed' && m.state !== 'bound' ? riderOf(sim, m) : undefined;
+  if (rider && RIDE[M.archetype]) return ridden(sim, m, rider, RIDE[M.archetype]!);
+  if (M.ride && m.state !== 'downed' && m.state !== 'bound') endRide(m);
+
   switch (m.state) {
     case 'downed':
       if (sim.tick % 100 === 0) roar(sim, m);
@@ -298,6 +323,11 @@ function stepMonsterAI(sim: Sim, m: Entity) {
     case 'feed':
       if (sim.tick > m.stateUntil) setState(sim, m, 'return');
       return;
+  }
+
+  if ((M.staggerUntil ?? 0) > sim.tick) {
+    sim.stop(m);
+    return;
   }
 
   // fighting: a current target (whoever attacked it), or the champion when close
@@ -796,12 +826,6 @@ function fight(sim: Sim, m: Entity, t: Entity) {
   const fp = frontPoint(m);
   const d = Math.hypot(t.x - fp.x, t.z - fp.z);
   const isChamp = t.id === sim.championId;
-  if (isChamp && t.human?.mount?.id === m.id) {
-    // its own rider: no blows, and no turning to face someone on its back (phase 4: shakes and the grab)
-    M.windup = -1;
-    sim.stop(m);
-    return;
-  }
   if (M.windup >= 0) {
     // turn toward the target (180°/s), then freeze the facing for the last 2 ticks
     if (sim.tick - M.windup < 6) {
@@ -857,6 +881,157 @@ function fight(sim: Sim, m: Entity, t: Entity) {
   } else {
     sim.stop(m);
     m.yaw = Math.atan2(t.x - m.x, t.z - m.z);
+  }
+}
+
+// ---------- ridden (docs/climbing-phase4-plan.md, Parts A and C) ----------
+
+/** The champion, when riding m. */
+function riderOf(sim: Sim, m: Entity): Entity | undefined {
+  const c = sim.champion();
+  return c && c.human?.mount?.id === m.id && c.hp > 0 && c.state !== 'downed' && c.state !== 'captive' ? c : undefined;
+}
+
+function endRide(m: Entity) {
+  const M = m.monster!;
+  delete M.ride;
+  if (M.grabbing) {
+    delete M.grabbing;
+    delete M.grabCap;
+    M.windup = -1;
+  }
+}
+
+/** Is the rider where m's free arm reaches? On the front capsules, in front means within 80° of its facing when
+ *  it starts reaching; when its hand closes, a rider still on the capsule it reached for is caught (its own windup
+ *  swings the leg you're on round), and one who climbed somewhere else in front of it too. */
+function inGrab(m: Entity, c: Entity, R: RideRules, reachedFor = -1): boolean {
+  const g = R.grab, cap = c.human?.mount?.cap ?? -1;
+  if (!g || m.zones?.[g.arm]?.state === 'severed') return false;
+  if (g.anywhere.includes(cap)) return true;
+  return g.front.includes(cap) && (cap === reachedFor || bearingOff(m.yaw, m.x, m.z, c.x, c.z) <= (80 * Math.PI) / 180);
+}
+
+/** Off it: the client throws the rider clear; the sim keeps the height (it's a fall now) and ignores late poses. */
+function throwOff(sim: Sim, m: Entity, c: Entity, hard: boolean) {
+  const S = cs(sim);
+  S.combat.push({ kind: 'thrown', id: m.id, x: m.x, z: m.z, hard });
+  S.unmount = { id: m.id, until: sim.tick + 10 };
+  delete c.human!.climb;
+  delete c.human!.mount;
+  endRide(m);
+}
+
+/** Where a flyer takes its rider: home from up on an isle, else up over the nearest isle, else a circle at 25 m. */
+function rideGoal(sim: Sim, m: Entity): RideGoal {
+  const M = m.monster!;
+  const isles = sim.terrain ? islesOf(sim.terrain) : [];
+  const gy = sim.ground.y(m.x, m.z), feet = gy + altOf(m);
+  // up on an isle (not just under one): take the rider down
+  if (isles.some((i) => Math.hypot(m.x - i.x, m.z - i.z) < i.R && feet > i.top - 20) || altOf(m) > 40) return { x: M.lairX + 0.5, z: M.lairZ + 0.5, alt: 0, land: true };
+  let best: (typeof isles)[number] | null = null;
+  for (const i of isles) if (!best || Math.hypot(m.x - i.x, m.z - i.z) < Math.hypot(m.x - best.x, m.z - best.z)) best = i;
+  // low over the top, so letting go is a short drop
+  return best ? { x: best.x, z: best.z, alt: best.top + 3 } : { x: m.x, z: m.z, alt: gy + 25 };
+}
+
+/** A flyer under a rider: up to the goal's height, holding off an isle's rim until it's above it, then circling. */
+function rideFlight(sim: Sim, m: Entity, goal: RideGoal) {
+  const sp = monsterSpeed(sim, m);
+  const d = Math.hypot(goal.x - m.x, goal.z - m.z);
+  if (goal.land) {
+    if (d > 0.3) sim.moveToward(m, goal.x, goal.z, sp);
+    return;
+  }
+  const feet = sim.ground.y(m.x, m.z) + altOf(m);
+  const isle = sim.terrain ? islesOf(sim.terrain).find((i) => Math.hypot(goal.x - i.x, goal.z - i.z) < 0.01) : undefined;
+  // below the top: wait outside the rim (the isle is solid rock)
+  if (isle && feet < goal.alt - 4 && d < isle.R + 3) {
+    if (d < isle.R + 2) sim.moveToward(m, m.x + (m.x - goal.x) / Math.max(d, 0.01), m.z + (m.z - goal.z) / Math.max(d, 0.01), sp * 0.5);
+    return;
+  }
+  if (d > 2) {
+    sim.moveToward(m, goal.x, goal.z, sp);
+    return;
+  }
+  // circle the goal: the bearing follows the clock (no rng)
+  const a = (sim.tick + m.id * 31) * 0.03;
+  sim.moveToward(m, goal.x + Math.sin(a) * 1.5, goal.z + Math.cos(a) * 1.5, sp * 0.6);
+}
+
+/**
+ * Ridden: it stops what it was doing to be rid of you. Shakes, telegraphed, that throw you off unless you hold on;
+ * the nephil's grab; a flyer carries you off. A blow to its head staggers it.
+ */
+function ridden(sim: Sim, m: Entity, c: Entity, R: RideRules) {
+  const M = m.monster!;
+  const S = cs(sim);
+  if (m.carrying !== undefined) dropCarried(sim, m);
+  if (!M.ride) {
+    M.ride = { since: sim.tick, next: sim.tick + R.first, shakeAt: -1, shakes: 0 };
+    if (!M.grabbing) M.windup = -1;
+    delete M.ignoreChampUntil; // something on its back has its attention
+  }
+  const ride = M.ride;
+  m.target = c.id;
+  clearBesiege(m);
+  if (m.state !== 'fight') setState(sim, m, 'fight');
+  if (R.flies) {
+    if (canFly(m)) {
+      ride.goal ??= rideGoal(sim, m);
+      rideFlight(sim, m, ride.goal);
+    } else {
+      sim.stop(m);
+      if (altOf(m) > 0) M.crashing = true;
+      delete ride.goal;
+    }
+  } else sim.stop(m);
+  if ((M.staggerUntil ?? 0) > sim.tick) {
+    M.windup = -1;
+    delete M.grabbing;
+    delete M.grabCap;
+    ride.shakeAt = -1;
+    ride.next = Math.max(ride.next, M.staggerUntil! + SHAKE_TELL);
+    return;
+  }
+  // the grab: reaching for you (a windup), then a miss or a throw
+  if (M.windup >= 0 && M.grabbing) {
+    if (sim.tick - M.windup < 8) return;
+    M.windup = -1;
+    delete M.grabbing;
+    const reached = M.grabCap;
+    delete M.grabCap;
+    M.attackReadyAt = sim.tick + 15;
+    M.strikeAt = sim.tick;
+    if (sim.tick > S.iframesUntil && inGrab(m, c, R, reached)) {
+      applyDamage(sim, c, M.dmg * sim.stat(m, 'strength') * 0.8, { type: 'crush', zone: 'torso', sourceId: m.id });
+      if (c.hp > 0 && c.human?.mount) throwOff(sim, m, c, true);
+    } else S.combat.push({ kind: 'dodged', id: m.id });
+    return;
+  }
+  M.windup = -1;
+  // the shake: a shudder, then it lands
+  if (ride.shakeAt >= 0) {
+    if (sim.tick - ride.shakeAt < SHAKE_TELL) return;
+    ride.shakeAt = -1;
+    ride.shakes++;
+    ride.next = sim.tick + R.every;
+    if (!R.flies) m.yaw += ride.shakes % 2 ? 0.5 : -0.5;
+    if (S.blocking) S.combat.push({ kind: 'shake', id: m.id, amount: R.cost });
+    else throwOff(sim, m, c, false);
+    return;
+  }
+  if (sim.tick >= ride.next - SHAKE_TELL) {
+    ride.shakeAt = sim.tick;
+    sim.burstOn('roar', m, 'head');
+    sim.sound('roar', m.x, m.z, m.scale);
+    return;
+  }
+  if (sim.tick >= M.attackReadyAt && inGrab(m, c, R)) {
+    M.windup = sim.tick;
+    M.grabbing = true;
+    M.grabCap = c.human!.mount!.cap;
+    sim.sound('growl', m.x, m.z, m.scale);
   }
 }
 

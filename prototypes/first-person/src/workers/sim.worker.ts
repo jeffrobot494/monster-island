@@ -1,6 +1,6 @@
 import { harden, hostCreateBlobUrl, hostNow, hostPost, hostRevokeUrl, hostSetTimeout } from './harden';
 import { Island, importDefault, type SavedWorld } from '../sim/island';
-import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_ITEM, F_MONSTER, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
+import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
 import type { FaultInfo, VisibleEffect } from '../sim/module-runtime';
 import { TICKS_PER_SECOND, HOUR_MS, MS_PER_REAL_TICK, fmtClock } from '../sim/clock';
 import type { Entity } from '../sim/types';
@@ -165,6 +165,7 @@ function packEnts(): Float32Array {
     if (e.kind === 'animal') flags |= F_ANIMAL;
     if (e.kind === 'corpse') flags |= F_CORPSE;
     if (e.monster && e.monster.windup >= 0) flags |= F_TELEGRAPH;
+    if (e.monster?.ride && e.monster.ride.shakeAt >= 0) flags |= F_SHAKE;
     if (e.state === 'downed') flags |= F_DOWNED;
     if (e.state === 'bound') flags |= F_BOUND;
     if (e.id === sim.championId) flags |= F_CHAMPION;
@@ -635,17 +636,21 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
               sim.dragging = m.id;
             }
           }
-        } else if (msg.name === 'nephil' || msg.name === 'nephil-downed') {
-          // climbing on (docs/climbing-phase3-plan.md): the nearest nephil a tile ahead, standing still and leaving you be, or down
-          const n = sim.monsters().filter((e) => e.monster!.archetype === 'nephil').sort((a, b) => Math.hypot(a.x - c.x, a.z - c.z) - Math.hypot(b.x - c.x, b.z - c.z))[0];
+        } else if (/^(nephil|ziz|saraph)(-downed)?$/.test(msg.name)) {
+          // climbing on (docs/climbing-phase3-plan.md, phase 4 for the flyers): the nearest one a tile ahead, landed,
+          // standing still and leaving you be, or down
+          const arch = msg.name.replace('-downed', '');
+          const n = sim.monsters().filter((e) => e.monster!.archetype === arch).sort((a, b) => Math.hypot(a.x - c.x, a.z - c.z) - Math.hypot(b.x - c.x, b.z - c.z))[0];
           if (n) {
             put(n, c.x + Math.sin(c.yaw) * 1.2, c.z + Math.cos(c.yaw) * 1.2);
             n.yaw = Math.atan2(c.x - n.x, c.z - n.z);
             sim.toast(`${n.name} is ${(Math.hypot(n.x - c.x, n.z - c.z) * 8).toFixed(1)} m ahead.`);
             n.target = -1;
             n.monster!.ignoreChampUntil = sim.clockMs + 3_600_000;
-            if (msg.name === 'nephil') {
-              n.state = 'rest';
+            n.monster!.alt = 0;
+            if (!msg.name.endsWith('-downed')) {
+              // feeding: it stays put, landed (a flyer at rest by day takes off on its rounds)
+              n.state = 'feed';
               n.stateUntil = sim.tick + 36_000;
             }
             else {
@@ -654,7 +659,7 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
               n.roll = 1;
               n.monster!.downedAt = sim.tick;
             }
-          } else sim.toast('No nephil on this island.');
+          } else sim.toast(`No ${arch} on this island.`);
         } else if (msg.name === 'carry') {
           const v = sim.humans().find((h) => h.id !== c.id && !h.hidden)!;
           put(v, c.x + 3, c.z + 1.5);

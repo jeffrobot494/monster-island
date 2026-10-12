@@ -32,7 +32,9 @@ const HINTS: Record<string, string> = {
   night: 'Night falls. T: light a torch (it takes your shield hand).',
   drag: 'Drag it to the altar in the village square, then press E on the altar to offer it.',
   scream: 'A scream! Follow the red ! on the compass. Strike the carrier and it drops its captive.',
-  mount: 'You are on its body. WASD: climb over it · Shift + direction: lunge · Space, looking away: jump off · C: let go.',
+  mount: 'You are on its body. WASD: climb over it · Shift + direction: lunge · Left mouse: strike where you hang (×2, the head ×3) · Right mouse: hold on · Space, looking away: jump off · C: let go.',
+  hold: 'A body you ride shudders before it shakes. Right mouse: hold on (it costs stamina). Let go of it and you are thrown off.',
+  grab: 'It reaches for you with its free arm. Climb out of its reach: down its back or its legs. Or sever that arm.',
   lair: 'You found a lair. Monsters rest here outside their hours: catch one asleep for double damage.',
 };
 

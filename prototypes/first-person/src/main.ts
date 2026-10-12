@@ -12,7 +12,7 @@ import { CreationPipeline } from './god/pipeline';
 import { runValidation } from './god/validation-host';
 import type { SavedWorld } from './sim/island';
 import type { ChronicleEvent, CreationRecord, Zone } from './sim/types';
-import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
+import { F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
 import { GAME_TIMESCALE } from './sim/clock';
 import type { Alert } from './sim/sim';
 import type { CtrlReason } from './sim/champion';
@@ -20,13 +20,13 @@ import { loadHostPointer } from './input/host-pointer';
 import { Controls, loadSettings, saveSettings, keyLabel, ACTION_LABEL, type ActionName } from './input/controls';
 import { ChampionController, EYE_H } from './input/controller';
 import { Mounts, bodyCaps, bodyDist } from './render/climb-rig';
-import { CLIMB } from './sim/climb-body';
+import { CLIMB, capZone } from './sim/climb-body';
 import { BODY, SHAPE_M } from './sim/body';
 import { GameAudio } from './audio/audio';
 import { M } from './sim/ground';
 import { zoneFor } from './sim/aim';
 import { REGION_NAMES } from './sim/island-gen';
-import { checkSettings, type TerrainSettings } from './sim/terrain-import';
+import { checkSettings, DEFAULT_SETTINGS, type TerrainSettings } from './sim/terrain-import';
 import savedTerrainFile from './terrain/saved-terrain.json';
 
 /**
@@ -466,6 +466,7 @@ async function boot() {
     if (f.champ && (f.epoch !== controller.epoch || f.correction || (prev === 'sim' && f.ctrl === 'player'))) {
       controller.epoch = f.epoch;
       const p = f.correction ?? f.champ;
+      if (climbLog) console.info(`[climb] snap${f.correction ? ' (correction)' : ''} to ${p.x.toFixed(2)},${p.z.toFixed(2)} alt ${(p.alt ?? 0).toFixed(1)}`);
       controller.snap(p.x, p.z, p.alt ?? 0);
       if (!f.correction) controller.yaw = f.champ.yaw;
     }
@@ -490,6 +491,15 @@ async function boot() {
         renderer.kick(-0.04, (Math.random() - 0.5) * 0.04);
         ui.toast(c.killed ? 'A killing blow!' : `You sever its ${c.zone === 'sig' ? 'signature limb' : c.zone}!`, 'info', 3);
       } else if (c.kind === 'hit' && c.downed) hudView.hintOnce('downed');
+      if (climbLog && c.kind === 'hit' && controller.mount?.id === c.id) console.info(`[climb] hit it from its body: ${c.zone} ${c.amount}`);
+      if ((c.kind === 'shake' || c.kind === 'thrown') && climbLog) console.info(`[climb] ${c.kind}${c.hard ? ' (grab)' : ''} by ${c.id}${c.kind === 'shake' ? `, -${c.amount} stamina` : ''}`);
+      if (c.kind === 'shake' && controller.mount?.id === c.id) {
+        controller.shake(c.amount ?? 0);
+        renderer.kick(0.02, (Math.random() - 0.5) * 0.05);
+      } else if (c.kind === 'thrown' && controller.mount?.id === c.id) {
+        controller.throwOff(c.x ?? controller.x, c.z ?? controller.z, !!c.hard);
+        ui.toast(c.hard ? 'It tears you off and hurls you away!' : 'You are thrown off!', 'info', 2.5);
+      }
     }
     if (f.hurt > 0) controller.knock();
     if (f.hurt > 0 && performance.now() - lastHurtAt > 150) {
@@ -503,6 +513,7 @@ async function boot() {
     if (f.actionError) ui.toast(f.actionError, 'info', 3);
   }
 
+  const climbLog = devMode && params.has('climblog');
   const scenario = devMode ? params.get('script') : null;
   let firstFull = true;
   sim.onMessage = (m: SimToMain) => {
@@ -652,8 +663,9 @@ async function boot() {
       save: worldJson, seed, modules: modulesFor(world), clockMs: clock, realMs: Date.now(),
       timescale: Math.max(1, Number(params.get('timescale')) || GAME_TIMESCALE), quarantine, reveal: params.has('reveal'), invincible: devMode && params.has('god'),
       skip: devMode ? Number(params.get('skip')) || 0 : 0,
-      // ?terrain=off: a procedural island even when the terraformer has saved one
-      terrain: worldJson || params.get('terrain') === 'off' ? null : savedTerrain(),
+      // ?terrain=off: a procedural island even when the terraformer has saved one; ?terrain=default: the
+      // terraformer's defaults (floating isles, for riding a flyer up to one) whatever is saved
+      terrain: worldJson || params.get('terrain') === 'off' ? null : params.get('terrain') === 'default' ? { ...DEFAULT_SETTINGS } : savedTerrain(),
     });
   }
 
@@ -708,6 +720,21 @@ async function boot() {
   };
 
   function doSwingContact() {
+    // on a body: the blow lands where you hang (docs/climbing-phase4-plan.md, Part B)
+    if (controller.mode === 'mount' && controller.mount) {
+      const m = controller.mount, pl = m.place();
+      const arch = renderer.ents.arch(m.id);
+      const zone = arch ? capZone(arch, m.cap) : null;
+      if (pl) {
+        renderer.particles.burst('blood', pl.p[0], pl.p[1], pl.p[2]);
+        audio.play('hit', { x: pl.p[0], y: pl.p[1], z: pl.p[2] });
+      }
+      renderer.view.hitstop(zone === 'head' ? 0.09 : 0.06);
+      renderer.kick(-0.02, (Math.random() - 0.5) * 0.02);
+      hudView.hitMarker(zone);
+      input({ type: 'swing', yaw: controller.yaw, pitch: controller.pitch, targetId: m.id, zone });
+      return;
+    }
     const { eye, dir } = renderer.lookRay();
     const hit = renderer.ents.pick(eye, dir, 2.4 + 2.5, champId());
     let targetId: number | null = null, zone: Zone | null = null;
@@ -802,6 +829,32 @@ async function boot() {
     return '';
   }
 
+  // the body you ride fighting back (docs/climbing-phase4-plan.md, Part D): say so, the first few times
+  let tellShake = false, tellGrab = false, shakeTold = 0, grabTold = 0, gripUntil = 0;
+  // dev: ?autogrip=1 holds on through each shudder (headless rides can't time the right mouse)
+  const autoGrip = devMode && params.has('autogrip');
+  function ridingTells() {
+    const v = controller.mount ? renderer.ents.views.get(controller.mount.id) : undefined;
+    const shaking = !!v && (v.flags & F_SHAKE) !== 0, grabbing = !!v && (v.flags & F_TELEGRAPH) !== 0;
+    if (autoGrip) {
+      if (shaking) gripUntil = performance.now() + 300;
+      controls.mouseR = performance.now() < gripUntil;
+    }
+    if (climbLog && shaking && !tellShake) console.info('[climb] it shudders');
+    if (climbLog && grabbing && !tellGrab) console.info('[climb] it reaches for you');
+    if (shaking && !tellShake) {
+      renderer.kick(0.01, (Math.random() - 0.5) * 0.03);
+      hudView.hintOnce('hold');
+      if (shakeTold++ < 3) ui.toast(`It shudders: hold on! [right mouse]`, 'info', 1.2);
+    }
+    if (grabbing && !tellGrab) {
+      hudView.hintOnce('grab');
+      if (grabTold++ < 3) ui.toast('It reaches for you: get out of its reach!', 'info', 1.2);
+    }
+    tellShake = shaking;
+    tellGrab = grabbing;
+  }
+
   // ---------- the frame loop ----------
   let lastHud = 0;
   let lastNow = performance.now() / 1000;
@@ -824,7 +877,7 @@ async function boot() {
           renderer.particles.burst('dust', controller.x * M, controller.eyeY - EYE_H + 0.2, controller.z * M);
         }
       }
-      if (controls.mouseL && !controller.climbing) {
+      if (controls.mouseL && (!controller.climbing || controller.mode === 'mount')) {
         if (hud?.champion?.dragging) {
           if (controls.takeClick()) ui.toast(`${keyLabel(settings.bindings.interact)} to let go`, 'info', 2);
         } else if (!pendingSwing && controller.trySwing(now)) {
@@ -841,7 +894,7 @@ async function boot() {
         if (v && v.flags & F_DOWNED) input({ type: 'finish', id: look.id });
       }
       if (controls.take('torch')) input({ type: 'torch', on: !hud?.champion?.torch });
-      if (controls.take('throw') && !controller.climbing) throwSpear(now);
+      if (controls.take('throw') && (!controller.climbing || (controller.mode === 'mount' && !controller.holding))) throwSpear(now);
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);
     controls.clearFrame();
@@ -888,7 +941,9 @@ async function boot() {
       controller.rain = renderer.particles.weather === 'rain';
       controller.update(fdt, now);
       renderer.view.vy = controller.air ? controller.vy : 0;
-      renderer.view.climbing = controller.climbing;
+      // the weapon comes down on a wall, not on a monster (you fight from its body)
+      renderer.view.climbing = controller.climbing && controller.mode !== 'mount';
+      ridingTells();
       if (controller.ctrl === 'sim' && hud?.champion && !(ctrlReason === 'hold' && (controller.climbing || controller.air))) {
         const cv = renderer.ents.views.get(hud.champion.id);
         if (cv) {
@@ -1000,18 +1055,18 @@ async function boot() {
   if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
   if (devMode && params.has('yaw')) setInterval(() => (controller.yaw = (Number(params.get('yaw')) * Math.PI) / 180), 200);
   if (devMode && params.has('hideplay')) hudView.play.style.display = 'none';
-  if (devMode && params.has('climblog')) setInterval(() => console.info(`[climb] ${controller.mode} ${controller.x.toFixed(2)},${controller.z.toFixed(2)} feet ${controller.feetY.toFixed(1)} ground ${renderer.terrain.y(controller.x, controller.z).toFixed(1)} st ${controller.stamina.toFixed(0)} yaw ${controller.yaw.toFixed(2)} ${ctrlReason} ${controller.ctrl} tile ${renderer.terrain.tileAt(controller.x, controller.z)}${controller.mount ? ` on ${controller.mount.id} cap ${controller.mount.cap}${controller.perched ? ' perched' : ''}` : ''}${nearestClimbable()}`), 1000);
-  /** the nearest nephil and how far the hands are from its body (docs/climbing-phase3-plan.md) */
+  if (climbLog) setInterval(() => console.info(`[climb] ${controller.mode} ${controller.x.toFixed(2)},${controller.z.toFixed(2)} feet ${controller.feetY.toFixed(1)} ground ${renderer.terrain.y(controller.x, controller.z).toFixed(1)} st ${controller.stamina.toFixed(0)} yaw ${controller.yaw.toFixed(2)} ${ctrlReason} ${controller.ctrl} tile ${renderer.terrain.tileAt(controller.x, controller.z)}${controller.mount ? ` on ${controller.mount.id} cap ${controller.mount.cap}${controller.perched ? ' perched' : ''}` : ''}${nearestClimbable()}`), 1000);
+  /** the nearest climbable monster and how far the hands are from its body (docs/climbing-phase3-plan.md) */
   function nearestClimbable() {
     let best = '', bd = Infinity;
     renderer.ents.each((v) => {
-      if (!(v.flags & F_MONSTER) || v.shape !== 'nephil') return;
+      if (!(v.flags & F_MONSTER) || !CLIMB[v.shape]) return;
       const d = Math.hypot(v.pos.x - controller.x * M, v.pos.z - controller.z * M);
       if (d >= bd) return;
       bd = d;
       const caps = bodyCaps(v);
       const hands = caps ? bodyDist(caps, new THREE.Vector3(controller.x * M, controller.feetY + 1.3, controller.z * M)).toFixed(2) : 'none';
-      best = ` | ${v.shape} ${d.toFixed(1)} m${v.flags & F_DOWNED ? ' downed' : ''}, hands ${hands} m from its body`;
+      best = ` | ${v.shape} ${d.toFixed(1)} m${v.flags & F_DOWNED ? ' downed' : ''}, ${(v.pos.y - controller.feetY).toFixed(1)} m up, hands ${hands} m from its body`;
     });
     return best;
   }
@@ -1020,13 +1075,28 @@ async function boot() {
   function startHolds() {
     if (devMode && params.get('hold')) for (const spec of params.get('hold')!.split(',')) {
       const [a, from, to] = spec.split(':');
+      // the mouse buttons: grip (right: block, or hold on to a body) and attack (left)
+      const button = a === 'grip' ? 'mouseR' : a === 'attack' ? 'mouseL' : null;
+      if (button) {
+        setTimeout(() => (controls[button] = true), Number(from) || 0);
+        setTimeout(() => (controls[button] = false), Number(to) || 1e9);
+        continue;
+      }
       const code = settings.bindings[a as keyof typeof settings.bindings];
       if (!code) continue;
+      // one-shot actions (jump) are pressed again every 250 ms while held and not climbing, so a run can keep
+      // trying to get on something, then stay on it
+      const press = () => (controls as unknown as { pressed: Set<string> }).pressed.add(a);
+      let again = 0;
       setTimeout(() => {
         controls.keys.add(code);
-        (controls as unknown as { pressed: Set<string> }).pressed.add(a); // one-shot actions (jump) too
+        press();
+        again = window.setInterval(() => !controller.climbing && press(), 250);
       }, Number(from) || 0);
-      setTimeout(() => controls.keys.delete(code), Number(to) || 1e9);
+      setTimeout(() => {
+        controls.keys.delete(code);
+        clearInterval(again);
+      }, Number(to) || 1e9);
     }
   }
   // dev: ?fly=m — fly mode at m meters above the sea (screenshots of the whole island)

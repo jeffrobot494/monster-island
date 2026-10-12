@@ -1,6 +1,7 @@
 // The champion controller (spec §4): client-authoritative movement at frame rate with tile collision, stamina,
 // dodge, climbing (docs/climbing-phase1-plan.md, Part C; on the feature mesh, docs/climbing-phase2-plan.md, Part B;
-// on monsters, docs/climbing-phase3-plan.md, Part C), and pose messages to the sim. Positions in tiles; speeds
+// on monsters, docs/climbing-phase3-plan.md, Part C; holding on and being thrown off, docs/climbing-phase4-plan.md,
+// Part D), and pose messages to the sim. Positions in tiles; speeds
 // in m/s are converted with M.
 import { M } from '../sim/ground';
 import { SIZE, TileGrid } from '../sim/world';
@@ -35,6 +36,9 @@ const CEIL_NY = -0.7; // facing down more than this: a ceiling, not a wall
 const HANG_OUT = 0.45; // m: the eye out from the body where you hang
 const PERCH_NY = 0.8; // a body surface facing up more than this is a top: you stand on it
 const DROP_VY = -5; // m/s: falling at least this fast into a body grabs it
+// monsters fighting back (docs/climbing-phase4-plan.md)
+const THROW_V = 6, THROW_VY = -4; // m/s: shaken off, out from the body and down
+const HURL_V = 9, HURL_VY = 1; // m/s: thrown by its grab
 
 export type MoveMode = 'walk' | 'air' | 'wall' | 'mantle' | 'mount';
 
@@ -51,6 +55,8 @@ export interface MountBody {
   yaw(): number;
   /** a share of the body's pitch and roll, in the frame of a view facing `viewYaw` */
   tilt(viewYaw: number): [number, number];
+  /** facing up more than this, the surface is a seat: no drain (PERCH_NY when unset) */
+  readonly perchNy?: number;
 }
 
 /** ground: Space beside it; air: Space held in a jump; drop: falling into it from above */
@@ -81,9 +87,13 @@ export class ChampionController {
   get air() {
     return this.mode === 'air';
   }
-  /** on a wall, pulling up, or on a monster: no swinging, blocking or interacting */
+  /** on a wall, pulling up, or on a monster: no blocking or interacting, and no swinging except on a monster */
   get climbing() {
     return this.mode === 'wall' || this.mode === 'mantle' || this.mode === 'mount';
+  }
+  /** on a monster with right mouse down: holding on (the sim reads it as `block`): no moving, no swinging */
+  get holding() {
+    return this.mode === 'mount' && this.blocking;
   }
   /** feet height (m, absolute) and vertical speed (m/s); the sim sees the feet as `alt` above the ground */
   feetY = 0;
@@ -457,14 +467,15 @@ export class ChampionController {
 
   /** Start a swing (the target is picked at blade contact by the caller, F7). */
   trySwing(now: number): boolean {
-    if (this.ctrl !== 'player' || this.view === 'downed' || now < this.swingReady || this.blocking || this.dragging || this.climbing) return false;
+    if (this.ctrl !== 'player' || this.view === 'downed' || now < this.swingReady || this.blocking || this.dragging || (this.climbing && this.mode !== 'mount')) return false;
     if (!this.spend(12)) return false;
     this.swingReady = now + 0.6;
     return true;
   }
 
   setBlocking(on: boolean) {
-    const want = on && !this.winded && !this.torch && !this.dragging && this.ctrl === 'player' && !this.climbing;
+    // on a monster it's holding on, which a torch doesn't stop
+    const want = on && !this.winded && !this.dragging && this.ctrl === 'player' && (this.mode === 'mount' || (!this.torch && !this.climbing));
     if (want === this.blocking) return;
     this.blocking = want;
     this.send({ type: 'input', input: { type: 'block', on: want } });
@@ -734,7 +745,8 @@ export class ChampionController {
   /** Let go of the wall: a fall, pushed a little off the face. */
   letGo(now = performance.now() / 1000) {
     if (!this.climbing) return;
-    const f = this.mode === 'mount' ? { nx: this.mountN[0], nz: this.mountN[2] } : this.face;
+    const fromBody = this.mode === 'mount';
+    const f = fromBody ? { nx: this.mountN[0], nz: this.mountN[2] } : this.face;
     this.mode = 'air';
     this.leaveMount();
     this.mantle = this.lunge = null;
@@ -748,13 +760,49 @@ export class ChampionController {
     }
     this.face = null;
     this.fallFrom = null;
-    this.noGrabUntil = now + 0.6;
+    // off a body: long enough to fall clear of it (a flyer you let go of is still right under you)
+    this.noGrabUntil = now + (fromBody ? 1.2 : 0.6);
     this.inputSince = true;
   }
 
   /** Hit while hanging: knocked off. */
   knock() {
     this.letGo();
+  }
+
+  /** The body you're holding on to shook (docs/climbing-phase4-plan.md): it costs stamina, and can wind you off. */
+  shake(cost: number, now = performance.now() / 1000) {
+    if (this.mode !== 'mount') return;
+    this.stamina = Math.max(0, this.stamina - cost);
+    this.spentAt = now;
+    if (this.stamina <= 0) {
+      this.winded = true;
+      this.letGo(now);
+    }
+  }
+
+  /** Shaken or hurled off a body at (ax, az) (tiles): a fall away from it. */
+  throwOff(ax: number, az: number, hard: boolean, now = performance.now() / 1000) {
+    if (this.mode !== 'mount') return;
+    let dx = this.x - ax, dz = this.z - az;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-4) {
+      dx = -Math.sin(this.yaw);
+      dz = -Math.cos(this.yaw);
+    } else {
+      dx /= l;
+      dz /= l;
+    }
+    this.mode = 'air';
+    this.leaveMount();
+    this.lunge = null;
+    const v = hard ? HURL_V : THROW_V;
+    this.vx = (dx * v) / M;
+    this.vz = (dz * v) / M;
+    this.vy = hard ? HURL_VY : THROW_VY;
+    this.fallFrom = null;
+    this.noGrabUntil = now + 1;
+    this.inputSince = true;
   }
 
   /** Space on a wall: a jump away when looking away from the face, otherwise a lunge up. */
@@ -978,10 +1026,12 @@ export class ChampionController {
     let moved = 0;
     if (active) {
       let fz = 0, fx = 0;
-      if (c.down('forward')) fz += 1;
-      if (c.down('back')) fz -= 1;
-      if (c.down('left')) fx += 1;
-      if (c.down('right')) fx -= 1;
+      if (!this.holding) {
+        if (c.down('forward')) fz += 1;
+        if (c.down('back')) fz -= 1;
+        if (c.down('left')) fx += 1;
+        if (c.down('right')) fx -= 1;
+      }
       const sprint = c.down('sprint');
       if (sprint && !this.sprintWas && (fx || fz)) this.startLunge(fx, fz);
       this.sprintWas = sprint;
@@ -1023,8 +1073,9 @@ export class ChampionController {
     }
     // the eye: hanging out from the body on a steep part (hands 1.3 m above the feet), standing on a top
     const [px, py, pz] = pl.p, [nx, ny, nz] = pl.n;
-    const k = Math.min(1, Math.max(0, (ny - 0.6) / (PERCH_NY + 0.05 - 0.6)));
-    this.perched = ny > PERCH_NY;
+    const perch = m.perchNy ?? PERCH_NY;
+    const k = Math.min(1, Math.max(0, (ny - (perch - 0.2)) / 0.25));
+    this.perched = ny > perch;
     const out = HANG_OUT * (1 - k);
     const ex = px + nx * out, ez = pz + nz * out;
     let ey = py + ny * out + (EYE_H - HANDS) * (1 - k) + EYE_H * k;

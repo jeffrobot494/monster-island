@@ -1,10 +1,11 @@
 // Entity views (spec §7.5, F15, F17, F18): rigs for core creatures, ShapeDefs for everything else, a snapshot buffer
 // rendered 1.5 ticks behind the newest frame, and look-ray picking against oriented boxes.
 import * as THREE from 'three';
-import { ENT_STRIDE, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_HUMAN, F_INHABITANT, F_MONSTER, F_ANIMAL, F_TELEGRAPH, F_BOUND, F_HITTABLE, F_DRAGGED, F_ITEM, O } from '../protocol';
+import { ENT_STRIDE, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_HUMAN, F_INHABITANT, F_MONSTER, F_ANIMAL, F_TELEGRAPH, F_BOUND, F_HITTABLE, F_DRAGGED, F_ITEM, F_SHAKE, O } from '../protocol';
 import type { ShapeDef } from '../sim/types';
 import { M } from '../sim/ground';
 import { SHAPE_M, BODY } from '../sim/body';
+import { RIDE } from '../sim/climb-body';
 import { hasRig, Rig, ANIM, rigMat } from './rigs';
 import { buildModelRig, onModelsReady } from './glb-rig';
 import { hitBox, rayBox } from '../sim/aim';
@@ -40,6 +41,9 @@ export interface View {
   strike: number;
   /** performance.now ms when its last blow landed (the recovery window for climbing on, climb-rig.ts) */
   struckAt: number;
+  /** performance.now ms: a ridden body began shuddering (F_SHAKE), and its shake landed (docs/climbing-phase4-plan.md) */
+  shakeAt: number;
+  shookAt: number;
   samples: Sample[];
   /** interpolated render position (m) */
   pos: THREE.Vector3;
@@ -67,6 +71,22 @@ function shapeMat(color: string, emissive: number, opacity: number) {
 }
 
 export interface ChampPose { x: number; y: number; z: number; yaw: number }
+
+/**
+ * A ridden body's shake on the rig (pitch, roll): a building shudder for the telegraph, then a jolt as it lands. A
+ * flyer leans into a roll instead, then rolls hard. The rider rides it through the anchor (climb-rig.ts).
+ */
+function shudder(v: View): [number, number] {
+  const now = performance.now();
+  const flies = !!RIDE[v.shape]?.flies;
+  if (v.shakeAt >= 0) {
+    const k = Math.min(1, (now - v.shakeAt) / 600);
+    return flies ? [0, -0.35 * k] : [Math.sin(now * 0.11) * 0.03 * k, Math.sin(now * 0.15) * 0.05 * k];
+  }
+  const j = 1 - (now - v.shookAt) / 600;
+  if (j <= 0) return [0, 0];
+  return flies ? [0, -0.35 * j + Math.sin((1 - j) * Math.PI) * 1.3] : [Math.sin(now * 0.05) * 0.06 * j, Math.sin(now * 0.07) * 0.14 * j];
+}
 
 export class Entities {
   group = new THREE.Group();
@@ -137,13 +157,18 @@ export class Entities {
         root.rotation.order = 'YXZ';
         v = {
           id, root, rig: null, shapeParts: [], key: '', shape, tint: -1, flags: 0, scale: 1, squash: 1, ring: 0, anim: 0, mask: 0, hp: 1, seen: true,
-          windup: -1, windupAt: 0, strike: 0, struckAt: -1e9, samples: [], pos: new THREE.Vector3(), yaw: 0, lift: 0, roll: 0, speed: 0, lastFrame: 0, phase: Math.random() * 10,
+          windup: -1, windupAt: 0, strike: 0, struckAt: -1e9, shakeAt: -1, shookAt: -1e9, samples: [], pos: new THREE.Vector3(), yaw: 0, lift: 0, roll: 0, speed: 0, lastFrame: 0, phase: Math.random() * 10,
         };
         this.views.set(id, v);
         this.group.add(root);
       }
       const flags = ents[o + O.flags];
       const tint = ents[o + O.tint];
+      if (flags & F_SHAKE && !(v.flags & F_SHAKE)) v.shakeAt = now;
+      if (!(flags & F_SHAKE) && v.flags & F_SHAKE) {
+        v.shakeAt = -1;
+        v.shookAt = now;
+      }
       v.shape = shape;
       v.flags = flags;
       const key = `${shape}|${tint}|${flags & (F_CORE_SHAPE | F_CORPSE)}`;
@@ -247,6 +272,7 @@ export class Entities {
     if (!v.root.visible) return;
     v.root.position.set(v.pos.x, v.pos.y + v.lift, v.pos.z);
     v.root.rotation.y = v.yaw;
+    if (v.rig) [v.root.rotation.x, v.root.rotation.z] = shudder(v);
     if (v.strike > 0) v.strike = Math.max(0, v.strike - dt * 4);
     if (v.rig) {
       const r = v.rig;

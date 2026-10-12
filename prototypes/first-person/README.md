@@ -60,9 +60,11 @@ champion holds his ground and strikes back at anything attacking him.
 
 ### Climbing (terraformer islands)
 
-Cliffs on terraformer islands can be climbed, and so can spires, arch legs, overhangs and the nephil (design:
-`docs/climbing-design.md`; build steps 1–3 of it, `docs/climbing-phase1-plan.md`, `docs/climbing-phase2-plan.md` and
-`docs/climbing-phase3-plan.md`).
+Cliffs on terraformer islands can be climbed, and so can spires, arch legs, overhangs, the nephil, the ziz and the
+saraph.
+- **Design:** `docs/climbing-design.md`.
+- **Build plans:** steps 1–4 of it are built, one plan each: `docs/climbing-phase1-plan.md` to
+  `docs/climbing-phase4-plan.md`.
 - **Start:** walk into a cliff face (steeper than 50°) and keep pushing forward for a moment. Or hold **Space** while
   you're in the air near one, which also catches the lip if you step off a cliff top holding Space.
 - **On the wall:** W/S climb up and down (1.8 m/s), A/D traverse, Shift + a direction lunges 2 m. Space jumps off if
@@ -78,7 +80,7 @@ Cliffs on terraformer islands can be climbed, and so can spires, arch legs, over
 - **Rock** (spires, arches, overhangs) is solid: you can't walk through it, you can stand on top of it, and you can
   walk under an arch. Climbing a face that leans out past vertical drains stamina twice as fast. Undersides that face
   more than 45° down are ceilings: you can climb up to one but not along it.
-- **The nephil** can be climbed. Getting on:
+- **The nephil and the flyers (ziz, saraph)** can be climbed. Getting on:
   - press **Space** beside a downed one;
   - jump at it with Space held in the 1.5 s after its blow lands;
   - or drop onto it from above, which grabs it wherever you land, with no fall damage.
@@ -90,15 +92,31 @@ Cliffs on terraformer islands can be climbed, and so can spires, arch legs, over
   back; anywhere else it drains as on rock.
 
   C lets go, Space while looking away jumps off, and climbing down a leg puts you back on your feet. A hit from another
-  monster knocks you off. The nephil you're on doesn't fight back yet (that's phase 4).
-- You can't swing, block, throw or use E/F while climbing.
+  monster knocks you off.
+- **It fights back.**
+  - **Shakes:** about every 3 s (5 s on a flyer) the body you're on shakes, and it shudders for 0.6 s first. Hold
+    **right mouse** to hold on: it costs 15 stamina when the shake lands. Not holding on, you're thrown off and the
+    fall hurts. Holding on also stops you moving.
+  - **The nephil's grab:** it reaches for you with its free (left) arm when you're on its shoulders, head or arms, or
+    on the front of its body or thighs. If you're still there when its hand closes, it tears you off and hurls you
+    away. Climb round its back or down its shins, or sever that arm.
+- **Strike from its body:** **left click** hits the part you're on (a leg, the body, an arm, a wing), at double
+  damage. The head takes triple and staggers it for 2 s (no shakes, no grab). **R** stabs with a spear at point-blank
+  range: the same doubling, and the spear stays in the wound. Sever the limb you're on and you fall with it.
+- **Flyers carry you off.**
+  - **Where it goes:** a ziz or saraph you're on takes off. It climbs to the nearest floating isle and circles a few
+    meters over its top: let go (C) to land on it. Get on one from up on an isle and it flies you home to its lair.
+    With no isles on the island, it circles 25 m up.
+  - **Riding it:** you sit astride, so anywhere on the upper half of its back or wings stamina comes back between its
+    rolls.
+  - **Bringing it down:** sever its wings (its signature limb) while you ride, and it crash-lands, downed.
+  - **The isles:** floating isles can only be reached this way.
+- You can't block, use E/F, or swing on a wall. On a monster you can swing and throw.
 
 ## URL parameters (dev)
 
 All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`, `?at=HH:MM`, `?reveal=1`, `?god=1`,
-`?nogod=1`, `?ai=manual`, `?devinstall=…`, `?judge=human:300`, `?script=fight|downed|drag|carry|nephil|nephil-downed`
-(scenarios run once the world is loaded; `nephil` puts the nearest nephil a tile ahead, standing still and leaving
-you be, and `nephil-downed` puts it there downed; seed 1 has a nephil, seed 7 doesn't), `?debug=1`,
+`?nogod=1`, `?ai=manual`, `?devinstall=…`, `?judge=human:300`, `?debug=1`,
 `?shot=ms`, `?panel=village|altar|map`) plus:
 
 | Param | Effect |
@@ -111,9 +129,12 @@ you be, and `nephil-downed` puts it there downed; seed 1 has a nephil, seed 7 do
 | `?third=1` | start in third person |
 | `?fly=m` | start in fly mode, m meters above the sea (aerial screenshots) |
 | `?terrain=off` | a new island ignores the terraformer's saved terrain (procedural) |
-| `?hold=forward:5000:9000,jump:…` | hold actions from/to ms after the world loads; a one-shot action like jump is also pressed (headless climbing checks; use with `?nolock=1`) |
-| `?climblog=1` | log the controller's mode, position, feet and stamina every second, the body being ridden, and the nearest nephil |
+| `?terrain=default` | a new island uses the terraformer's default settings, which have floating isles, whatever is saved |
+| `?script=fight\|downed\|drag\|carry\|nephil\|ziz\|saraph` | a dev scenario, run once the world has loaded. `nephil`, `ziz` and `saraph` put the nearest one a tile ahead, landed, feeding and leaving you be; add `-downed` (`nephil-downed`) to put it there downed. Seed 1 has all three; seed 7 has no nephil |
+| `?hold=forward:5000:9000,jump:…` | hold actions from/to ms after the world loads (headless climbing checks; use with `?nolock=1`). `action:from:to`, with colons. A one-shot action like jump is pressed again every 250 ms while held and not climbing. `grip` is the right mouse (block, or hold on to a body) and `attack` the left |
+| `?climblog=1` | log the controller's mode, position, feet and stamina every second, plus the body being ridden and the nearest climbable monster. Also logs shudders, shakes, grabs, throws, blows from the body and snaps to the sim |
 | `?mountany=1` | any way of getting onto a body works, so you can climb a standing nephil (headless checks) |
+| `?autogrip=1` | hold on automatically through each shudder of the body you ride (headless rides) |
 
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
@@ -158,6 +179,9 @@ How the game uses it:
 - Climbing's known 2D leftovers: blood from a hit on a climber bursts at ground level; the god-module API doesn't see
   the champion's height; a flyer stooping on a climber can clip into the rock face; there's no climbing animation in
   third person yet (on a monster, the champion's body just stands at the eye's spot).
+- Monsters fighting back (phase 4) covers only the climbable three: the nephil, the ziz and the saraph. Anak,
+  Se'ir, Lilit, Re'em, Rahab and the tannin have no climb volumes yet (phase 5). Flyers fly through rock, so a ridden
+  one waits outside an isle's rim until it's above the top rather than through it.
 
 ## Code map
 
@@ -166,7 +190,8 @@ How the game uses it:
   - `body.ts`: bodies in meters;
   - `aim.ts`: hit zones by aim;
   - `champion.ts`: poses, swings, dodge, block, interact, hold and autopilot, rope trail;
-  - `climb-body.ts`: climb volumes, capsules between named body points, per climbable archetype.
+  - `climb-body.ts`: climb volumes (capsules between named body points) and ride rules (shakes, the grab, flying),
+    per climbable archetype; the ridden monster itself is in `monster-ai.ts` (`ridden`).
 - `src/input/`:
   - `controls.ts`: keyboard, mouse, pointer lock and bindings;
   - `controller.ts`: client-side movement, collision, stamina and climbing (walk, air, wall, mantle and mount modes);

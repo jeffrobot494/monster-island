@@ -8,8 +8,8 @@ import { JOB_TINT } from './core-defs';
 import { doorOf } from './village';
 import { M, WATER_Y } from './ground';
 import { axisDist, axisPoint, bearingOff, bodyR, champReachable, feetY, frontPoint, heightM } from './body';
-import { champThrow, takeSpear } from './spears';
-import { climbable } from './climb-body';
+import { champThrow, setSpears, spearsOf, takeSpear } from './spears';
+import { capZone, climbable, RIDE } from './climb-body';
 
 /** Internal orders: used by autopilot and by dev/test scripts. */
 export type Order =
@@ -37,7 +37,10 @@ export type ChampInput =
 export type CtrlReason = 'player' | 'hold' | 'autopilot' | 'downed' | 'captive' | 'dead';
 
 export interface CombatEvent {
-  kind: 'hit' | 'whiff' | 'blocked' | 'hurt' | 'dodged';
+  /** shake: a ridden body's shake landed while you held on (amount: the stamina it costs); thrown: off it (hard: its
+   *  grab), x/z: the body's position, to fly away from */
+  kind: 'hit' | 'whiff' | 'blocked' | 'hurt' | 'dodged' | 'shake' | 'thrown';
+  hard?: boolean;
   id?: number;
   zone?: string;
   x?: number;
@@ -80,6 +83,8 @@ interface ChampState {
   landTick?: number;
   combat: CombatEvent[];
   ambushed: number[];
+  /** thrown off monster `id`: mount poses on it are latency until `until` (tick) and are ignored */
+  unmount?: { id: number; until: number };
 }
 
 export function cs(sim: Sim): ChampState {
@@ -184,13 +189,22 @@ function land(sim: Sim, c: Entity, i: { impact: number; x?: number; z?: number }
   const impact = Math.min(60, Math.max(0, Number(i.impact) || 0));
   if (impact <= 13 || sim.tick - (S.landTick ?? -99) < 5) return;
   S.landTick = sim.tick;
-  // paused mid-fall: the client finished the fall, so the champion is where it landed
-  if (reason === 'hold' && Number.isFinite(i.x) && Number.isFinite(i.z) && (sim.walkableFor(c, i.x!, i.z!) || sim.grid.get(Math.floor(i.x!), Math.floor(i.z!)) === 'cliff')) {
-    c.x = Math.min(127.99, Math.max(0, i.x!));
-    c.z = Math.min(127.99, Math.max(0, i.z!));
+  if (reason === 'hold') {
+    // paused mid-fall: the client finished the fall, so the champion is where it landed
+    if (Number.isFinite(i.x) && Number.isFinite(i.z) && (sim.walkableFor(c, i.x!, i.z!) || sim.grid.get(Math.floor(i.x!), Math.floor(i.z!)) === 'cliff')) {
+      c.x = Math.min(127.99, Math.max(0, i.x!));
+      c.z = Math.min(127.99, Math.max(0, i.z!));
+    }
+    clearClimb(c);
+  } else if (c.human) {
+    // on whatever it landed on: the client's next pose says how high that is (a floating isle is 140 m up; clearing
+    // the height here made that pose an impossible climb, and the correction dropped the champion to the ground)
+    delete c.human.climb;
+    delete c.human.mount;
   }
-  clearClimb(c);
-  if (WATER_Y - sim.ground.y(c.x, c.z) >= 1) return;
+  // deep water breaks the fall (at the surface: the height over water is above the seabed)
+  const gy = sim.ground.y(c.x, c.z);
+  if (WATER_Y - gy >= 1 && gy + (c.human?.alt ?? 0) <= WATER_Y + 1) return;
   const before = c.hp;
   if (impact > 28) applyDamage(sim, c, 9999, { type: 'crush', zone: 'torso', sourceId: -1, deathType: 'crushed' });
   else {
@@ -258,14 +272,15 @@ export function processInputs(sim: Sim) {
         if (c.state === 'downed' || sim.dragging >= 0 || sim.tick < S.swingReady - 1) break;
         S.swingReady = sim.tick + 8;
         S.blocking = false;
-        sim.actionError = champThrow(sim, c, i);
+        sim.actionError = c.human?.mount ? stabFromBody(sim, c) : champThrow(sim, c, i);
         break;
       case 'dodge':
         S.iframesUntil = sim.tick + 3;
         S.dodgeTick = sim.tick;
         break;
       case 'block':
-        S.blocking = i.on && !S.torch && sim.dragging < 0;
+        // on a monster it's holding on (docs/climbing-phase4-plan.md), which a torch doesn't stop
+        S.blocking = i.on && (!S.torch || !!c.human?.mount) && sim.dragging < 0;
         break;
       case 'interact': sim.actionError = interact(sim, c, i.id); break;
       case 'finish': sim.actionError = finish(sim, c, i.id); break;
@@ -291,6 +306,7 @@ function applyPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
     mountPose(sim, c, p);
     return;
   }
+  if (S.unmount && sim.tick >= S.unmount.until) delete S.unmount;
   const downed = c.state === 'downed';
   // climbing (terraformer islands only): the client reports the feet's height and whether it's on a wall or a cliff
   const terrain = !!sim.grid.base;
@@ -335,11 +351,16 @@ function mountPose(sim: Sim, c: Entity, p: { x: number; z: number; yaw: number; 
   const S = cs(sim);
   if (!sim.grid.base || !c.human) return;
   S.lastPoseTick = sim.tick;
+  // just thrown off it: these poses were sent before the client heard
+  if (S.unmount && S.unmount.id === p.mount?.id && sim.tick < S.unmount.until) return;
   const m = p.mount && Number.isInteger(p.mount.id) ? sim.ents.get(p.mount.id) : undefined;
   const alt = Number.isFinite(p.alt) ? Math.min(300, Math.max(0, p.alt!)) : 0;
+  // the client draws the body a few ticks behind the sim: allow for how far it moves meanwhile (half a second at full
+  // speed), and for a flyer's dive (14 m/s)
+  const lag = m ? m.monster && RIDE[m.monster.archetype]?.flies ? 7 : 0 : 0;
   const ok = !!m && m.kind === 'monster' && m.hp > 0 && !m.hidden && m.state !== 'bound' && climbable(m.monster?.archetype) && Number.isInteger(p.mount!.cap) &&
-    Math.hypot(p.x - m.x, p.z - m.z) <= heightM(m) / M + 0.3 &&
-    sim.ground.y(p.x, p.z) + alt <= feetY(sim.ground, m) + heightM(m) + 1;
+    Math.hypot(p.x - m.x, p.z - m.z) <= heightM(m) / M + 0.3 + sim.stat(m, 'speed') * legFactor(m) * 0.5 &&
+    sim.ground.y(p.x, p.z) + alt <= feetY(sim.ground, m) + heightM(m) + 1 + lag;
   if (!ok) {
     correct(sim, c);
     return;
@@ -375,6 +396,7 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
   if (c.state === 'downed' || sim.dragging >= 0 || sim.tick < S.swingReady - 1) return;
   S.swingReady = sim.tick + 6;
   S.blocking = false;
+  if (c.human?.mount) return strikeFromBody(sim, c, 12 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c) * S.weapon.mul, S.weapon.type);
   const ok = (t: Entity | undefined): t is Entity => {
     if (!t || t.hp <= 0 || !sim.ents.has(t.id)) return false;
     const hittable = t.kind === 'monster' ? t.state !== 'downed' && t.state !== 'bound' : t.tags.includes('hittable');
@@ -423,6 +445,42 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
   const r = applyDamage(sim, t, dmg, { type: S.weapon.type, sourceId: c.id, mul, zone });
   if (t.monster && sim.ents.has(t.id) && t.state === 'rest') t.state = 'fight';
   S.combat.push({ kind: 'hit', id: t.id, zone: r.zone, x: t.x, z: t.z, killed: r.killed, severed: r.severed, downed: r.downed, amount: Math.round(r.dealt) });
+}
+
+/**
+ * A blow from a monster's body (docs/climbing-phase4-plan.md, Part B): it lands on the zone of the capsule you're on,
+ * doubled; on the head tripled, and it staggers the monster for 2 s. No reach or arc test: you're on it.
+ */
+function strikeFromBody(sim: Sim, c: Entity, base: number, type: string) {
+  const S = cs(sim);
+  const t = sim.ents.get(c.human!.mount!.id);
+  if (!t?.monster || t.hp <= 0 || t.hidden || t.state === 'downed' || t.state === 'bound') {
+    S.combat.push({ kind: 'whiff' });
+    return;
+  }
+  let zone = capZone(t.monster.archetype, c.human!.mount!.cap) ?? undefined;
+  if (zone && t.zones && (!t.zones[zone] || t.zones[zone]!.state === 'severed')) zone = undefined;
+  const head = zone === 'head';
+  t.target = c.id;
+  delete t.monster.ignoreChampUntil;
+  const r = applyDamage(sim, t, base * (head ? 3 : 2), { type, sourceId: c.id, zone });
+  if (head && sim.ents.has(t.id) && t.hp > 0 && t.state !== 'downed') {
+    t.monster.staggerUntil = sim.tick + 20;
+    t.monster.windup = -1;
+    delete t.monster.grabbing;
+    if (t.monster.ride) t.monster.ride.shakeAt = -1;
+    sim.emote(t, '💫', 2);
+  }
+  if (sim.ents.has(t.id) && t.state === 'rest') t.state = 'fight';
+  S.combat.push({ kind: 'hit', id: t.id, zone: r.zone, x: t.x, z: t.z, killed: r.killed, severed: r.severed, downed: r.downed, amount: Math.round(r.dealt) });
+}
+
+/** A spear thrown from a monster's body: a thrust at point-blank range, and the spear stays in the wound. */
+function stabFromBody(sim: Sim, c: Entity): string | null {
+  if (spearsOf(c) <= 0) return 'No spears left. Pick one up: the village rack has more.';
+  setSpears(c, spearsOf(c) - 1);
+  strikeFromBody(sim, c, 24 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c), 'pierce');
+  return null;
 }
 
 function near(sim: Sim, c: Entity, t: Entity, m = INTERACT_M) {
@@ -487,7 +545,7 @@ function finish(sim: Sim, c: Entity, id: number | null): string | null {
 export function releaseOnChampion(sim: Sim, m: Entity, c: Entity, hitR: number): 'iframe' | 'miss' | 'block' | 'hit' {
   const S = cs(sim);
   if (sim.tick <= S.iframesUntil) return 'iframe';
-  // its rider is out of its reach, for now (phase 4: shakes and the grab)
+  // its rider is beyond its blows: it shakes and grabs instead (monster-ai.ts, ridden)
   if (c.human?.mount?.id === m.id) return 'miss';
   const fp = frontPoint(m);
   const arc = (50 * Math.PI) / 180;
@@ -499,7 +557,8 @@ export function releaseOnChampion(sim: Sim, m: Entity, c: Entity, hitR: number):
     const behind = bearingOff(m.yaw, m.x, m.z, p.x, p.z) > arc + Math.atan2(bodyR(c), Math.max(0.05, Math.hypot(p.x - m.x, p.z - m.z)));
     if (out || behind) return 'miss';
   }
-  if (S.blocking && bearingOff(c.yaw, c.x, c.z, m.x, m.z) <= (60 * Math.PI) / 180) return 'block';
+  // holding on to a body isn't a shield up
+  if (S.blocking && !c.human?.mount && bearingOff(c.yaw, c.x, c.z, m.x, m.z) <= (60 * Math.PI) / 180) return 'block';
   return 'hit';
 }
 

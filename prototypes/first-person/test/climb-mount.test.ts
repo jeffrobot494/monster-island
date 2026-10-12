@@ -340,15 +340,17 @@ describe('the sim', () => {
       island.step();
       expect(cs(sim).epoch).toBe(e + 1);
     }
-    // it fights its rider: no wind-up, no blows, no shove, for 60 ticks
-    ride(n, 0.05, 3);
+    // no blows at its rider and no shove, for 60 ticks (on the shin, out of its grab, and holding on through its
+    // shakes: phase 4, test/climb-fight.test.ts)
+    ride(n, 0.05, 3, 0);
     island.step();
     delete n.monster!.ignoreChampUntil;
     n.state = 'fight';
     n.target = c.id;
+    cs(sim).blocking = true;
     const hp = c.hp;
     for (let k = 0; k < 60; k++) {
-      ride(n, 0.05, 3);
+      ride(n, 0.05, 3, 0);
       const nx = n.x;
       island.step();
       expect(n.monster!.windup).toBe(-1);

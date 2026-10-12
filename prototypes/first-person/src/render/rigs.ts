@@ -361,6 +361,13 @@ function serpent(o: { tint: string; segs: number; radius: number; segLen: number
   r.height = o.y + o.radius;
   r.length = n * o.segLen;
   r.strideLen = o.segLen * 2;
+  // climb points (sim/climb-body.ts): along the body, and the head; the flyers add their wing roots
+  const P = r.points;
+  P.hips = P.back = r.segs[0];
+  P.mid = r.segs[Math.floor(n / 2)];
+  P.tail = joint(r.segs[n - 1], [0, 0, -o.segLen]);
+  P.neck = r.neck;
+  P.headTop = joint(r.neck, [0, o.radius * 0.2, o.head[2]]);
   r.mark('head', head);
   r.mark('torso', ...r.segs.slice(0, Math.ceil(n / 2)));
   r.mark('legL', ...r.segs.slice(Math.ceil(n / 2)));
@@ -372,6 +379,15 @@ const EYE = (p: THREE.Object3D, x: number, y: number, z: number, s = 0.03, color
   mesh(p, 'sphere', [s, s, s], [x, y, z], color, undefined, 1);
   mesh(p, 'sphere', [s, s, s], [-x, y, z], color, undefined, 1);
 };
+
+/** A flyer's wings for its climb volumes: from `root` out (just clear of the back, so climbing the back's side
+ *  reaches its top rather than the wing's underside) to `mid` along each wing. */
+function wingPoints(r: Rig, wl: THREE.Object3D, wr: THREE.Object3D, root: number, mid: number) {
+  r.points.wingL = joint(wl, [root, 0, 0]);
+  r.points.wingR = joint(wr, [-root, 0, 0]);
+  r.points.wingMidL = joint(wl, [mid, 0, 0]);
+  r.points.wingMidR = joint(wr, [-mid, 0, 0]);
+}
 
 function monster(arch: string, tint: string): Rig {
   switch (arch) {
@@ -443,6 +459,7 @@ function monster(arch: string, tint: string): Rig {
       r.mark('sig', m1, m2);
       r.mark('armL', m1);
       r.mark('armR', m2);
+      wingPoints(r, wl, wr, 0.08, 0.3);
       return r;
     }
     case 'ziz': {
@@ -461,6 +478,7 @@ function monster(arch: string, tint: string): Rig {
       mesh(r.segs[1], 'cone', [0.05, 0.16, 0.05], [0.07, -0.18, 0], '#3a3020', [Math.PI, 0, 0]); // talons
       mesh(r.segs[1], 'cone', [0.05, 0.16, 0.05], [-0.07, -0.18, 0], '#3a3020', [Math.PI, 0, 0]);
       r.wings.push(wl, wr);
+      wingPoints(r, wl, wr, 0.12, 0.45);
       r.mark('sig', m1, m2, t1, t2);
       r.mark('armL', m1, t1);
       r.mark('armR', m2, t2);

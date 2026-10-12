@@ -27,6 +27,7 @@ export const F_ANIMAL = 1024;
 export const F_CORPSE = 2048;
 export const F_HUMAN = 4096;
 export const F_ITEM = 8192; // a spear (rack or ground): can be picked up
+export const F_SHAKE = 16384; // a ridden monster shuddering before a shake lands (docs/climbing-phase4-plan.md)
 
 export interface ModuleSource {
   id: string;

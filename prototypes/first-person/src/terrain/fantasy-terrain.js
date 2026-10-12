@@ -252,6 +252,7 @@ const FantasyTerrain = (function () {
       densityCol,
       density: (x, y, z) => densityCol(x, y, z, column(x, z)),
       groundHeight: (x, z) => column(x, z).h,
+      isles,
     };
   }
 

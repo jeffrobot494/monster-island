@@ -68,6 +68,17 @@ export function surfaceAt(f: Field, x: number, z: number): number {
   return c.h - 40;
 }
 
+export interface Isle { x: number; z: number; R: number; top: number }
+
+const isleCache = new WeakMap<TerrainSettings, Isle[]>();
+
+/** The floating isles (docs/climbing-phase4-plan.md, Part C): centre and radius in tiles, the top of the middle (m). */
+export function islesOf(s: TerrainSettings): Isle[] {
+  let l = isleCache.get(s);
+  if (!l) isleCache.set(s, (l = createField(s).isles.map((i) => ({ x: i.x, z: i.z, R: i.R, top: toMeters(s, i.top + 1.5) }))));
+  return l;
+}
+
 /** Ground heights (m) at every Ground vertex (a vertex every 1/RES tiles). */
 export function sampleBase(s: TerrainSettings, f: Field = createField(s)): Float32Array {
   const base = new Float32Array(NV * NV);
