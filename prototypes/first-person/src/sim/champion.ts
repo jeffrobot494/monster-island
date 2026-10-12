@@ -124,22 +124,11 @@ export function isPlayerCtrl(r: CtrlReason) {
   return r === 'player' || r === 'downed';
 }
 
-/** Speed multiplier the client applies to walk/sprint (legs, stat mods, dragging). */
+/** Speed multiplier the client applies to walk/sprint (legs, stat mods). Dragging doesn't slow the champion. */
 export function champSpeedMul(sim: Sim): number {
   const c = sim.champion();
   if (!c) return 1;
-  return (sim.stat(c, 'speed') / 1.1) * legFactor(c) * dragFactor(sim, c);
-}
-
-function dragFactor(sim: Sim, c: Entity): number {
-  if (sim.dragging < 0) return 1;
-  const d = sim.ents.get(sim.dragging);
-  if (!d) return 1;
-  let helpers = 0;
-  for (const h of sim.ents.values()) if (h.state === 'help-drag' && Math.hypot(h.x - d.x, h.z - d.z) < 4.8 / M + bodyR(d)) helpers++;
-  void c;
-  const heavy = d.kind === 'monster' || (d.corpse && d.corpse.maxHp > 100);
-  return heavy ? Math.min(0.85, 0.4 + 0.15 * Math.min(3, helpers)) : 0.8;
+  return (sim.stat(c, 'speed') / 1.1) * legFactor(c);
 }
 
 /** Dev/test: give the champion an internal order (it runs in sim mode). */
@@ -697,7 +686,7 @@ function holdGround(sim: Sim, c: Entity) {
 }
 
 function speed(sim: Sim, c: Entity) {
-  return sim.stat(c, 'speed') * legFactor(c) * dragFactor(sim, c);
+  return sim.stat(c, 'speed') * legFactor(c);
 }
 
 function runOrder(sim: Sim, c: Entity) {

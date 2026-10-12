@@ -16,7 +16,7 @@ import { SIZE } from '../src/sim/world';
 import { HOUR_MS } from '../src/sim/clock';
 import type { Entity } from '../src/sim/types';
 import { now, START } from './helpers';
-import { kill } from '../src/sim/combat';
+import { kill, legFactor } from '../src/sim/combat';
 import { crown } from '../src/sim/champion';
 import { ChampionController, EYE_H } from '../src/input/controller';
 import type { Controls } from '../src/input/controls';
@@ -494,9 +494,10 @@ describe('the FP capture loop', () => {
     expect(sim.dragging).toBe(m.id);
     expect(m.state).toBe('bound');
     const A = sim.layout.villageAltar;
-    let bestHelp = 0, maxGap = 0;
+    let slowest = Infinity, helped = false, maxGap = 0;
     const ok = walkTo(island, A.x + 0.5, A.z + 0.9, 0.12, 30000, () => {
-      bestHelp = Math.max(bestHelp, champSpeedMul(sim));
+      slowest = Math.min(slowest, champSpeedMul(sim) / legFactor(c));
+      helped ||= sim.humans().some((h) => h.state === 'help-drag');
       maxGap = Math.max(maxGap, Math.hypot(m.x - c.x, m.z - c.z));
     });
     expect(ok).toBe(true);
@@ -504,8 +505,9 @@ describe('the FP capture loop', () => {
     expect(sim.dragging).toBe(m.id);
     // the body trails at rope length, never more than a few meters behind (F8)
     expect(maxGap * M).toBeLessThan(8);
-    // villagers pitch in near home (F5)
-    expect(bestHelp).toBeGreaterThan(0.41);
+    // dragging doesn't slow you (only your legs do), and villagers still pitch in near home (F5)
+    expect(slowest).toBeCloseTo(sim.stat(c, 'speed') / 1.1, 6);
+    expect(helped).toBe(true);
     const before = sim.favor.human;
     expect(offerDragged(sim)).toBeNull();
     expect(sim.favor.human - before).toBe(maxHp);

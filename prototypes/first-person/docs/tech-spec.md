@@ -96,7 +96,7 @@ matters for a second desktop on the LAN.
 | dragged body spacing | 1.0 tile behind | 1.5 m + body `r` behind |
 | guard spear reach | 1.4 tiles | 2.6 m + target `r` |
 | villager/monster grab reach | monster reach | reach (m) + 0.3 m |
-| help-drag "nearby" (speed bonus) | 3 tiles | 6 m |
+| help-drag "nearby" | 3 tiles | 6 m |
 | separation radius (§5.4) | — | `rA + rB` |
 
 - **Speeds** stay as in the base: the champion's sprint is 1.1 tiles/s = 8.8 m/s (the design's "1 km in about 2
@@ -181,7 +181,7 @@ The HUD always shows the action E would take (§10.2).
 
 ### 4.2 Movement
 - The input vector from WASD is rotated by the camera yaw. Walk 4.5 m/s, sprint 8.8 m/s, both ×`speedMul`, which
-  the sim sends in the HUD every 5 ticks: `stat speed / 1.1 × legFactor × drag factor × terrain`. The terrain
+  the sim sends in the HUD every 5 ticks: `stat speed / 1.1 × legFactor × terrain` (dragging doesn't slow the champion, and sprinting is allowed while dragging). The terrain
   factor is `1 / sqrt(moveCost)` of the tile underfoot.
 - Acceleration is 30 m/s² and friction 12 /s. There is **no jumping** **[gap]**.
 - **Collision:** the champion is a circle of 0.35 m. It slides along unwalkable tiles (per-axis resolution against
@@ -669,7 +669,8 @@ listed with its finding number (F#).
   - `carry()` and every other AI range stays in tiles, as in the base.
 - F4: a **grab latches**: once a grab starts, the prey is pinned (it can't move) for the 10-tick grab, so fleeing
   villagers still get caught. The base "monster loop" test must pass.
-- F5: help-drag helpers stand 1.5 m beside the rope, and the speed bonus counts helpers within 4 m.
+- F5: help-drag helpers stand 1.5 m beside the rope. (They used to speed the champion up from a 0.4× drag; dragging no
+  longer slows him, so they are only a sight.)
 - F20: a **HUD wind-up arc** at the screen edge points toward every monster winding up on the champion and fills with
   the wind-up. Monsters within 30 m play a positional footfall or breathing cue every 0.6–1.2 s.
 

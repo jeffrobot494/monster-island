@@ -145,7 +145,7 @@ export class ChampionController {
   torch = false;
   sprinting = false;
   speedMul = 1;
-  /** sim-supplied: can't sprint or swing (dragging) */
+  /** sim-supplied: dragging, so no swinging, jumping or dodging (sprinting is fine) */
   dragging = false;
   /** champion move cost per tile × 20; 0 = blocked (F19) */
   walk: Uint8Array = new Uint8Array(SIZE * SIZE);
@@ -535,7 +535,7 @@ export class ChampionController {
       if (l > 0) { fx /= l; fz /= l; }
       const s = Math.sin(this.yaw), co = Math.cos(this.yaw);
       const wx = fz * s + fx * co, wz = fz * co - fx * s;
-      this.sprinting = c.down('sprint') && l > 0 && fz >= 0 && !this.blocking && !this.winded && !this.dragging;
+      this.sprinting = c.down('sprint') && l > 0 && fz >= 0 && !this.blocking && !this.winded;
       if (this.sprinting) {
         this.stamina = Math.max(0, this.stamina - SPRINT_COST * dt);
         this.spentAt = now;
