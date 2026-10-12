@@ -186,7 +186,7 @@ describe('the spear in hand', () => {
     expect(c.human!.spears).toBe(1);
   });
 
-  it('no spear, no spear in hand; the last one thrown, or a new champion, puts the sword back; no shield with a spear', () => {
+  it('no spear, no spear in hand; the last one thrown, or a new champion, puts the sword back; the shield goes with either', () => {
     const { island, sim, c } = duel(5);
     const S = cs(sim);
     c.human!.spears = 0;
@@ -194,13 +194,13 @@ describe('the spear in hand', () => {
     island.step();
     expect(S.wield).toBe('sword');
     expect(sim.actionError).toMatch(/No spears/);
-    // a spear in hand: the shield stays down; the sword: up it comes
+    // the shield comes up with a spear in hand, and stays up through a switch to the sword
     c.human!.spears = 1;
     sim.inputs.push({ type: 'wield', weapon: 'spear' }, { type: 'block', on: true });
     island.step();
     expect(S.wield).toBe('spear');
-    expect(S.blocking).toBe(false);
-    sim.inputs.push({ type: 'wield', weapon: 'sword' }, { type: 'block', on: true });
+    expect(S.blocking).toBe(true);
+    sim.inputs.push({ type: 'wield', weapon: 'sword' });
     island.step();
     expect(S.blocking).toBe(true);
     // thrown away: it's the sword again

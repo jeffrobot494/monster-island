@@ -792,7 +792,7 @@ async function boot() {
     input({ type: 'swing', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
   }
 
-  // in hand: the sword (and shield), or a spear to thrust (left mouse) and throw (right mouse)
+  // in hand: the sword, or a spear to thrust (left mouse) and throw (R); the shield goes with either
   let wield: 'sword' | 'spear' = 'sword', wieldAt = -1e9;
   function setWield(w: 'sword' | 'spear', send = true) {
     if (send) wieldAt = performance.now();
@@ -910,7 +910,6 @@ async function boot() {
     const fdt = Math.min(0.05, Math.max(0.001, now - lastNow));
     lastNow = now;
     const busy = screenOpen();
-    const clickR = controls.takeClickR();
     // one-shot actions
     if (controls.active && !busy && !paused) {
       // on a wall, Space jumps off or lunges up and the dodge key lets go
@@ -936,10 +935,7 @@ async function boot() {
         }
       }
       controls.takeClick();
-      // right mouse: the shield, or with a spear in hand a throw; on a body it's holding on, whatever is in hand
-      const onBody = controller.mode === 'mount';
-      controller.setBlocking(controls.mouseR && (wield === 'sword' || onBody));
-      if (clickR && wield === 'spear' && !controller.climbing) throwSpear(now);
+      controller.setBlocking(controls.mouseR);
       if (controls.take('interact') && !controller.climbing) interact();
       if (controls.take('finish') && look && !controller.climbing) {
         const v = renderer.ents.views.get(look.id);
@@ -953,6 +949,11 @@ async function boot() {
           setWield('spear');
           hudView.hintOnce('spear');
         } else ui.toast('No spears. Pick one up where it fell, or take one from the village rack.', 'info', 3);
+      }
+      // R throws the spear in hand (not from a wall or a body: there the spear thrusts)
+      if (controls.take('throw') && !controller.climbing) {
+        if (wield === 'spear') throwSpear(now);
+        else ui.toast(`Take up a spear (${keyLabel(settings.bindings.spear)}) to throw it.`, 'info', 2.5);
       }
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);

@@ -38,7 +38,7 @@ export class ViewModel {
   private bobT = 0;
   torchOn = false;
   dragging = false;
-  /** in hand: the sword (and the shield), or a spear (no shield) */
+  /** in hand: the sword or a spear (the shield, or the torch, is in the other) */
   weapon: 'sword' | 'spear' = 'sword';
   /** on a wall: hands are on the rock, so the weapons drop out of view */
   climbing = false;
@@ -147,7 +147,7 @@ export class ViewModel {
     this.sun.intensity = 0.3 + 0.7 * lightLevel;
     this.torch.visible = this.torchOn;
     const spear = this.weapon === 'spear';
-    this.shield.visible = !this.torchOn && !spear;
+    this.shield.visible = !this.torchOn;
     this.rope.visible = this.dragging;
     this.blockK += ((blocking && !this.torchOn ? 1 : 0) - this.blockK) * Math.min(1, dt * 14);
     const moving = moveSpeed > 0.5;
@@ -245,9 +245,8 @@ export class ViewModel {
     }
     this.right.position.set(px, py, pz);
     this.right.rotation.set(rx - 0.15, ry + 0.25, rz - 0.2);
-    // left: shield block or torch (with a spear and no torch, the empty hand is down out of view)
+    // left: shield block or torch
     const lb = this.blockK;
-    this.left.visible = !spear || this.torchOn || this.dragging;
     this.left.position.set(-0.4 + bx + 0.26 * lb, -0.4 + by + 0.24 * lb, -0.5 + 0.05 * lb);
     this.left.rotation.set(0.1 + 0.2 * lb, 0.35 - 0.3 * lb, 0);
     if (this.torchOn) {

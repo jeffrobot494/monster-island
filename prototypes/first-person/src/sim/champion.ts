@@ -291,7 +291,6 @@ export function processInputs(sim: Sim) {
         if (i.weapon === 'spear' && spearsOf(c) <= 0) sim.actionError = 'No spears. Pick one up where it fell, or take one from the village rack.';
         else {
           S.wield = i.weapon === 'spear' ? 'spear' : 'sword';
-          if (S.wield === 'spear' && !c.human?.mount) S.blocking = false; // no shield with a spear
         }
         break;
       case 'dodge':
@@ -300,8 +299,7 @@ export function processInputs(sim: Sim) {
         break;
       case 'block':
         // on a monster it's holding on (docs/climbing-phase4-plan.md), which a torch doesn't stop
-        // no shield with a spear in hand
-        S.blocking = i.on && (!!c.human?.mount || (!S.torch && S.wield !== 'spear')) && sim.dragging < 0;
+        S.blocking = i.on && (!S.torch || !!c.human?.mount) && sim.dragging < 0;
         break;
       case 'interact': sim.actionError = interact(sim, c, i.id); break;
       case 'finish': sim.actionError = finish(sim, c, i.id); break;
