@@ -69,6 +69,8 @@ export class Renderer {
   t = 0;
   private fireAcc = 0;
   viewAllowed = true;
+  /** the game is paused: the clock stops, so the picture holds still (bodies, particles, flicker, the arm) */
+  frozen = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -173,8 +175,9 @@ export class Renderer {
   /** Advance the clock and animate the entities. main.ts calls this before the controller, so a champion riding a
    *  monster is placed on this frame's pose (docs/climbing-phase3-plan.md, Part B); otherwise render() does. */
   animate(champId: number | null, posedChamp: boolean) {
-    const dt = Math.min(0.1, this.clock.getDelta());
-    const t = (this.t = this.clock.elapsedTime);
+    const delta = this.clock.getDelta();
+    const dt = this.frozen ? 0 : Math.min(0.1, delta);
+    const t = (this.t += dt);
     this.ents.update(dt, t, this.eye, champId, posedChamp);
     this.frameDt = { dt, t };
   }

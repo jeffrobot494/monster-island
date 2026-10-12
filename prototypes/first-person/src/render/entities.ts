@@ -265,7 +265,8 @@ export class Entities {
       v.pos.copy(this.poseLast);
       v.yaw = champPose.yaw;
     }
-    v.speed = v.speed * 0.8 + (dt > 0 ? moved / dt : 0) * 0.2;
+    // no time passed (paused): keep the speed, or a walking body would settle into its idle pose
+    if (dt > 0) v.speed = v.speed * 0.8 + (moved / dt) * 0.2;
     const hideChamp = (v.flags & F_CHAMPION) !== 0 && champId === v.id && !posed;
     const dist = v.pos.distanceTo(eye);
     v.root.visible = !hideChamp && dist < (v.rig ? 150 : 160);

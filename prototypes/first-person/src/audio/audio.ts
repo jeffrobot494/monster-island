@@ -17,17 +17,20 @@ export class GameAudio {
   private fire: { panner: PannerNode; gain: GainNode } | null = null;
   volume = 0.8;
   fxVolume = 1;
+  /** the game is paused: everything playing stops where it is, and picks up again on resume */
+  private held = false;
 
   /** Must be called from a user gesture (browser autoplay rules). */
   start() {
     if (this.ctx) {
-      if (this.ctx.state === 'suspended') void this.ctx.resume();
+      if (this.ctx.state === 'suspended' && !this.held) void this.ctx.resume();
       return;
     }
     const AC = (window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
     if (!AC) return;
     const ctx = new AC();
     this.ctx = ctx;
+    if (this.held) void ctx.suspend();
     this.master = ctx.createGain();
     this.master.gain.value = this.volume;
     this.master.connect(ctx.destination);
@@ -39,6 +42,13 @@ export class GameAudio {
     this.amb.connect(this.master);
     this.startAmbience();
     for (const f of FILES) void this.load(f);
+  }
+
+  hold(on: boolean) {
+    this.held = on;
+    if (!this.ctx) return;
+    if (on) void this.ctx.suspend();
+    else void this.ctx.resume();
   }
 
   setVolumes(master: number, fx: number) {

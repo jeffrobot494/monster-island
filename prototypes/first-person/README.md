@@ -39,9 +39,17 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | V | first / third person camera (also the button at the bottom right) |
 | M | map |
 | Tab | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
+| Esc | pause; click to resume |
 
-A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night. The world never pauses, even while the journal is open. Whenever you release the mouse, your
-champion holds his ground and strikes back at anything attacking him.
+A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night.
+
+**Pausing.** Esc pauses: the island stops (the sim, the picture and the sound) until you click back in.
+- Losing the mouse any other way (alt-tab) pauses too, and so does loading: the island waits at the click-to-play card.
+- The journal and map opened from the pause keep it paused. Closing them goes back into play.
+- Opened during play (Tab, M), they don't pause: the world keeps running while you read, and your champion holds his
+  ground and strikes back at anything attacking him.
+- A paused game waits in a hidden tab too. Once you close it the island runs on: the next load catches up the time
+  you were away, as before.
 
 ## How to play
 
@@ -123,8 +131,8 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 |---|---|
 | `?pose=x,z,yawDeg,pitchDeg` | start the champion at a tile, looking that way |
 | `?pitch=deg`, `?yaw=deg` | hold the view (headless screenshots) |
-| `?nolock=1` | drag-to-look without pointer lock |
-| `?hideplay=1` | hide the click-to-play card |
+| `?nolock=1` | drag-to-look without pointer lock; it doesn't pause on loading (Esc pauses, clicking the card resumes) |
+| `?hideplay=1` | hide the click-to-play card, and never pause (headless screenshots) |
 | `?noshadow=1` | shadows off |
 | `?third=1` | start in third person |
 | `?fly=m` | start in fly mode, m meters above the sea (aerial screenshots) |

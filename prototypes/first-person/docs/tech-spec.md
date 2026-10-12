@@ -126,8 +126,17 @@ matters for a second desktop on the LAN.
 | Tab | Journal (Village, Monsters, Book, Chronicle, Gods, Settings). It releases the pointer; closing it returns to play. Esc pauses (releases the pointer, shows the paused view). |
 | Enter | When a banner or card is showing, dismiss it |
 
-- Clicking the canvas (or the "Click to play" overlay) requests pointer lock. Losing the lock (Esc, alt-tab) shows
-  the journal. **The world never pauses**: it runs on real time (design) **[gap: there is no pause]**.
+- Clicking the canvas (or the "Click to play" overlay) requests pointer lock. Losing the lock (Esc, alt-tab) with no
+  screen open shows the **paused view**, and it's a real pause: the sim worker stops (`control: paused`), the
+  renderer's clock stops (bodies, particles and the view model hold still), the controller doesn't run, and the audio
+  context is suspended. A load starts paused at the click-to-play card, once half a second has been drawn since the
+  first frame (the frames place the camera). Screens opened from the pause keep it paused; closing one goes back into
+  play. Getting the pointer back resumes, with no catch-up. With `?nolock` there is no lock to lose: Esc pauses, and
+  the card resumes.
+- Screens opened during play don't pause: the world runs on real time (design) while you read.
+- The worker also pauses while the page is hidden, and catches up on return (R1) unless the game was paused: a
+  paused island waits. Closing the game is still time away: saves keep `lastRealMs` current while paused, so the
+  next load catches up from when it was closed.
 - Settings: mouse sensitivity, invert Y, FOV 60–100° (default 75°), master and effects volume, shadow quality
   (off/low/high), and key bindings.
 
@@ -417,7 +426,7 @@ drop/drag (the sword hand pulls a rope back over the shoulder).
 - **Toasts** (top center, under the compass) and **banners** (shofar, Judgment, champion events). Their text is the
   base's text.
 
-### 8.2 Screens (they release pointer lock; the world keeps running)
+### 8.2 Screens (they release pointer lock; the world keeps running, unless they were opened from the pause, §3.1)
 - **Journal** (Tab): tabs **Village** (job changes as in the base), **Monsters**, **Book of Creation**,
   **Chronicle**, **Gods**, and **Settings** (controls, video, audio, new island, dev buttons). Its contents are the
   base panels restyled for a wide screen.

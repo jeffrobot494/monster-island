@@ -105,8 +105,8 @@ export class HudView {
     const b = this.settings.bindings;
     const row = (k: string, v: string) => h('div', { class: 'ctl' }, h('kbd', {}, k), h('span', {}, v));
     this.play.replaceChildren(h('div', { class: 'play-card' },
-      h('div', { class: 'play-title' }, firstTime ? 'Island Humans and Monsters' : 'Paused view — the island does not wait'),
-      firstTime ? h('p', { class: 'serif' }, 'You are the champion of a small village. Six monsters hide in the hills. Hunt them, bring them home alive, and burn them on the altar of the Most High.') : null,
+      h('div', { class: 'play-title' }, firstTime ? 'Island Humans and Monsters' : 'Paused'),
+      firstTime ? h('p', { class: 'serif' }, 'You are the champion of a small village. Six monsters hide in the hills. Hunt them, bring them home alive, and burn them on the altar of the Most High.') : h('p', { class: 'serif' }, 'The island waits for you.'),
       h('div', { class: 'ctls' },
         row(`${keyLabel(b.forward)} ${keyLabel(b.left)} ${keyLabel(b.back)} ${keyLabel(b.right)}`, 'move'),
         row('Mouse', 'look'),
@@ -122,9 +122,10 @@ export class HudView {
         row(keyLabel(b.inspect), 'inspect'),
         row(keyLabel(b.map), 'map'),
         row(keyLabel(b.camera), 'first / third person'),
-        row(`${keyLabel(b.journal)} / Esc`, 'journal'),
+        row(keyLabel(b.journal), 'journal'),
+        row('Esc', 'pause'),
       ),
-      h('div', { class: 'play-go' }, 'Click to play'),
+      h('div', { class: 'play-go' }, firstTime ? 'Click to play' : 'Click to resume'),
     ));
   }
 

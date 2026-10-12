@@ -27,6 +27,8 @@ export class SimClient {
     this.lastSeq = 0;
     this.lastFrameAt = performance.now() + 10000; // grace period while loading
     this.post({ type: 'init', ...init });
+    // a new worker starts running: keep a paused game paused (it still loads and catches up)
+    if (this.paused) this.post({ type: 'control', paused: true });
   }
 
   /** Kill the worker for good: no more frames, saves or watchdog restarts. */
@@ -41,6 +43,7 @@ export class SimClient {
   }
 
   setPaused(paused: boolean) {
+    if (paused === this.paused) return; // the worker saves on every pause
     if (this.paused && !paused) this.lastFrameAt = performance.now() + 5000;
     this.paused = paused;
     this.post({ type: 'control', paused });

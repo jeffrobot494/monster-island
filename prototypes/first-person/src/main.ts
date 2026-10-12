@@ -151,7 +151,7 @@ async function boot() {
   mounts.any = devMode && params.has('mountany');
   controller.findMount = (x, y, z, maxM, how) => mounts.find(new THREE.Vector3(x, y, z), maxM, how);
   controller.onMount = () => hudView.hintOnce('mount');
-  // a hard landing: the sim decides the damage (it also hears falls that end while the game is paused)
+  // a hard landing: the sim decides the damage (it also hears falls that end in hold, the pointer free)
   controller.onFall = (impact) => input({ type: 'land', impact, x: controller.x, z: controller.z });
   controller.onStep = () => audio.play('step', undefined, { surface: renderer.terrain.tileAt(controller.x, controller.z) });
   controller.onLand = (impact) => {
@@ -176,6 +176,9 @@ async function boot() {
   let pendingSwing: { at: number } | null = null;
   const spectator = { x: 0, y: 30, z: 0, yaw: 0, pitch: -0.4 };
   let lastHurtAt = 0;
+  let paused = false;
+  // a paused load holds only once the view has settled: half a second drawn since the first frame arrived
+  let sawFrame = false, settleT = 0, viewReady = false;
 
   const pushEvents = (events: ChronicleEvent[]) => {
     if (params.has('debug')) for (const e of events) console.info(`[chronicle] D${e.day}: ${e.text}`);
@@ -234,7 +237,7 @@ async function boot() {
     });
     return h('div', {},
       h('h3', { class: 'serif' }, 'How to play'),
-      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). A day lasts 8 minutes: 4 of daylight, 4 of night. Judgment falls at midnight: the god with more favor reshapes the island. The world keeps running, even while you read this.'),
+      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). A day lasts 8 minutes: 4 of daylight, 4 of night. Judgment falls at midnight: the god with more favor reshapes the island. The world keeps running while you read this, unless you paused first (Esc).'),
       h('h3', { class: 'serif' }, 'Controls'),
       h('div', { class: 'settings-block' },
         range('Mouse sensitivity', 0.5, 6, 0.1, () => settings.sensitivity, (v) => (settings.sensitivity = v)),
@@ -302,15 +305,39 @@ async function boot() {
   if (platform.warning) ui.toast(platform.warning, 'info', 10);
   ui.setChronicle(chronicle);
 
-  // ---------- screens and pointer lock ----------
+  // ---------- screens, pointer lock and pause ----------
   const screenOpen = () => ui.isSheetOpen() || ui.isModalOpen() || map.open;
+  // ?hideplay=1 (headless screenshots): no click-to-play card, and so no pause
+  const hidePlay = devMode && params.has('hideplay');
+  /**
+   * The paused view stops the world: the sim worker, the picture and the sound. Losing the pointer with nothing open
+   * (Esc, alt-tab, or before the first click) pauses; a screen opened from the pause keeps it paused, and getting the
+   * pointer back resumes. The journal and map opened during play don't pause (the world runs on while you read).
+   */
+  function setPause(on: boolean) {
+    if (on === paused) return;
+    paused = on;
+    sim.setPaused(on || document.hidden);
+    renderer.frozen = on;
+    audio.hold(on);
+  }
   function updateLockUi() {
-    hudView.showPlay(!controls.active && !screenOpen() && !gameOverShown, firstPlay);
+    const out = !controls.active && !gameOverShown && !hidePlay;
+    // Out of play with nothing open is the paused view, and so is everything before the first click (the summary of
+    // the time away, say). After loading, it waits for the view to settle onto the champion (frames place the camera).
+    if (out && viewReady && (!screenOpen() || firstPlay)) setPause(true);
+    else if (controls.active && !controls.noLock) setPause(false);
+    hudView.showPlay(!screenOpen() && !gameOverShown && !hidePlay && (paused || !controls.active), firstPlay);
   }
   const lockGame = () => {
     audio.start();
     if (screenOpen()) return;
-    controls.requestLock();
+    // no pointer lock to wait for (?nolock, a RUN host without one): straight back into play
+    if (controls.noLock) {
+      firstPlay = false;
+      setPause(false);
+      updateLockUi();
+    } else controls.requestLock();
   };
   hudView.onPlay = () => lockGame();
   hudView.onCamera = () => controls.onAction('camera');
@@ -372,10 +399,12 @@ async function boot() {
     }
   };
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Escape' && map.open) {
-      map.toggle(false);
-      updateLockUi();
-    }
+    if (e.code !== 'Escape') return;
+    if (map.open) map.toggle(false);
+    else if (screenOpen()) return;
+    // Esc releases the pointer, which pauses; with no pointer lock to release, pause here
+    if (controls.noLock && !hidePlay) setPause(true);
+    updateLockUi();
   });
   if (controls.noLock) setTimeout(() => input({ type: 'lock', on: true }), 1500);
 
@@ -455,6 +484,7 @@ async function boot() {
   }
 
   function onFrame(f: FramePayload) {
+    sawFrame = true;
     renderer.onFrame(f);
     if (f.tiles.length) map.tilesChanged();
     if (f.explored.length) map.markExplored(f.explored);
@@ -471,7 +501,7 @@ async function boot() {
       if (!f.correction) controller.yaw = f.champ.yaw;
     }
     controller.reason = f.ctrlReason;
-    // paused (hold) on a wall or mid-fall: the client keeps the climber where it is and finishes the fall
+    // in hold (the pointer free) on a wall or mid-fall: the client keeps the climber where it is and finishes the fall
     const keep = f.ctrlReason === 'hold' && (controller.climbing || controller.air);
     if (f.ctrl === 'sim' && f.champ && !keep) {
       controller.x = f.champ.x;
@@ -581,7 +611,7 @@ async function boot() {
         }
         // the Genesis card waits until the champion is out of danger (R31)
         if (hud.dangerNear) safeSince = performance.now();
-        if (readyCreation && !screenOpen() && performance.now() - safeSince > 10_000) showCreation();
+        if (readyCreation && !screenOpen() && !paused && performance.now() - safeSince > 10_000) showCreation();
         if (pipeline && hud.pendingCreations.length) pipeline.kick();
         break;
       }
@@ -864,7 +894,7 @@ async function boot() {
     lastNow = now;
     const busy = screenOpen();
     // one-shot actions
-    if (controls.active && !busy) {
+    if (controls.active && !busy && !paused) {
       // on a wall, Space jumps off or lunges up and the dodge key lets go
       if (controls.take('jump')) {
         if (controller.climbing) controller.wallJump(now);
@@ -898,7 +928,7 @@ async function boot() {
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);
     controls.clearFrame();
-    if (pendingSwing && now >= pendingSwing.at) {
+    if (pendingSwing && now >= pendingSwing.at && !paused) {
       pendingSwing = null;
       doSwingContact();
     }
@@ -909,12 +939,14 @@ async function boot() {
     let cam: { x: number; y: number; z: number; yaw: number; pitch: number };
     let roll = 0;
     let champPose: { x: number; y: number; z: number; yaw: number } | null = null;
+    // paused, nothing moves: the champion (or the spectator) holds where it was, mid-fall or on a wall included
+    if (paused) controls.readLook();
     if (ctrlReason === 'dead') {
       // spectator fly-cam (F31)
       const [dy, dp] = controls.readLook();
       spectator.yaw += dy;
       spectator.pitch = Math.max(-1.4, Math.min(1.4, spectator.pitch + dp));
-      const sp = (controls.down('sprint') ? 40 : 15) * fdt;
+      const sp = paused ? 0 : (controls.down('sprint') ? 40 : 15) * fdt;
       const fz = (controls.down('forward') ? 1 : 0) - (controls.down('back') ? 1 : 0), fx = (controls.down('left') ? 1 : 0) - (controls.down('right') ? 1 : 0);
       const s = Math.sin(spectator.yaw), co = Math.cos(spectator.yaw);
       spectator.x += (fz * s + fx * co) * sp;
@@ -923,27 +955,29 @@ async function boot() {
       spectator.y = Math.max(renderer.terrain.y(spectator.x / M, spectator.z / M) + 2, spectator.y);
       cam = { ...spectator };
     } else {
-      controller.solids = [];
-      const L = renderer.layout;
-      if (L) controller.solids.push({ x: L.villageAltar.x + 0.5, z: L.villageAltar.z + 0.5, r: 1.3 / M }, { x: L.highAltar.x + 0.5, z: L.highAltar.z + 0.5, r: 1.9 / M });
-      renderer.ents.each((v) => {
-        if (!(v.flags & F_MONSTER) || v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) return;
-        if (v.pos.y - renderer.terrain.y(v.pos.x / M, v.pos.z / M) > 3) return; // flying overhead
-        const box = renderer.ents.boxOf(v);
-        // only bodies at your height: a monster at the foot of a cliff doesn't shove you around on top of it
-        if (v.pos.y > controller.feetY + 1.8 || v.pos.y + box.hgt < controller.feetY) return;
-        // a body you can climb is its trunk (the sim's radius), so its legs are in reach; others keep the hit box
-        const r = (CLIMB[v.shape] ? BODY[v.shape].r * SHAPE_M * v.scale : box.wid) / M;
-        const half = Math.max(0, box.len - box.wid) / M;
-        // two circles along a long body (F12)
-        for (const k of half > 0 ? [-half, half] : [0]) controller.solids.push({ x: v.pos.x / M + Math.sin(v.yaw) * k, z: v.pos.z / M + Math.cos(v.yaw) * k, r });
-      });
-      controller.rain = renderer.particles.weather === 'rain';
-      controller.update(fdt, now);
-      renderer.view.vy = controller.air ? controller.vy : 0;
-      // the weapon comes down on a wall, not on a monster (you fight from its body)
-      renderer.view.climbing = controller.climbing && controller.mode !== 'mount';
-      ridingTells();
+      if (!paused) {
+        controller.solids = [];
+        const L = renderer.layout;
+        if (L) controller.solids.push({ x: L.villageAltar.x + 0.5, z: L.villageAltar.z + 0.5, r: 1.3 / M }, { x: L.highAltar.x + 0.5, z: L.highAltar.z + 0.5, r: 1.9 / M });
+        renderer.ents.each((v) => {
+          if (!(v.flags & F_MONSTER) || v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) return;
+          if (v.pos.y - renderer.terrain.y(v.pos.x / M, v.pos.z / M) > 3) return; // flying overhead
+          const box = renderer.ents.boxOf(v);
+          // only bodies at your height: a monster at the foot of a cliff doesn't shove you around on top of it
+          if (v.pos.y > controller.feetY + 1.8 || v.pos.y + box.hgt < controller.feetY) return;
+          // a body you can climb is its trunk (the sim's radius), so its legs are in reach; others keep the hit box
+          const r = (CLIMB[v.shape] ? BODY[v.shape].r * SHAPE_M * v.scale : box.wid) / M;
+          const half = Math.max(0, box.len - box.wid) / M;
+          // two circles along a long body (F12)
+          for (const k of half > 0 ? [-half, half] : [0]) controller.solids.push({ x: v.pos.x / M + Math.sin(v.yaw) * k, z: v.pos.z / M + Math.cos(v.yaw) * k, r });
+        });
+        controller.rain = renderer.particles.weather === 'rain';
+        controller.update(fdt, now);
+        renderer.view.vy = controller.air ? controller.vy : 0;
+        // the weapon comes down on a wall, not on a monster (you fight from its body)
+        renderer.view.climbing = controller.climbing && controller.mode !== 'mount';
+        ridingTells();
+      }
       if (controller.ctrl === 'sim' && hud?.champion && !(ctrlReason === 'hold' && (controller.climbing || controller.air))) {
         const cv = renderer.ents.views.get(hud.champion.id);
         if (cv) {
@@ -959,6 +993,10 @@ async function boot() {
         cam = shoulderCam(cam);
         roll = 0;
       }
+    }
+    if (!viewReady && sawFrame && (settleT += fdt) > 0.5) {
+      viewReady = true;
+      updateLockUi(); // still at the click-to-play card: hold the world there
     }
     renderer.render(cam, {
       champId: champId(), sightTiles: hud?.champion?.sight ?? 12, torch: !!hud?.champion?.torch, fold: hud?.fold ?? 0,
@@ -1036,8 +1074,9 @@ async function boot() {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) sim.setPaused(true);
     else {
-      sim.setPaused(false);
-      sim.post({ type: 'catchUp', clockMs: localNow(), realMs: Date.now() });
+      sim.setPaused(paused);
+      // a paused island waited for you: there's no time away to catch up
+      if (!paused) sim.post({ type: 'catchUp', clockMs: localNow(), realMs: Date.now() });
       pipeline.kick();
     }
   });
@@ -1054,7 +1093,6 @@ async function boot() {
   if (panel) setTimeout(() => (panel === 'altar' ? ui.openAltar() : panel === 'map' ? map.toggle(true, { x: controller.x, z: controller.z }) : ui.openSheet(panel)), 2500);
   if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
   if (devMode && params.has('yaw')) setInterval(() => (controller.yaw = (Number(params.get('yaw')) * Math.PI) / 180), 200);
-  if (devMode && params.has('hideplay')) hudView.play.style.display = 'none';
   if (climbLog) setInterval(() => console.info(`[climb] ${controller.mode} ${controller.x.toFixed(2)},${controller.z.toFixed(2)} feet ${controller.feetY.toFixed(1)} ground ${renderer.terrain.y(controller.x, controller.z).toFixed(1)} st ${controller.stamina.toFixed(0)} yaw ${controller.yaw.toFixed(2)} ${ctrlReason} ${controller.ctrl} tile ${renderer.terrain.tileAt(controller.x, controller.z)}${controller.mount ? ` on ${controller.mount.id} cap ${controller.mount.cap}${controller.perched ? ' perched' : ''}` : ''}${nearestClimbable()}`), 1000);
   /** the nearest climbable monster and how far the hands are from its body (docs/climbing-phase3-plan.md) */
   function nearestClimbable() {

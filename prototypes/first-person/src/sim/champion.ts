@@ -190,7 +190,7 @@ function land(sim: Sim, c: Entity, i: { impact: number; x?: number; z?: number }
   if (impact <= 13 || sim.tick - (S.landTick ?? -99) < 5) return;
   S.landTick = sim.tick;
   if (reason === 'hold') {
-    // paused mid-fall: the client finished the fall, so the champion is where it landed
+    // in hold mid-fall (the pointer free): the client finished the fall, so the champion is where it landed
     if (Number.isFinite(i.x) && Number.isFinite(i.z) && (sim.walkableFor(c, i.x!, i.z!) || sim.grid.get(Math.floor(i.x!), Math.floor(i.z!)) === 'cliff')) {
       c.x = Math.min(127.99, Math.max(0, i.x!));
       c.z = Math.min(127.99, Math.max(0, i.z!));
