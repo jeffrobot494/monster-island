@@ -67,6 +67,12 @@ A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night.
   **F** to finish it where it lies.
 - **Defend.** A scream shows a red **!** on the compass toward the captive. Strike the carrier and it drops its
   prisoner. The shofar means a monster is at the walls.
+- **Stamina** (the green bar) is for moving, not fighting: swings and thrusts are free.
+  - **Costs:** a dodge costs 20, a jump 8, sprinting 10 a second, and a blow on your shield half the damage it stops.
+  - **Coming back:** stamina returns at 30 a second, half a second after you last spent any.
+  - **Last breath:** a dodge or a jump goes through with whatever is left, even below its cost.
+  - **Winded:** at 0 you can't sprint or raise the shield until the bar is back to a quarter, but you can still swing,
+    and dodge and jump again as soon as any stamina comes back.
 - **Judgment** falls at midnight (every 8 minutes): the god with more favor today adds a creation to the world.
 - You win when all six monsters are dead, and lose when every villager is.
 

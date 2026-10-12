@@ -22,7 +22,7 @@ need. Where the design is silent, this spec picks the **simplest thing that play
 | Platform | Desktop browsers (Chrome, Edge, Firefox), keyboard and mouse, pointer lock, at least 1280 × 720. Phones and touch are **not supported**: a notice is shown instead. |
 | Units | The sim keeps its 128 × 128 grid of 8 m tiles, with positions in tile units. The renderer works in **meters** (1 tile = 8 m). Shape units stay "1 unit ≈ a human's height" and render as **1.8 m**. Every physical constant that a person can see up close (reach, rings, dash, bind range, drag spacing) is re-specified in meters (§2). |
 | Champion movement | **Client-authoritative.** The main thread moves the champion at frame rate (WASD, mouse look, collision with unwalkable tiles) and sends its pose to the sim 20 times a second. The sim validates the pose and uses it. Whenever the player can't act (downed, carried, dead, autopilot), the sim takes control and the camera follows the sim. |
-| Combat **[gap]** | Melee with the mouse: **left click swings** the bronze sword along a 100° arc in front of you. **The height you aim at picks the hit zone** (head, torso, arm, leg, signature limb). **Right mouse raises the shield** (−75 % frontal damage, costs stamina). **C dodges** (Space jumps) (a 3.5 m dash with 0.3 s of invulnerability). Monster attacks keep the 0.8 s wind-up, now shown by the monster's wind-up pose, a growl from its position, and the red ground ring. Stamina gates sprinting, swinging, dodging and blocking. |
+| Combat **[gap]** | Melee with the mouse: **left click swings** the bronze sword along a 100° arc in front of you. **The height you aim at picks the hit zone** (head, torso, arm, leg, signature limb). **Right mouse raises the shield** (−75 % frontal damage, costs stamina). **C dodges** (Space jumps) (a 3.5 m dash with 0.3 s of invulnerability). Monster attacks keep the 0.8 s wind-up, now shown by the monster's wind-up pose, a growl from its position, and the red ground ring. Stamina gates sprinting, dodging, jumping and blocking; attacks are free (§4.5). |
 | Capture | Look at a downed monster and press **E** to bind it, then walk it home: it follows on a rope 1.5 m behind you. **F** finishes it. **E** at the altar opens the altar. |
 | Torch | **T** swaps the shield for a torch. At night the torch lights about 18 m and widens your sight, but you can't block while you hold it. |
 | Exploration | The 3D world is always fully drawn: there is no black fog, and darkness and distance fog do the hiding. The world **map** (M) keeps the fog of war, and lairs are "found" (marked on the map, chronicled) within 5 tiles, as before. |
@@ -184,7 +184,7 @@ The HUD always shows the action E would take (§10.2).
   (1.2 m) and the High Place altar (1.4 m). Villagers, animals, corpses and module entities don't collide **[gap]**.
 - Eye height is `groundY + 1.65 m`, with view bob (±4 cm at 2 Hz while walking, double while sprinting). When
   downed, the eye drops to 0.45 m and rolls 20°. While carried as a captive, it follows the captive's `lift`.
-- **Dodge:** costs 25 stamina, cooldown 0.5 s. It moves 3.5 m over 0.2 s along the move direction (or backwards if
+- **Dodge:** costs 20 stamina (a last breath, §4.5), cooldown 0.5 s. It moves 3.5 m over 0.2 s along the move direction (or backwards if
   there is no input), with collision. It sends `dodge` to the sim (§5.3).
 
 ### 4.3 Pose messages
@@ -203,9 +203,15 @@ after any tile change batch and after every module install or status change. Til
 hold the champion's current position are reported as walkable, so a new chasm never traps you inside a wall.
 
 ### 4.5 Stamina (main thread)
-- Max 100. Sprinting costs 12/s. A swing costs 12, a dodge 25, and blocking costs 0.5 × the damage it prevents
-  (reported by the sim, §5.4). Regeneration is 25/s once nothing has been spent for 0.8 s.
-- At 0 the champion is **winded** until stamina is back to 25: no sprint, no dodge, no swing, and the shield drops.
+- Stamina is for moving, not fighting: running out mid-fight must never leave the champion helpless.
+- **Costs:** max 100. Swings, thrusts and throws are free (their cooldowns pace them). A dodge costs 20, a jump 8,
+  sprinting 10/s, and blocking 0.5 × the damage it prevents (reported by the sim, §5.4). On a wall, a lunge costs 15
+  and a jump off it 8; climbing drains as in the climbing plans.
+- **Regeneration:** 30/s once nothing has been spent for 0.5 s (attacking doesn't count as spending).
+- **Last breath:** on the ground, a dodge or a jump goes through with any stamina left (> 0), even short of its
+  cost, and leaves 0. A lunge or a jump off a wall still needs its full cost: there, running out is a fall.
+- **Winded:** at 0, until stamina is back to 25, the champion can't sprint and the shield drops. Swings still go,
+  and dodges and jumps as soon as any stamina is back (half a second).
 - Stamina is kept on the main thread only. It is not saved and is full after a reload **[gap]**.
 
 ### 4.6 Autopilot (base R19, adapted)
@@ -218,8 +224,7 @@ The next key or mouse input (with pointer lock) returns control. The away resolv
 ## 5. Combat
 
 ### 5.1 Swing (left mouse)
-- The client checks the cooldown (0.6 s), stamina (12), that the shield is down, and that the champion is not
-  winded. It plays the view-model swing (0.35 s; contact at 0.12 s) and sends `{ type: 'swing', yaw, pitch }` at
+- The client checks the cooldown (0.6 s) and that the shield is down (a swing costs no stamina, §4.5). It plays the view-model swing (0.35 s; contact at 0.12 s) and sends `{ type: 'swing', yaw, pitch }` at
   the swing's start. If the champion is dragging something, the first click **lets go** instead of swinging.
 - **Sim resolution** on receipt, using the latest accepted pose and the message's yaw and pitch:
   1. Candidates: monsters within `2.4 m + r` of the champion, measured center to center on the ground, that are

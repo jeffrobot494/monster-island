@@ -17,6 +17,11 @@ const WALK = 4.5, SPRINT = 8.8; // m/s
 const ACCEL = 30, FRICTION = 12;
 const GRAVITY = 22, JUMP_V = 6.2; // m/s², m/s: a ~0.85 m hop, ~0.55 s in the air
 const AIR_CONTROL = 2.5; // how quickly you can steer in the air (1/s)
+// stamina (spec §4.5): it's for moving, not attacking. A dodge or a jump on the ground goes through with any stamina
+// left (it leaves you at 0, winded); winded, you can't sprint or raise the shield until it's back to WINDED_UNTIL
+const REGEN = 30, REGEN_AFTER = 0.5; // stamina/s, from this long (s) after the last spend
+const DODGE_COST = 20, JUMP_COST = 8, SPRINT_COST = 10; // stamina, stamina, stamina/s
+const WINDED_UNTIL = 25;
 const FLY = 60, FLY_FAST = 240; // dev fly mode, m/s (Shift for fast)
 // climbing (docs/climbing-phase1-plan.md, Rules)
 const CLIMB_SPEED = 1.8; // m/s
@@ -351,10 +356,12 @@ export class ChampionController {
     this.smoothEye = this.eyeY;
   }
 
-  private spend(n: number): boolean {
-    if (this.winded || this.stamina < n) return false;
+  /** Pay for an action. A last breath (a dodge or a jump on the ground) needs only some stamina left, and takes what's
+   *  there; anything else (a lunge on a wall) needs the full cost. */
+  private spend(n: number, lastBreath = false, now = performance.now() / 1000): boolean {
+    if (lastBreath ? this.stamina <= 0 : this.winded || this.stamina < n) return false;
     this.stamina -= n;
-    this.spentAt = performance.now() / 1000;
+    this.spentAt = now;
     if (this.stamina <= 0) {
       this.stamina = 0;
       this.winded = true;
@@ -434,18 +441,17 @@ export class ChampionController {
     if (this.ctrl !== 'player' || this.flying || this.mode !== 'walk' || this.view !== 'normal' || this.dragging || this.dodgeT >= 0) return false;
     // beside a downed monster, Space climbs on instead
     if (this.tryMount('ground', now)) return true;
-    if (!this.spend(8)) return false;
+    if (!this.spend(JUMP_COST, true, now)) return false;
     this.mode = 'air';
     this.feetY = this.fallFrom = this.gy(this.x, this.z);
     this.vy = JUMP_V;
     this.inputSince = true;
-    void now;
     return true;
   }
 
   tryDodge(now: number): boolean {
     if (this.ctrl !== 'player' || this.flying || now < this.dodgeReady || this.dragging || this.mode !== 'walk') return false;
-    if (!this.spend(25)) return false;
+    if (!this.spend(DODGE_COST, true, now)) return false;
     this.dodgeReady = now + 0.5;
     let fx = 0, fz = 0;
     const c = this.controls;
@@ -468,8 +474,7 @@ export class ChampionController {
   /** Start a swing, or a spear's thrust (every 0.8 s); the target is picked at blade contact by the caller (F7). */
   trySwing(now: number, every = 0.6): boolean {
     if (this.ctrl !== 'player' || this.view === 'downed' || now < this.swingReady || this.blocking || this.dragging || (this.climbing && this.mode !== 'mount')) return false;
-    if (!this.spend(12)) return false;
-    this.swingReady = now + every;
+    this.swingReady = now + every; // free: stamina is for moving (§4.5)
     return true;
   }
 
@@ -491,8 +496,8 @@ export class ChampionController {
     if (this.yaw < -Math.PI) this.yaw += Math.PI * 2;
 
     // stamina regeneration (none while on a wall, or hanging on a body)
-    if ((!this.climbing || this.perched) && now - this.spentAt > 0.8) this.stamina = Math.min(100, this.stamina + 25 * dt);
-    if (this.winded && this.stamina >= 25) this.winded = false;
+    if ((!this.climbing || this.perched) && now - this.spentAt > REGEN_AFTER) this.stamina = Math.min(100, this.stamina + REGEN * dt);
+    if (this.winded && this.stamina >= WINDED_UNTIL) this.winded = false;
 
     if (this.ctrl === 'player' && this.flying) {
       this.fly(dt, now);
@@ -515,7 +520,7 @@ export class ChampionController {
       const wx = fz * s + fx * co, wz = fz * co - fx * s;
       this.sprinting = c.down('sprint') && l > 0 && fz >= 0 && !this.blocking && !this.winded && !this.dragging;
       if (this.sprinting) {
-        this.stamina = Math.max(0, this.stamina - 12 * dt);
+        this.stamina = Math.max(0, this.stamina - SPRINT_COST * dt);
         this.spentAt = now;
         if (this.stamina <= 0) this.winded = true;
       }

@@ -235,7 +235,7 @@ describe('the controller on a body', () => {
     expect(w.c.perched).toBe(true);
     expect(w.c.feetY).toBeCloseTo(FOOT + TOP, 1);
     w.controls.keys.clear();
-    s1 = w.c.stamina;
+    w.c.stamina = s1 = 50; // (it comes back quickly: from half, so there is room to see it)
     w.run(2);
     expect(w.c.stamina).toBeGreaterThan(s1);
     expect(w.c.mode).toBe('mount');

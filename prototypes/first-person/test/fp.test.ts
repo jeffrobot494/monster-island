@@ -220,6 +220,89 @@ describe('jump', () => {
   });
 });
 
+describe('stamina', () => {
+  function champ() {
+    const island = make(1);
+    const held = new Set<string>();
+    const controls = { down: (a: string) => held.has(a), readLook: () => [0, 0] } as unknown as Controls;
+    const c = new ChampionController(controls, island.sim.ground, () => {});
+    c.walk.fill(20);
+    c.ctrl = 'player';
+    const v = island.sim.layout.village;
+    c.snap(v.x + 0.5, v.z + 0.5);
+    // the controller stamps spending with performance.now (the frame clock in the game)
+    let t = performance.now() / 1000;
+    const step = (sec: number) => { for (let i = 0; i < Math.round(sec * 60); i++) { t += 1 / 60; c.update(1 / 60, t); } };
+    return { c, held, step, now: () => t };
+  }
+
+  it('attacks are free: swinging all fight long costs none, and stamina comes back meanwhile', () => {
+    const { c, step, now } = champ();
+    c.stamina = 40;
+    for (let i = 0; i < 10; i++) {
+      expect(c.trySwing(now())).toBe(true);
+      step(0.62);
+    }
+    // swinging didn't hold regeneration off: 6 s of it, from 0.5 s on, at 30/s
+    expect(c.stamina).toBe(100);
+  });
+
+  it('a last breath: with any stamina left a dodge or a jump goes through, and leaves you winded at 0', () => {
+    const { c, step, now } = champ();
+    c.stamina = 5;
+    expect(c.tryDodge(now())).toBe(true);
+    expect(c.stamina).toBe(0);
+    expect(c.winded).toBe(true);
+    // at 0, nothing to give: not until it starts coming back, half a second on
+    step(0.3);
+    expect(c.tryJump(now())).toBe(false);
+    step(0.3);
+    expect(c.stamina).toBeGreaterThan(0);
+    expect(c.tryJump(now())).toBe(true);
+  });
+
+  it('winded you can still swing, dodge and jump, but not sprint or raise the shield, until stamina is back to 25', () => {
+    const { c, held, step, now } = champ();
+    c.stamina = 1;
+    c.tryDodge(now());
+    step(0.7);
+    expect(c.winded).toBe(true);
+    expect(c.trySwing(now())).toBe(true);
+    c.setBlocking(true);
+    expect(c.blocking).toBe(false);
+    held.add('forward');
+    held.add('sprint');
+    step(0.1);
+    expect(c.sprinting).toBe(false);
+    expect(c.tryDodge(now())).toBe(true);
+    // 25 again: winded no more
+    held.clear();
+    step(1.5);
+    expect(c.winded).toBe(false);
+    c.setBlocking(true);
+    expect(c.blocking).toBe(true);
+  });
+
+  it('costs: a dodge 20, a jump 8, sprinting 10/s; nothing comes back for half a second after, then 30/s', () => {
+    const { c, held, step, now } = champ();
+    c.tryDodge(now());
+    expect(c.stamina).toBe(80);
+    step(0.6);
+    c.tryJump(now());
+    expect(c.stamina).toBeCloseTo(80 + 30 * 0.1 - 8, 0);
+    const s0 = c.stamina;
+    step(0.45);
+    expect(c.stamina).toBe(s0);
+    step(0.5);
+    expect(c.stamina).toBeCloseTo(s0 + 30 * 0.45, 0);
+    c.stamina = 100;
+    held.add('forward');
+    held.add('sprint');
+    step(2);
+    expect(c.stamina).toBeCloseTo(80, 0);
+  });
+});
+
 describe('aim zones', () => {
   it('maps aim points to zones by body plan', () => {
     expect(zoneFor('lilit', 0.9, 0, 0)).toBe('head');
