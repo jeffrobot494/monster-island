@@ -242,6 +242,10 @@ async function boot() {
       h('div', { class: 'settings-block' },
         range('Mouse sensitivity', 0.5, 6, 0.1, () => settings.sensitivity, (v) => (settings.sensitivity = v)),
         check('Invert mouse Y', () => settings.invertY, (v) => (settings.invertY = v)),
+        ...(controls.canHoldEsc ? [check('Fullscreen (Esc pauses and resumes; hold Esc to leave it)', () => settings.fullscreen, (v) => {
+          settings.fullscreen = v;
+          if (!v && document.fullscreenElement) void document.exitFullscreen();
+        })] : []),
         ...binds),
       h('h3', { class: 'serif' }, 'Video and audio'),
       h('div', { class: 'settings-block' },
@@ -403,7 +407,11 @@ async function boot() {
     }
   };
   window.addEventListener('keydown', (e) => {
-    if (e.code !== 'Escape') return;
+    // (holding Esc leaves fullscreen: its repeats aren't presses)
+    if (e.code !== 'Escape' || e.repeat) return;
+    // the page hears Esc with the pointer still captured only when fullscreen holds Esc for it: pause by letting it go,
+    // which lets the next Esc take it back
+    if (controls.locked) return controls.exitLock();
     if (map.open) map.toggle(false);
     else if (screenOpen()) return;
     // Esc again on the pause card: back into the game (not the Esc that just paused it, should the page hear that one)

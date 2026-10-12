@@ -138,7 +138,7 @@ export class HudView {
   /** The browser wouldn't give the mouse back for a key (it wants a click after Esc): say so on the card. */
   needClick() {
     const go = this.play.querySelector('.play-go');
-    if (go) go.textContent = 'Click to resume: the browser wants a click to give the mouse back';
+    if (go) go.textContent = 'Click to resume: outside fullscreen the browser wants a click to give the mouse back';
   }
 
   /** A one-time contextual hint (F28). */

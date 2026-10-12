@@ -25,12 +25,14 @@ export interface Settings {
   bindings: Record<ActionName, string>;
   /** over-the-shoulder camera instead of the champion's eyes */
   thirdPerson: boolean;
+  /** going into the game goes fullscreen, holding Esc for the game: Esc pauses and resumes (Chrome, Edge) */
+  fullscreen: boolean;
 }
 
 const KEY = 'hmfp:settings';
 
 export function loadSettings(): Settings {
-  const d: Settings = { sensitivity: 2.2, invertY: false, fov: 75, volume: 0.8, fxVolume: 1, shadows: 'high', bindings: { ...DEFAULT_BINDINGS }, thirdPerson: false };
+  const d: Settings = { sensitivity: 2.2, invertY: false, fov: 75, volume: 0.8, fxVolume: 1, shadows: 'high', bindings: { ...DEFAULT_BINDINGS }, thirdPerson: false, fullscreen: true };
   try {
     const s = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (s && typeof s === 'object') {
@@ -180,9 +182,22 @@ export class Controls {
     return this.locked || this.noLock;
   }
 
+  /**
+   * Fullscreen with the Esc key held by the page (the Keyboard Lock API: Chrome, Edge). Then a short Esc reaches the
+   * game instead of making the browser free the pointer, so the game frees it itself and can take it back on the next
+   * Esc with no click (a browser asks for one only after its own Esc). Holding Esc leaves fullscreen.
+   */
+  get canHoldEsc(): boolean {
+    return !!(navigator as { keyboard?: { lock?: unknown } }).keyboard?.lock && document.fullscreenEnabled && !this.host && !this.noLock;
+  }
+
   requestLock() {
     if (this.noLock) return;
     if (this.host) return this.host.request();
+    if (this.settings.fullscreen && this.canHoldEsc && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      (navigator as unknown as { keyboard: { lock(keys: string[]): Promise<void> } }).keyboard.lock(['Escape']).catch(() => {});
+    }
     // raw input where supported: sidesteps the OS acceleration path that produces most of the spikes
     const req = (opts?: object) => (this.el.requestPointerLock as (o?: object) => unknown).call(this.el, opts) as Promise<void> | undefined;
     let p: Promise<void> | undefined;
