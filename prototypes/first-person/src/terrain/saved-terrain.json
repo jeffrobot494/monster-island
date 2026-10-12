@@ -1,1 +1,20 @@
-null
+{
+  "format": 1,
+  "seed": "wisp-crypt-489",
+  "palette": "monster",
+  "cell": 1.5,
+  "heightScale": 4,
+  "terraceStep": 5,
+  "terraceSharp": 0.3,
+  "hillHeight": 22,
+  "warp": 8,
+  "canyons": 0.6,
+  "caves": 0.5,
+  "caverns": 0.4,
+  "spires": 0.75,
+  "islands": 0,
+  "arches": 0.5,
+  "jitter": 0.2,
+  "baseHeight": 12,
+  "waterLevel": 7
+}
