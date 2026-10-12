@@ -844,7 +844,14 @@ async function boot() {
   const reachM = () => (wield === 'spear' ? 3.4 : 2.4) + 2.5;
 
   let throwReady = 0;
-  function throwSpear(now: number) {
+  // R held: the spear drawn back (since `at`, s); let go (`release`) and it flies once the draw is done
+  let draw: { at: number; release: boolean } | null = null;
+  const DRAW_T = 0.3;
+  const endDraw = () => {
+    draw = null;
+    renderer.view.drawSpear(false);
+  };
+  function throwSpear(now: number, drawn = false) {
     const c = hud?.champion;
     if (!c || ctrlReason !== 'player' || c.dragging || now < throwReady) return;
     if (c.spears <= 0) {
@@ -862,7 +869,7 @@ async function boot() {
       const arch = renderer.ents.arch(hit.id);
       zone = arch ? zoneFor(arch, hit.h, hit.s, hit.f) : null;
     }
-    renderer.view.throwSpear();
+    renderer.view.throwSpear(drawn);
     audio.play('swing');
     input({ type: 'throw', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
     // that was the last one: the sword again (the sim does the same)
@@ -966,7 +973,7 @@ async function boot() {
       if (controls.mouseL && (!controller.climbing || controller.mode === 'mount')) {
         if (hud?.champion?.dragging) {
           if (controls.takeClick()) ui.toast(`${keyLabel(settings.bindings.interact)} to let go`, 'info', 2);
-        } else if (!pendingSwing && controller.trySwing(now, wield === 'spear' ? 0.8 : 0.6)) {
+        } else if (!pendingSwing && !draw && controller.trySwing(now, wield === 'spear' ? 0.8 : 0.6)) {
           if (wield === 'spear') renderer.view.thrust();
           else renderer.view.swing();
           audio.play('swing');
@@ -994,14 +1001,28 @@ async function boot() {
           hudView.hintOnce('spear');
         } else ui.toast('No spears. Pick one up where it fell, or take one from the village rack.', 'info', 3);
       }
-      // R throws the spear in hand (not from a wall or a body: there the spear thrusts)
+      // R: hold to draw the spear in hand back over the shoulder, let go to throw it (not from a wall or a body: there
+      // the spear thrusts)
       if (controls.take('throw') && !controller.climbing) {
-        if (wield === 'spear') throwSpear(now);
-        else ui.toast(`Take up a spear (${keyLabel(settings.bindings.spear)}) to throw it.`, 'info', 2.5);
+        if (wield !== 'spear') ui.toast(`Take up a spear (${keyLabel(settings.bindings.spear)}) to throw it.`, 'info', 2.5);
+        else if (!draw && now >= throwReady && ctrlReason === 'player' && !hud?.champion?.dragging) {
+          draw = { at: now, release: false };
+          renderer.view.drawSpear(true);
+        }
       }
+      if (draw && !controls.down('throw')) draw.release = true;
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);
     controls.clearFrame();
+    // the drawn spear flies once let go and fully drawn (a tap is a whole throw); whatever takes it out of hand, or
+    // the pointer away, ends the draw without a throw
+    if (draw) {
+      if (!controls.active || busy || paused || wield !== 'spear' || controller.climbing || ctrlReason !== 'player' || hud?.champion?.dragging) endDraw();
+      else if (draw.release && now >= draw.at + DRAW_T) {
+        endDraw();
+        throwSpear(now, true);
+      }
+    }
     if (pendingSwing && now >= pendingSwing.at && !paused) {
       pendingSwing = null;
       doSwingContact();

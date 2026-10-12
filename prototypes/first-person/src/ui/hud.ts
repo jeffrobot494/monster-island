@@ -35,7 +35,7 @@ const HINTS: Record<string, string> = {
   mount: 'You are on its body. WASD: climb over it · Shift + direction: lunge · Left mouse: strike where you hang (×2, the head ×3) · Right mouse: hold on · Space, looking away: jump off · C: let go.',
   hold: 'A body you ride shudders before it shakes. Right mouse: hold on (it costs stamina). Let go of it and you are thrown off.',
   grab: 'It reaches for you with its free arm. Climb out of its reach: down its back or its legs. Or sever that arm.',
-  spear: 'Spear in hand. Left mouse: thrust (a meter more reach than the sword, on a narrower line) · R: throw it · Right mouse: the shield, as with the sword. 1: back to the sword.',
+  spear: 'Spear in hand. Left mouse: thrust (a meter more reach than the sword, on a narrower line) · Hold R: draw it back, let go: throw it · Right mouse: the shield, as with the sword. 1: back to the sword.',
   lair: 'You found a lair. Monsters rest here outside their hours: catch one asleep for double damage.',
 };
 
@@ -123,7 +123,7 @@ export class HudView {
         row(keyLabel(b.interact), 'bind · drag · drop · altar'),
         row(keyLabel(b.finish), 'finish a downed monster'),
         row(`${keyLabel(b.sword)} / ${keyLabel(b.spear)}`, 'sword / spear'),
-        row(keyLabel(b.throw), 'throw the spear in hand (pick it up again after)'),
+        row(keyLabel(b.throw), 'hold to draw the spear back, let go to throw (pick it up again after)'),
         row(keyLabel(b.torch), 'torch'),
         row(keyLabel(b.inspect), 'inspect'),
         row(keyLabel(b.map), 'map'),

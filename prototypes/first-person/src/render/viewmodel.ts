@@ -25,6 +25,9 @@ export class ViewModel {
   private swingT = -1;
   private thrustT = -1;
   private throwT = -1;
+  /** R held: the spear drawn back over the shoulder (drawK 0..1 on the way there) */
+  private drawn = false;
+  private drawK = 0;
   private sword!: THREE.Group;
   private spear = new THREE.Group();
   private dodgeT = -1;
@@ -122,9 +125,16 @@ export class ViewModel {
   thrust() {
     this.thrustT = 0;
   }
-  throwSpear() {
-    this.throwT = 0;
+  /** Draw the spear back over the shoulder (R held), or bring it forward again. */
+  drawSpear(on: boolean) {
+    this.drawn = on;
+  }
+  /** Cast it: the whole throw, or from the drawn pose, which is the throw's own first part (0.4 of it), held. */
+  throwSpear(drawn = false) {
+    this.throwT = drawn ? 0.4 : 0;
     this.swingT = -1;
+    this.drawn = false;
+    this.drawK = 0;
   }
   dodge() {
     this.dodgeT = 0;
@@ -195,11 +205,16 @@ export class ViewModel {
         }
       }
     }
-    // a spear in hand: raised, its point toward the crosshair
+    // a spear in hand: raised, its point toward the crosshair; drawn back over the shoulder while R is held, in the
+    // pose the throw casts from
+    this.drawK = Math.max(0, Math.min(1, this.drawK + ((this.drawn ? 1 : -1) * dt) / 0.3));
     if (spear && this.throwT < 0) {
-      rx += 0.38;
-      ry += 0.3;
-      py += 0.06;
+      const a = Math.sin(this.drawK * Math.PI * 0.5), w = 1 - a;
+      rx += 0.38 * w + 0.35 * a;
+      ry += 0.3 * w - 0.25 * a;
+      rz += 0.2 * a;
+      py += 0.06 * w + 0.22 * a;
+      pz += 0.22 * a;
     }
     // thrust: draw the spear back a little, drive it forward along the view, recover
     if (this.thrustT >= 0) {

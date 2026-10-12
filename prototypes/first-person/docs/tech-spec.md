@@ -120,7 +120,7 @@ matters for a second desktop on the LAN.
 | Left mouse | Swing the sword, or thrust the spear (hold to keep striking when the cooldown allows) |
 | Right mouse (hold) | Raise the shield, with either weapon. On a monster's body: hold on |
 | 1 / 2 | Sword / spear; the shield goes with either. The sim keeps what's in hand (`wield` input, saved with the champion; the HUD reports it and the client follows once a switch has had 0.6 s to land). A thrust: reach 3.4 m, ±30° (±20° for the nearest-target fallback), 15 piercing every 0.8 s, not the gods' `setWeapon` (that's the sword). No spears left (thrown, dropped) or a new champion: the sword |
-| R | Throw the spear in hand (not from a wall or a monster's body, where the spear thrusts) |
+| R | Hold to draw the spear in hand back (0.3 s: the throw's first part, held), let go to throw it, aimed by the look ray at that moment; a tap throws once the draw is done. Switching weapons, a wall or a monster's body, dragging, or losing the pointer ends the draw without a throw; no thrust while drawn |
 | E | Interact with what the crosshair targets (§3.3) |
 | F | Finish a targeted downed monster |
 | T | Torch on/off (it takes the shield hand) |

@@ -31,7 +31,7 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | Left click | swing the sword, or thrust the spear. **Where you aim picks the wound**: head (×1.5), arms, legs, or the monster's signature limb (club arm, horns, wings, jaws…) |
 | Right mouse (hold) | raise the shield, with either weapon: blocks 75 % of a blow from the front, costs stamina |
 | 1 / 2 | sword / spear. The spear's thrust reaches 3.4 m (the sword 2.4 m) on a narrower line, for 15 piercing every 0.8 s (the sword 12 every 0.6 s). The shield goes with either. The gods' blessings on the sword (`setWeapon`) don't carry to the spear |
-| R | throw the spear in hand. Spears are real items: you carry up to 3, a thrust keeps yours, and a thrown one lies where it fell until someone picks it up (walk over it, or E). The village rack holds 6 more. Out of spears, you're back to the sword |
+| R | hold to draw the spear in hand back over your shoulder, let go to throw it (aimed where you look as you let go; a tap throws too). Spears are real items: you carry up to 3, a thrust keeps yours, and a thrown one lies where it fell until someone picks it up (walk over it, or E). The village rack holds 6 more. Out of spears, you're back to the sword |
 | Space | jump (costs a little stamina; no jumping while dragging) |
 | C | dodge: a quick dash with a moment of invulnerability |
 | E | interact: bind a downed monster, drag a body, let go, open the altar, talk |
