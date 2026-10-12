@@ -373,6 +373,8 @@ async function boot() {
     if (!controls.active) hudView.needClick();
   };
   controls.onLockChange = (locked) => {
+    // let go: stop on the spot and put the sim's champion there first, so it holds him exactly where you are
+    if (!locked) controller.release();
     input({ type: 'lock', on: locked });
     if (locked) firstPlay = false;
     updateLockUi();
@@ -525,8 +527,9 @@ async function boot() {
       if (!f.correction) controller.yaw = f.champ.yaw;
     }
     controller.reason = f.ctrlReason;
-    // in hold (the pointer free) on a wall or mid-fall: the client keeps the climber where it is and finishes the fall
-    const keep = f.ctrlReason === 'hold' && (controller.climbing || controller.air);
+    // in hold (the pointer free: a screen open, the pause) the view stays where you let go, which is where the sim holds
+    // the champion (controller.release); on a wall or mid-fall the client also finishes the fall
+    const keep = f.ctrlReason === 'hold';
     if (f.ctrl === 'sim' && f.champ && !keep) {
       controller.x = f.champ.x;
       controller.z = f.champ.z;
@@ -1049,7 +1052,7 @@ async function boot() {
         renderer.view.climbing = controller.climbing && controller.mode !== 'mount';
         ridingTells();
       }
-      if (controller.ctrl === 'sim' && hud?.champion && !(ctrlReason === 'hold' && (controller.climbing || controller.air))) {
+      if (controller.ctrl === 'sim' && hud?.champion && ctrlReason !== 'hold') {
         const cv = renderer.ents.views.get(hud.champion.id);
         if (cv) {
           controller.x = cv.pos.x / M;

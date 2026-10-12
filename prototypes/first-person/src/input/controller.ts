@@ -369,6 +369,23 @@ export class ChampionController {
     return true;
   }
 
+  /**
+   * The pointer is let go (a screen opens, Esc): stop where you stand and tell the sim right away, before the release
+   * reaches it, so it holds the champion on this very spot and the view needn't follow it anywhere. A climber or a
+   * faller carries on (the client finishes the fall).
+   */
+  release(now = performance.now() / 1000) {
+    if (this.mode === 'walk') {
+      this.vx = this.vz = 0;
+      this.dodgeT = -1;
+      this.moveSpeed = 0;
+    }
+    if (this.ctrl === 'player') {
+      this.lastPose = -Infinity;
+      this.sendPose(now);
+    }
+  }
+
   /** Stamina cost of a blocked hit (from the sim). */
   blockedHit(prevented: number) {
     this.stamina = Math.max(0, this.stamina - prevented * 0.5);
