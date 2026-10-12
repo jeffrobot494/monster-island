@@ -8,7 +8,7 @@ import { JOB_TINT } from './core-defs';
 import { doorOf } from './village';
 import { M, WATER_Y } from './ground';
 import { axisDist, axisPoint, bearingOff, bodyR, champReachable, feetY, frontPoint, heightM } from './body';
-import { champThrow, setSpears, spearsOf, takeSpear } from './spears';
+import { champThrow, spearsOf, takeSpear } from './spears';
 import { capZone, climbable, RIDE } from './climb-body';
 
 /** Internal orders: used by autopilot and by dev/test scripts. */
@@ -27,12 +27,16 @@ export type ChampInput =
   | { type: 'land'; impact: number; x?: number; z?: number }
   | { type: 'swing'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
   | { type: 'throw'; yaw: number; pitch: number; targetId: number | null; zone: Zone | null }
+  /** what's in hand: the sword (and shield), or a spear to thrust and throw */
+  | { type: 'wield'; weapon: Wield }
   | { type: 'dodge' }
   | { type: 'block'; on: boolean }
   | { type: 'interact'; id: number | null }
   | { type: 'finish'; id: number | null }
   | { type: 'torch'; on: boolean }
   | { type: 'lock'; on: boolean };
+
+export type Wield = 'sword' | 'spear';
 
 export type CtrlReason = 'player' | 'hold' | 'autopilot' | 'downed' | 'captive' | 'dead';
 
@@ -54,6 +58,8 @@ export interface CombatEvent {
 const SUCCESSION_TICKS = 36_000; // 1 real hour (R21)
 const IDLE_TICKS = 3000; // 5 real minutes (R19, F9)
 export const SWORD_M = 2.4;
+/** a spear's thrust: a meter more reach than the sword, on a narrower line */
+export const SPEAR_M = 3.4;
 export const INTERACT_M = 3.0;
 const SPRINT_MS = 8.8;
 const CRAWL_MS = 0.8;
@@ -64,7 +70,10 @@ interface ChampState {
   swingReady: number;
   diedTick: number;
   altarNotified: boolean;
+  /** the sword's damage (the gods can bless it: api.champion.setWeapon) */
   weapon: { type: string; mul: number };
+  /** in hand: the sword, or one of the spears carried (none left, it's the sword again) */
+  wield: Wield;
   epoch: number;
   locked: boolean;
   blocking: boolean;
@@ -91,7 +100,7 @@ export function cs(sim: Sim): ChampState {
   const s = sim as unknown as { champState?: ChampState };
   return (s.champState ??= {
     lastInput: 0, lastThreat: -9999, swingReady: 0, diedTick: 0, altarNotified: false, weapon: { type: 'slash', mul: 1 },
-    epoch: 1, locked: true, blocking: false, torch: false, iframesUntil: 0, dodgeTick: -99, lastPoseTick: 0, pitch: 0,
+    wield: 'sword', epoch: 1, locked: true, blocking: false, torch: false, iframesUntil: 0, dodgeTick: -99, lastPoseTick: 0, pitch: 0,
     poses: [], trail: [], reason: 'player', correction: null, combat: [], ambushed: [],
   });
 }
@@ -231,6 +240,7 @@ export function processInputs(sim: Sim) {
   const list = sim.inputs;
   sim.inputs = [];
   const c = sim.champion();
+  if (S.wield === 'spear' && (!c || spearsOf(c) <= 0)) S.wield = 'sword';
   for (const i of list) {
     if (i.type === 'lock') {
       S.locked = i.on;
@@ -270,9 +280,19 @@ export function processInputs(sim: Sim) {
       case 'swing': swing(sim, c, i); break;
       case 'throw':
         if (c.state === 'downed' || sim.dragging >= 0 || sim.tick < S.swingReady - 1) break;
+        // on a body it's a thrust with the spear in hand (left mouse); right mouse is holding on
+        if (c.human?.mount) break;
         S.swingReady = sim.tick + 8;
         S.blocking = false;
-        sim.actionError = c.human?.mount ? stabFromBody(sim, c) : champThrow(sim, c, i);
+        sim.actionError = champThrow(sim, c, i);
+        if (spearsOf(c) <= 0) S.wield = 'sword';
+        break;
+      case 'wield':
+        if (i.weapon === 'spear' && spearsOf(c) <= 0) sim.actionError = 'No spears. Pick one up where it fell, or take one from the village rack.';
+        else {
+          S.wield = i.weapon === 'spear' ? 'spear' : 'sword';
+          if (S.wield === 'spear' && !c.human?.mount) S.blocking = false; // no shield with a spear
+        }
         break;
       case 'dodge':
         S.iframesUntil = sim.tick + 3;
@@ -280,7 +300,8 @@ export function processInputs(sim: Sim) {
         break;
       case 'block':
         // on a monster it's holding on (docs/climbing-phase4-plan.md), which a torch doesn't stop
-        S.blocking = i.on && (!S.torch || !!c.human?.mount) && sim.dragging < 0;
+        // no shield with a spear in hand
+        S.blocking = i.on && (!!c.human?.mount || (!S.torch && S.wield !== 'spear')) && sim.dragging < 0;
         break;
       case 'interact': sim.actionError = interact(sim, c, i.id); break;
       case 'finish': sim.actionError = finish(sim, c, i.id); break;
@@ -390,13 +411,27 @@ function climbTile(sim: Sim, x: number, z: number, climb: 'wall' | 'perch' | und
   return false;
 }
 
+/**
+ * A blow with what's in hand. The sword: 12 a swing every 0.6 s, the gods' blessing on it, reach 2.4 m and a wide arc.
+ * The spear's thrust: 15 every 0.8 s, piercing, reach 3.4 m on a narrow line (±30° for the target under the
+ * crosshair, ±20° for the nearest one).
+ */
+function blowOf(sim: Sim, c: Entity) {
+  const S = cs(sim);
+  const k = (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c);
+  return S.wield === 'spear'
+    ? { reach: SPEAR_M, arc: 30, near: 20, dmg: 15 * k, type: 'pierce', ticks: 8 }
+    : { reach: SWORD_M, arc: 70, near: 50, dmg: 12 * k * S.weapon.mul, type: S.weapon.type, ticks: 6 };
+}
+
 function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; zone: Zone | null }) {
   const S = cs(sim);
-  // the client paces swings at 0.6 s; allow a tick of jitter
+  // the client paces swings at 0.6 s (thrusts at 0.8 s); allow a tick of jitter
   if (c.state === 'downed' || sim.dragging >= 0 || sim.tick < S.swingReady - 1) return;
-  S.swingReady = sim.tick + 6;
+  const w = blowOf(sim, c);
+  S.swingReady = sim.tick + w.ticks;
   S.blocking = false;
-  if (c.human?.mount) return strikeFromBody(sim, c, 12 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c) * S.weapon.mul, S.weapon.type);
+  if (c.human?.mount) return strikeFromBody(sim, c, w.dmg, w.type);
   const ok = (t: Entity | undefined): t is Entity => {
     if (!t || t.hp <= 0 || !sim.ents.has(t.id)) return false;
     const hittable = t.kind === 'monster' ? t.state !== 'downed' && t.state !== 'bound' : t.tags.includes('hittable');
@@ -404,16 +439,16 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
     const p = axisPoint(t, c.x, c.z);
     const dist = axisDist(t, c.x, c.z) - bodyR(t);
     if (sim.grid.base) {
-      // the sword's vertical band, from the champion's hand
+      // the weapon's vertical band, from the champion's hand
       const hand = feetY(sim.ground, c) + 1.65, ft = feetY(sim.ground, t);
-      if (ft > hand + SWORD_M || ft + heightM(t) < hand - SWORD_M) return false;
+      if (ft > hand + w.reach || ft + heightM(t) < hand - w.reach) return false;
     }
-    return dist <= (SWORD_M + 1.0) / M && bearingOff(i.yaw, c.x, c.z, p.x, p.z) <= (70 * Math.PI) / 180 + Math.atan2(bodyR(t), Math.max(0.05, Math.hypot(p.x - c.x, p.z - c.z)));
+    return dist <= (w.reach + 1.0) / M && bearingOff(i.yaw, c.x, c.z, p.x, p.z) <= (w.arc * Math.PI) / 180 + Math.atan2(bodyR(t), Math.max(0.05, Math.hypot(p.x - c.x, p.z - c.z)));
   };
   let t = i.targetId !== null ? sim.ents.get(i.targetId) : undefined;
   let zone: Zone | undefined = i.zone ?? undefined;
   if (!ok(t)) {
-    // fallback: nearest bearing within the ±50° arc and plain reach
+    // fallback: nearest bearing within the narrower arc and plain reach
     t = undefined;
     zone = undefined;
     let best = Infinity;
@@ -421,7 +456,7 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
       if (m.kind !== 'monster' || !ok(m)) continue;
       const p = axisPoint(m, c.x, c.z);
       const off = bearingOff(i.yaw, c.x, c.z, p.x, p.z);
-      if (off > (50 * Math.PI) / 180 || axisDist(m, c.x, c.z) - bodyR(m) > SWORD_M / M) continue;
+      if (off > (w.near * Math.PI) / 180 || axisDist(m, c.x, c.z) - bodyR(m) > w.reach / M) continue;
       if (off < best) { best = off; t = m; }
     }
   }
@@ -430,7 +465,7 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
     return;
   }
   if (zone && t.zones && !t.zones[zone]) zone = undefined;
-  let dmg = 12 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c) * S.weapon.mul;
+  let dmg = w.dmg;
   if (zone === 'head') dmg *= 1.5;
   let mul = 1;
   if (t.monster && t.state === 'rest' && !S.ambushed.includes(t.id)) {
@@ -442,7 +477,7 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
     t.target = c.id;
     delete t.monster.ignoreChampUntil; // hit it and the fight is back on
   }
-  const r = applyDamage(sim, t, dmg, { type: S.weapon.type, sourceId: c.id, mul, zone });
+  const r = applyDamage(sim, t, dmg, { type: w.type, sourceId: c.id, mul, zone });
   if (t.monster && sim.ents.has(t.id) && t.state === 'rest') t.state = 'fight';
   S.combat.push({ kind: 'hit', id: t.id, zone: r.zone, x: t.x, z: t.z, killed: r.killed, severed: r.severed, downed: r.downed, amount: Math.round(r.dealt) });
 }
@@ -475,13 +510,6 @@ function strikeFromBody(sim: Sim, c: Entity, base: number, type: string) {
   S.combat.push({ kind: 'hit', id: t.id, zone: r.zone, x: t.x, z: t.z, killed: r.killed, severed: r.severed, downed: r.downed, amount: Math.round(r.dealt) });
 }
 
-/** A spear thrown from a monster's body: a thrust at point-blank range, and the spear stays in the wound. */
-function stabFromBody(sim: Sim, c: Entity): string | null {
-  if (spearsOf(c) <= 0) return 'No spears left. Pick one up: the village rack has more.';
-  setSpears(c, spearsOf(c) - 1);
-  strikeFromBody(sim, c, 24 * (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c), 'pierce');
-  return null;
-}
 
 function near(sim: Sim, c: Entity, t: Entity, m = INTERACT_M) {
   if (sim.grid.base && Math.abs(feetY(sim.ground, t) - feetY(sim.ground, c)) >= 3) return false;
@@ -829,6 +857,7 @@ export function crown(sim: Sim) {
   S.epoch++;
   S.trail = [];
   S.poses = [];
+  S.wield = 'sword';
   sim.log(`${c.name}, once a ${job}, takes up the bronze sword. The village has a new champion (level ${c.level}).`, 3, 'core', 'champion');
   sim.alert({ kind: 'champion', text: `${c.name} is your new champion.` });
 }

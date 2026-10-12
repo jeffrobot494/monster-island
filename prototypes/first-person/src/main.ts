@@ -598,6 +598,9 @@ async function boot() {
           controller.speedMul = hud.champion.speedMul;
           controller.dragging = !!hud.champion.dragging;
           controller.torch = hud.champion.torch;
+          // the sim has the last word on what's in hand (out of spears, a new champion, a load) once a switch has
+          // had time to reach it
+          if (performance.now() - wieldAt > 600) setWield(hud.champion.wield, false);
           renderer.view.torchOn = hud.champion.torch;
           renderer.view.dragging = !!hud.champion.dragging;
           if (hud.champion.dragging) hudView.hintOnce('drag');
@@ -766,7 +769,7 @@ async function boot() {
       return;
     }
     const { eye, dir } = renderer.lookRay();
-    const hit = renderer.ents.pick(eye, dir, 2.4 + 2.5, champId());
+    const hit = renderer.ents.pick(eye, dir, reachM(), champId());
     let targetId: number | null = null, zone: Zone | null = null;
     if (hit) {
       const v = renderer.ents.views.get(hit.id);
@@ -788,6 +791,18 @@ async function boot() {
     if (targetId === null) audio.play('whiff');
     input({ type: 'swing', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
   }
+
+  // in hand: the sword (and shield), or a spear to thrust (left mouse) and throw (right mouse)
+  let wield: 'sword' | 'spear' = 'sword', wieldAt = -1e9;
+  function setWield(w: 'sword' | 'spear', send = true) {
+    if (send) wieldAt = performance.now();
+    if (w === wield) return;
+    wield = w;
+    renderer.view.weapon = w;
+    if (send) input({ type: 'wield', weapon: w });
+  }
+  /** how far a blow reaches from the eye: the sim's SWORD_M or SPEAR_M, plus a body's depth */
+  const reachM = () => (wield === 'spear' ? 3.4 : 2.4) + 2.5;
 
   let throwReady = 0;
   function throwSpear(now: number) {
@@ -811,6 +826,8 @@ async function boot() {
     renderer.view.throwSpear();
     audio.play('swing');
     input({ type: 'throw', yaw: controller.yaw, pitch: controller.pitch, targetId, zone });
+    // that was the last one: the sword again (the sim does the same)
+    if (c.spears <= 1) setWield('sword');
   }
 
   function interact() {
@@ -893,6 +910,7 @@ async function boot() {
     const fdt = Math.min(0.05, Math.max(0.001, now - lastNow));
     lastNow = now;
     const busy = screenOpen();
+    const clickR = controls.takeClickR();
     // one-shot actions
     if (controls.active && !busy && !paused) {
       // on a wall, Space jumps off or lunges up and the dodge key lets go
@@ -910,21 +928,32 @@ async function boot() {
       if (controls.mouseL && (!controller.climbing || controller.mode === 'mount')) {
         if (hud?.champion?.dragging) {
           if (controls.takeClick()) ui.toast(`${keyLabel(settings.bindings.interact)} to let go`, 'info', 2);
-        } else if (!pendingSwing && controller.trySwing(now)) {
-          renderer.view.swing();
+        } else if (!pendingSwing && controller.trySwing(now, wield === 'spear' ? 0.8 : 0.6)) {
+          if (wield === 'spear') renderer.view.thrust();
+          else renderer.view.swing();
           audio.play('swing');
           pendingSwing = { at: now + 0.12 };
         }
       }
       controls.takeClick();
-      controller.setBlocking(controls.mouseR);
+      // right mouse: the shield, or with a spear in hand a throw; on a body it's holding on, whatever is in hand
+      const onBody = controller.mode === 'mount';
+      controller.setBlocking(controls.mouseR && (wield === 'sword' || onBody));
+      if (clickR && wield === 'spear' && !controller.climbing) throwSpear(now);
       if (controls.take('interact') && !controller.climbing) interact();
       if (controls.take('finish') && look && !controller.climbing) {
         const v = renderer.ents.views.get(look.id);
         if (v && v.flags & F_DOWNED) input({ type: 'finish', id: look.id });
       }
       if (controls.take('torch')) input({ type: 'torch', on: !hud?.champion?.torch });
-      if (controls.take('throw') && (!controller.climbing || (controller.mode === 'mount' && !controller.holding))) throwSpear(now);
+      // 1 and 2: the sword (and shield), or a spear
+      if (controls.take('sword')) setWield('sword');
+      if (controls.take('spear')) {
+        if ((hud?.champion?.spears ?? 0) > 0) {
+          setWield('spear');
+          hudView.hintOnce('spear');
+        } else ui.toast('No spears. Pick one up where it fell, or take one from the village rack.', 'info', 3);
+      }
       if (controls.take('inspect') && look) sim.post({ type: 'inspect', id: look.id });
     } else if (controller.blocking) controller.setBlocking(false);
     controls.clearFrame();
@@ -1008,7 +1037,7 @@ async function boot() {
     const { eye, dir } = renderer.lookRay();
     look = ctrlReason === 'dead' ? null : renderer.ents.pick(eye, dir, 40, champId());
     const info = look ? targetInfo(look.id) : null;
-    if (info && look && info.hostile && !info.downed && look.t <= 2.4 + 2.5) {
+    if (info && look && info.hostile && !info.downed && look.t <= reachM()) {
       const arch = renderer.ents.arch(look.id);
       info.zone = arch ? zoneFor(arch, look.h, look.s, look.f) : null;
     }
@@ -1034,7 +1063,7 @@ async function boot() {
 
     if (performance.now() - lastHud > 100) {
       lastHud = performance.now();
-      if (hud) hudView.setHud(hud, controller.stamina, controller.winded);
+      if (hud) hudView.setHud(hud, controller.stamina, controller.winded, wield);
       hudView.setDowned(ctrlReason === 'downed' ? 'You are beaten down. Crawl away (WASD) — you will rise in a few seconds.' : ctrlReason === 'captive' ? 'You are being carried to the High Place!' : null);
       const L = renderer.layout;
       const marks: CompassMarker[] = [];

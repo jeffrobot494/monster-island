@@ -1,7 +1,7 @@
 // Spears as real items, flyers that soar and spot from far, and the nightly raid.
 import { describe, it, expect } from 'vitest';
 import { Island } from '../src/sim/island';
-import { cs } from '../src/sim/champion';
+import { cs, crown } from '../src/sim/champion';
 import { CRUISE_M, startRaid, raidHour, RAID_CHANCE } from '../src/sim/monster-ai';
 import { houseBreached } from '../src/sim/village';
 import { RACK_SPEARS, spearsOf } from '../src/sim/spears';
@@ -9,7 +9,8 @@ import { serializeCore, deserializeCore } from '../src/sim/serialize';
 import { generateMonsters } from '../src/sim/monsters-gen';
 import type { Entity } from '../src/sim/types';
 import { now, START } from './helpers';
-import { kill } from '../src/sim/combat';
+import { armFactor, kill } from '../src/sim/combat';
+import { bodyR } from '../src/sim/body';
 
 const make = (seed = 1) => Island.create(seed, START, 1, { now });
 const spears = (sim: Island['sim']) => [...sim.ents.values()].filter((e) => e.kind === 'spear');
@@ -134,6 +135,108 @@ describe('spears', () => {
     const restored = deserializeCore(JSON.parse(JSON.stringify(serializeCore(sim))));
     expect(spears(restored).length).toBe(spears(sim).length);
     expect(spearsOf(restored.champion()!)).toBe(1);
+  });
+});
+
+describe('the spear in hand', () => {
+  const M = 8;
+  /** The champion beside a monster in the open, nothing in the way, and the monster put at bearing b (rad), d m from
+   *  its body, side-on (so the nearest point of its body is its middle). */
+  function duel(seed = 4) {
+    const island = make(seed);
+    const sim = island.sim;
+    sim.invincible = true;
+    const c = sim.champion()!;
+    const m = sim.monsters().find((x) => x.monster!.region !== 6 && !x.monster!.flies)!;
+    place(sim, c, m.x + 0.5, m.z);
+    m.state = 'prowl';
+    island.step();
+    const put = (b: number, d: number) => {
+      const r = d / M + bodyR(m);
+      m.x = c.x + Math.sin(b) * r;
+      m.z = c.z + Math.cos(b) * r;
+      m.yaw = b + Math.PI / 2;
+      sim.stop(m);
+    };
+    const blow = (weapon: 'sword' | 'spear') => {
+      cs(sim).swingReady = 0;
+      const hp = m.hp;
+      sim.inputs.push({ type: 'wield', weapon }, { type: 'swing', yaw: 0, pitch: 0, targetId: m.id, zone: 'torso' });
+      island.step();
+      return hp - m.hp;
+    };
+    return { island, sim, c, m, put, blow };
+  }
+
+  it('a thrust reaches a meter further than the sword, on a narrower line, for 15 piercing', () => {
+    const { sim, c, m, put, blow } = duel();
+    c.human!.spears = 1;
+    const k = (1 + 0.1 * (c.level - 1)) * sim.stat(c, 'strength') * armFactor(c);
+    // 4 m off: out of the sword's reach, in the spear's
+    put(0, 4);
+    expect(blow('sword')).toBe(0);
+    expect(blow('spear')).toBeCloseTo(15 * k, 5);
+    // 15° wider than the spear's line takes (30° and the body's width), well inside the sword's (70°)
+    put(0, 2);
+    const wide = Math.PI / 6 + Math.atan2(bodyR(m), 2 / M + bodyR(m)) + Math.PI / 12;
+    put(wide, 2);
+    expect(blow('spear')).toBe(0);
+    expect(blow('sword')).toBeCloseTo(12 * k * cs(sim).weapon.mul, 5);
+    // a thrust still uses the spear, and keeps it
+    expect(c.human!.spears).toBe(1);
+  });
+
+  it('no spear, no spear in hand; the last one thrown, or a new champion, puts the sword back; no shield with a spear', () => {
+    const { island, sim, c } = duel(5);
+    const S = cs(sim);
+    c.human!.spears = 0;
+    sim.inputs.push({ type: 'wield', weapon: 'spear' });
+    island.step();
+    expect(S.wield).toBe('sword');
+    expect(sim.actionError).toMatch(/No spears/);
+    // a spear in hand: the shield stays down; the sword: up it comes
+    c.human!.spears = 1;
+    sim.inputs.push({ type: 'wield', weapon: 'spear' }, { type: 'block', on: true });
+    island.step();
+    expect(S.wield).toBe('spear');
+    expect(S.blocking).toBe(false);
+    sim.inputs.push({ type: 'wield', weapon: 'sword' }, { type: 'block', on: true });
+    island.step();
+    expect(S.blocking).toBe(true);
+    // thrown away: it's the sword again
+    sim.inputs.push({ type: 'block', on: false }, { type: 'wield', weapon: 'spear' });
+    island.step();
+    S.swingReady = 0;
+    sim.inputs.push({ type: 'throw', yaw: 0, pitch: 0.2, targetId: null, zone: null });
+    island.step();
+    expect(spearsOf(c)).toBe(0);
+    expect(S.wield).toBe('sword');
+    // lost some other way (dropped): the next tick
+    c.human!.spears = 1;
+    sim.inputs.push({ type: 'wield', weapon: 'spear' });
+    island.step();
+    c.human!.spears = 0;
+    island.step();
+    expect(S.wield).toBe('sword');
+    // a new champion takes up the sword
+    c.human!.spears = 1;
+    sim.inputs.push({ type: 'wield', weapon: 'spear' });
+    island.step();
+    expect(S.wield).toBe('spear');
+    kill(sim, c, { amount: c.hp, type: 'dev', sourceId: -1, sourceKind: 'none' });
+    crown(sim);
+    expect(S.wield).toBe('sword');
+  });
+
+  it('what is in hand is saved; saves from before the spear load with the sword', () => {
+    const { island, sim, c } = duel(6);
+    c.human!.spears = 1;
+    sim.inputs.push({ type: 'wield', weapon: 'spear' });
+    island.step();
+    const core = serializeCore(sim);
+    expect((deserializeCore(core) as unknown as { champState: { wield: string } }).champState.wield).toBe('spear');
+    delete (core.champState as { wield?: string }).wield;
+    expect((deserializeCore(core) as unknown as { champState: { wield: string } }).champState.wield).toBe('sword');
   });
 });
 

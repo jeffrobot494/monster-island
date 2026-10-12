@@ -27,13 +27,13 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | Mouse | look (click the game to capture the mouse) |
 | W A S D | move |
 | Shift | sprint (uses stamina) |
-| Left click | swing the sword. **Where you aim picks the wound**: head (×1.5), arms, legs, or the monster's signature limb (club arm, horns, wings, jaws…) |
-| Right mouse (hold) | raise the shield: blocks 75 % of a blow from the front, costs stamina |
+| Left click | swing the sword, or thrust the spear. **Where you aim picks the wound**: head (×1.5), arms, legs, or the monster's signature limb (club arm, horns, wings, jaws…) |
+| Right mouse | with the sword, hold to raise the shield: blocks 75 % of a blow from the front, costs stamina. With the spear, throw it |
+| 1 / 2 | sword (and shield) / spear. The spear's thrust reaches 3.4 m (the sword 2.4 m) on a narrower line, for 15 piercing every 0.8 s (the sword 12 every 0.6 s); no shield with it. The gods' blessings on the sword (`setWeapon`) don't carry to it. Spears are real items: you carry up to 3, a thrust keeps yours, and a thrown one lies where it fell until someone picks it up (walk over it, or E). The village rack holds 6 more. Out of spears, you're back to the sword |
 | Space | jump (costs a little stamina; no jumping while dragging) |
 | C | dodge: a quick dash with a moment of invulnerability |
 | E | interact: bind a downed monster, drag a body, let go, open the altar, talk |
 | F | finish a downed monster |
-| R | throw a spear. Spears are real items: you carry up to 3, and a thrown one lies where it fell until someone picks it up (walk over it, or E). The village rack holds 6 more |
 | T | torch on/off (it takes your shield hand) |
 | Q | inspect what you're looking at |
 | V | first / third person camera (also the button at the bottom right) |
@@ -109,8 +109,9 @@ saraph.
     on the front of its body or thighs. If you're still there when its hand closes, it tears you off and hurls you
     away. Climb round its back or down its shins, or sever that arm.
 - **Strike from its body:** **left click** hits the part you're on (a leg, the body, an arm, a wing), at double
-  damage. The head takes triple and staggers it for 2 s (no shakes, no grab). **R** stabs with a spear at point-blank
-  range: the same doubling, and the spear stays in the wound. Sever the limb you're on and you fall with it.
+  damage. The head takes triple and staggers it for 2 s (no shakes, no grab). With the spear in hand (2) it's a thrust:
+  the same doubling, and the spear stays in your hand. Right mouse is still holding on. Sever the limb you're on and
+  you fall with it.
 - **Flyers carry you off.**
   - **Where it goes:** a ziz or saraph you're on takes off. It climbs to the nearest floating isle and circles a few
     meters over its top: let go (C) to land on it. Get on one from up on an isle and it flies you home to its lair.
@@ -119,7 +120,7 @@ saraph.
     rolls.
   - **Bringing it down:** sever its wings (its signature limb) while you ride, and it crash-lands, downed.
   - **The isles:** floating isles can only be reached this way.
-- You can't block, use E/F, or swing on a wall. On a monster you can swing and throw.
+- You can't block, use E/F, or swing on a wall. On a monster you can swing or thrust, but not throw.
 
 ## URL parameters (dev)
 

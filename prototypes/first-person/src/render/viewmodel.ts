@@ -1,4 +1,5 @@
-// The first-person view model (spec §7.6): sword arm and shield or torch, drawn in its own scene on top of the world.
+// The first-person view model (spec §7.6): sword arm and shield or torch, or a spear, drawn in its own scene on top of
+// the world.
 import * as THREE from 'three';
 
 const mat = (c: string, e = 0) => {
@@ -22,6 +23,7 @@ export class ViewModel {
   private ambient = new THREE.AmbientLight('#ffffff', 0.6);
   private sun = new THREE.DirectionalLight('#ffffff', 0.9);
   private swingT = -1;
+  private thrustT = -1;
   private throwT = -1;
   private sword!: THREE.Group;
   private spear = new THREE.Group();
@@ -36,6 +38,8 @@ export class ViewModel {
   private bobT = 0;
   torchOn = false;
   dragging = false;
+  /** in hand: the sword (and the shield), or a spear (no shield) */
+  weapon: 'sword' | 'spear' = 'sword';
   /** on a wall: hands are on the rock, so the weapons drop out of view */
   climbing = false;
   private climbK = 0;
@@ -63,7 +67,7 @@ export class ViewModel {
     swordPivot.rotation.x = -0.25;
     this.right.add(arm, sleeve, swordPivot);
     this.sword = swordPivot;
-    // a spear, shown while throwing: held overhand along the forearm, point forward
+    // a spear, in hand or while throwing: along the forearm, point forward
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.5, 6), mat('#7a5634'));
     shaft.rotation.x = Math.PI / 2;
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.03, 0.14, 6), mat('#d0a050', 0.08));
@@ -115,6 +119,9 @@ export class ViewModel {
   swing() {
     this.swingT = 0;
   }
+  thrust() {
+    this.thrustT = 0;
+  }
   throwSpear() {
     this.throwT = 0;
     this.swingT = -1;
@@ -139,7 +146,8 @@ export class ViewModel {
     this.ambient.intensity = 0.25 + 0.5 * lightLevel + (this.torchOn ? 0.25 : 0);
     this.sun.intensity = 0.3 + 0.7 * lightLevel;
     this.torch.visible = this.torchOn;
-    this.shield.visible = !this.torchOn;
+    const spear = this.weapon === 'spear';
+    this.shield.visible = !this.torchOn && !spear;
     this.rope.visible = this.dragging;
     this.blockK += ((blocking && !this.torchOn ? 1 : 0) - this.blockK) * Math.min(1, dt * 14);
     const moving = moveSpeed > 0.5;
@@ -187,9 +195,34 @@ export class ViewModel {
         }
       }
     }
+    // a spear in hand: raised, its point toward the crosshair
+    if (spear && this.throwT < 0) {
+      rx += 0.38;
+      ry += 0.3;
+      py += 0.06;
+    }
+    // thrust: draw the spear back a little, drive it forward along the view, recover
+    if (this.thrustT >= 0) {
+      this.thrustT += sdt / 0.4;
+      const k = this.thrustT;
+      if (k >= 1) this.thrustT = -1;
+      else if (k < 0.25) {
+        const a = k / 0.25;
+        pz += 0.1 * a;
+        px += 0.03 * a;
+      } else {
+        const a = Math.min(1, (k - 0.25) / 0.2);
+        const e = 1 - Math.pow(1 - a, 3);
+        const back = k > 0.55 ? (k - 0.55) / 0.45 : 0;
+        // along the shaft, toward the crosshair
+        pz += (0.1 - 0.42 * e) * (1 - back);
+        px += (0.03 - 0.15 * e) * (1 - back);
+        py += 0.1 * e * (1 - back);
+      }
+    }
     // throw: draw the spear back over the shoulder, then cast it
-    this.spear.visible = this.throwT >= 0 && this.throwT < 0.55;
-    this.sword.visible = this.throwT < 0;
+    this.spear.visible = this.throwT >= 0 ? this.throwT < 0.55 : spear;
+    this.sword.visible = this.throwT < 0 && !spear;
     if (this.throwT >= 0) {
       this.throwT += dt / 0.6;
       const k = this.throwT;
@@ -212,8 +245,9 @@ export class ViewModel {
     }
     this.right.position.set(px, py, pz);
     this.right.rotation.set(rx - 0.15, ry + 0.25, rz - 0.2);
-    // left: shield block or torch
+    // left: shield block or torch (with a spear and no torch, the empty hand is down out of view)
     const lb = this.blockK;
+    this.left.visible = !spear || this.torchOn || this.dragging;
     this.left.position.set(-0.4 + bx + 0.26 * lb, -0.4 + by + 0.24 * lb, -0.5 + 0.05 * lb);
     this.left.rotation.set(0.1 + 0.2 * lb, 0.35 - 0.3 * lb, 0);
     if (this.torchOn) {

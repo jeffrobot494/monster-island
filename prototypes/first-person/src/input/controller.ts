@@ -465,11 +465,11 @@ export class ChampionController {
     return true;
   }
 
-  /** Start a swing (the target is picked at blade contact by the caller, F7). */
-  trySwing(now: number): boolean {
+  /** Start a swing, or a spear's thrust (every 0.8 s); the target is picked at blade contact by the caller (F7). */
+  trySwing(now: number, every = 0.6): boolean {
     if (this.ctrl !== 'player' || this.view === 'downed' || now < this.swingReady || this.blocking || this.dragging || (this.climbing && this.mode !== 'mount')) return false;
     if (!this.spend(12)) return false;
-    this.swingReady = now + 0.6;
+    this.swingReady = now + every;
     return true;
   }
 

@@ -116,8 +116,9 @@ matters for a second desktop on the LAN.
 | Shift (hold) | Sprint |
 | Space | Jump (client-only: a ~0.85 m hop, 8 stamina, momentum kept in the air; not while dragging, downed or mid-dodge; the sim never sees height) |
 | C | Dodge (a dash in the direction you are moving, or backwards if you are standing still). Was Space until jump was added; saved bindings migrate |
-| Left mouse | Swing the sword (hold to keep swinging when the cooldown allows) |
-| Right mouse (hold) | Raise the shield |
+| Left mouse | Swing the sword, or thrust the spear (hold to keep striking when the cooldown allows) |
+| Right mouse | Sword: hold to raise the shield. Spear: throw it. On a monster's body, either way: hold on |
+| 1 / 2 | Sword (and shield) / spear. The sim keeps what's in hand (`wield` input, saved with the champion; the HUD reports it and the client follows once a switch has had 0.6 s to land). A thrust: reach 3.4 m, ±30° (±20° for the nearest-target fallback), 15 piercing every 0.8 s, not the gods' `setWeapon` (that's the sword). No spears left (thrown, dropped) or a new champion: the sword. Replaces R (throw) |
 | E | Interact with what the crosshair targets (§3.3) |
 | F | Finish a targeted downed monster |
 | T | Torch on/off (it takes the shield hand) |

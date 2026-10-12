@@ -131,7 +131,7 @@ describe("the nephil's grab", () => {
 const R = () => RIDE.nephil!;
 
 describe('attacks from the body', () => {
-  it('39: a blow lands on the capsule you are on, doubled; on the head tripled, with a stagger; a spear is a stab', () => {
+  it('39: a blow lands on the capsule you are on, doubled; on the head tripled, with a stagger; with a spear, a thrust', () => {
     const w = world();
     w.S.blocking = true;
     w.m.zones!.armL!.state = 'severed'; // no grab: the head is in its reach
@@ -161,17 +161,23 @@ describe('attacks from the body', () => {
     });
     expect(shook).toBe(false);
     expect(w.events.some((e) => e.kind === 'shake' || e.kind === 'thrown')).toBe(false);
-    // a spear from its back: a stab at point-blank range, and the spear is spent
+    // a spear in hand: a thrust from its back (15, doubled, piercing), and the spear stays in hand
     w.c.human!.spears = 1;
     w.step(10, 4, 0, -0.1);
     hp = w.m.hp;
     expect(w.c.human!.mount?.cap).toBe(4);
+    w.sim.inputs.push({ type: 'wield', weapon: 'spear' });
+    swing();
+    w.step(1, 4, 0, -0.1);
+    expect(w.c.human!.spears).toBe(1);
+    expect(w.m.zones!.torso!.hp).toBeLessThan(w.m.zones!.torso!.max);
+    expect(hp - w.m.hp).toBeCloseTo((base(w.c) / w.S.weapon.mul) * (15 / 12) * 2, 5);
+    // right mouse on a body is holding on, not a throw: nothing leaves your hand
+    w.step(10, 4, 0, -0.1);
     w.sim.inputs.push({ type: 'throw', yaw: 0, pitch: 0, targetId: w.m.id, zone: null });
     w.step(1, 4, 0, -0.1);
-    expect(w.c.human!.spears).toBe(0);
+    expect(w.c.human!.spears).toBe(1);
     expect([...w.sim.ents.values()].some((e) => e.kind === 'spear' && e.spear?.st === 'flying')).toBe(false);
-    expect(w.m.zones!.torso!.hp).toBeLessThan(w.m.zones!.torso!.max);
-    expect(hp - w.m.hp).toBeCloseTo((base(w.c) / w.S.weapon.mul) * 2 * 2, 5); // 24 = 2 × 12
   }, 60000);
 });
 

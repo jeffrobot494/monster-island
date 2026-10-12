@@ -222,6 +222,7 @@ export function deserializeCore(s: SavedCore): Sim {
     S.correction = null;
     S.poses = [];
     S.ambushed ??= [];
+    S.wield ??= 'sword'; // saves from before the spear could be wielded
   }
   return sim;
 }

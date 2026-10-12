@@ -121,6 +121,8 @@ export interface Hud {
     sight: number;
     spears: number;
     spearCap: number;
+    /** in hand: the sword, or a spear */
+    wield: 'sword' | 'spear';
   };
   championPendingDawn: boolean;
   favor: { human: number; monster: number };

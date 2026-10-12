@@ -1,17 +1,17 @@
 // Keyboard + mouse input with pointer lock and rebindable keys (spec §3).
 import type { HostPointer } from './host-pointer';
 export type ActionName =
-  | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'throw' | 'inspect' | 'map'
-  | 'journal' | 'confirm' | 'camera';
+  | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'sword' | 'spear' | 'inspect'
+  | 'map' | 'journal' | 'confirm' | 'camera';
 
 export const DEFAULT_BINDINGS: Record<ActionName, string> = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', jump: 'Space', dodge: 'KeyC', interact: 'KeyE',
-  finish: 'KeyF', torch: 'KeyT', throw: 'KeyR', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
+  finish: 'KeyF', torch: 'KeyT', sword: 'Digit1', spear: 'Digit2', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
 };
 
 export const ACTION_LABEL: Record<ActionName, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Strafe left', right: 'Strafe right', sprint: 'Sprint', jump: 'Jump', dodge: 'Dodge',
-  interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', throw: 'Throw a spear', inspect: 'Inspect',
+  interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', sword: 'Sword (and shield)', spear: 'Spear (thrust, throw)', inspect: 'Inspect',
   map: 'Map', journal: 'Journal', confirm: 'Dismiss banner', camera: 'First / third person',
 };
 
@@ -37,6 +37,8 @@ export function loadSettings(): Settings {
       const b = { ...d.bindings, ...(s.bindings ?? {}) };
       // settings saved before jump existed had Space on dodge
       if (!s.bindings?.jump && b.dodge === 'Space') b.dodge = DEFAULT_BINDINGS.dodge;
+      // actions that are gone (throw: the spear is a weapon now, 2)
+      for (const a of Object.keys(b)) if (!(a in DEFAULT_BINDINGS)) delete b[a as ActionName];
       return { ...d, ...s, bindings: b };
     }
   } catch {
@@ -71,6 +73,7 @@ export class Controls {
   /** one-shot presses since the last frame */
   private pressed = new Set<ActionName>();
   private clicked = false;
+  private clickedR = false;
   onLockChange: (locked: boolean) => void = () => {};
   onAction: (a: ActionName) => void = () => {};
   rebinding: ActionName | null = null;
@@ -144,7 +147,10 @@ export class Controls {
       this.mouseL = down;
       if (down) this.clicked = true;
     }
-    if (b === 2) this.mouseR = down;
+    if (b === 2) {
+      this.mouseR = down;
+      if (down) this.clickedR = true;
+    }
   }
 
   private look(dx: number, dy: number) {
@@ -229,6 +235,13 @@ export class Controls {
   takeClick(): boolean {
     const c = this.clicked;
     this.clicked = false;
+    return c;
+  }
+
+  /** Consume a right-mouse press (with a spear in hand, it throws). */
+  takeClickR(): boolean {
+    const c = this.clickedR;
+    this.clickedR = false;
     return c;
   }
 

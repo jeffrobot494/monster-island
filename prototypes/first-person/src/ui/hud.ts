@@ -35,6 +35,7 @@ const HINTS: Record<string, string> = {
   mount: 'You are on its body. WASD: climb over it · Shift + direction: lunge · Left mouse: strike where you hang (×2, the head ×3) · Right mouse: hold on · Space, looking away: jump off · C: let go.',
   hold: 'A body you ride shudders before it shakes. Right mouse: hold on (it costs stamina). Let go of it and you are thrown off.',
   grab: 'It reaches for you with its free arm. Climb out of its reach: down its back or its legs. Or sever that arm.',
+  spear: 'Spear in hand. Left mouse: thrust (a meter more reach than the sword, on a narrower line) · Right mouse: throw it · No shield. 1: back to the sword.',
   lair: 'You found a lair. Monsters rest here outside their hours: catch one asleep for double damage.',
 };
 
@@ -111,13 +112,13 @@ export class HudView {
         row(`${keyLabel(b.forward)} ${keyLabel(b.left)} ${keyLabel(b.back)} ${keyLabel(b.right)}`, 'move'),
         row('Mouse', 'look'),
         row(keyLabel(b.sprint), 'sprint'),
-        row('Left click', 'swing — aim high for the head, low for the legs'),
-        row('Right mouse', 'shield'),
+        row('Left click', 'swing the sword or thrust the spear — aim high for the head, low for the legs'),
+        row('Right mouse', 'shield (sword) · throw (spear)'),
         row(keyLabel(b.jump), 'jump'),
         row(keyLabel(b.dodge), 'dodge'),
         row(keyLabel(b.interact), 'bind · drag · drop · altar'),
         row(keyLabel(b.finish), 'finish a downed monster'),
-        row(keyLabel(b.throw), 'throw a spear (pick it up again after)'),
+        row(`${keyLabel(b.sword)} / ${keyLabel(b.spear)}`, 'sword / spear (thrown ones lie where they fell)'),
         row(keyLabel(b.torch), 'torch'),
         row(keyLabel(b.inspect), 'inspect'),
         row(keyLabel(b.map), 'map'),
@@ -157,7 +158,7 @@ export class HudView {
     this.hurtUntil = performance.now() + 350;
   }
 
-  setHud(hud: Hud, stamina: number, winded: boolean) {
+  setHud(hud: Hud, stamina: number, winded: boolean, wield: 'sword' | 'spear') {
     const night = hud.light < 0.5;
     const jm = Math.max(0, hud.judgmentInMs);
     const jmin = Math.floor(jm / 60_000), js = Math.floor((jm % 60_000) / 1000);
@@ -183,7 +184,7 @@ export class HudView {
       this.hpI.style.width = `${(c.hp / c.maxHp) * 100}%`;
       this.xpI.style.width = `${(c.xp / c.xpNext) * 100}%`;
       const bits: string[] = [];
-      bits.push(`Spears ${c.spears}/${c.spearCap}`);
+      bits.push(wield === 'spear' ? `Spear in hand (${c.spears}/${c.spearCap})` : `Sword · spears ${c.spears}/${c.spearCap}`);
       if (c.dragging) bits.push(`Dragging ${c.dragging.name.split(' ')[0]} (${c.dragging.value} favor)`);
       if (c.torch) bits.push('Torch lit');
       if (winded) bits.push('Winded!');

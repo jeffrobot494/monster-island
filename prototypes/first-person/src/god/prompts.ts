@@ -206,7 +206,7 @@ api.data(e) → your JSON object on entity e; api.dataOf(e, moduleId)
 api.village.addFood(n)                   // ±50 per call, ≤300 per game day
 api.village.spawnVillager({ job?, level? }) → view | null   // population cap 40
 api.monster.addHunt(monster, clockMs)    // schedule an extra hunt
-api.champion.setWeapon({ type, mul })    // the champion's weapon damage type and multiplier (0.5–3)
+api.champion.setWeapon({ type, mul })    // the champion's sword: damage type and multiplier (0.5–3); not his spears
 
 // Visuals
 api.vis.defineShape(id, shapeDef); api.vis.defineEmitter(id, emitterDef)   // define() only, unique ids

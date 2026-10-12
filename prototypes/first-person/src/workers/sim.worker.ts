@@ -270,7 +270,7 @@ function sendHud() {
       id: c.id, name: c.name!, hp: c.hp, maxHp: sim.maxHp(c), level: c.level, xp: c.xp, xpNext: xpToNext(c), state: c.state, x: c.x, z: c.z,
       dragging, nearAltar: nearAltar(sim), downedTarget, weaponMul: cs(sim).weapon.mul,
       speedMul: champSpeedMul(sim), blocking: cs(sim).blocking, torch: cs(sim).torch, sight: championSight(sim, c),
-      spears: spearsOf(c), spearCap: spearCap(sim, c),
+      spears: spearsOf(c), spearCap: spearCap(sim, c), wield: cs(sim).wield,
     } : null,
     championPendingDawn: sim.championPendingDawn,
     favor: { human: Math.round(sim.favor.human), monster: Math.round(sim.favor.monster) },
