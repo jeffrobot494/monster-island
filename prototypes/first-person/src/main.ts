@@ -1068,6 +1068,8 @@ async function boot() {
     if (arcs.length) hudView.hintOnce('windup');
     hudView.drawFx(arcs, hud?.champion ? hud.champion.hp / hud.champion.maxHp : 1);
 
+    // the compass turns with the view every frame; its markers are rebuilt with the rest of the HUD below
+    hudView.turnCompass(ctrlReason === 'dead' ? spectator.yaw : controller.yaw);
     if (performance.now() - lastHud > 100) {
       lastHud = performance.now();
       if (hud) hudView.setHud(hud, controller.stamina, controller.winded, wield);

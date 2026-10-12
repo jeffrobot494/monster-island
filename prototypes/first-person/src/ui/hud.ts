@@ -65,6 +65,9 @@ export class HudView {
   private hurtUntil = 0;
   private hintTimer = 0;
   private seenHints = new Set<string>();
+  /** the compass's marks with their bearings, and the heading they were last placed for */
+  private compassItems: { el: HTMLElement; bearing: number }[] = [];
+  private compassYaw = NaN;
   onPlay: () => void = () => {};
   onCamera: () => void = () => {};
 
@@ -216,18 +219,10 @@ export class HudView {
   }
 
   /** Compass: yaw = camera yaw (rad); markers in tiles relative to (cx, cz). */
+  /** The compass's marks and markers (a few times a second: markers move as you walk); turnCompass places them. */
   setCompass(yaw: number, cx: number, cz: number, markers: CompassMarker[]) {
-    const W = 520, FOV = Math.PI; // ±90° visible
-    const items: HTMLElement[] = [];
-    const place = (bearing: number, el: HTMLElement) => {
-      let d = bearing - yaw;
-      while (d > Math.PI) d -= Math.PI * 2;
-      while (d < -Math.PI) d += Math.PI * 2;
-      if (Math.abs(d) > FOV / 2) return;
-      // yaw increases to the left (counter-clockwise from above), so a positive offset is left of center
-      el.style.left = `${W / 2 - (d / (FOV / 2)) * (W / 2)}px`;
-      items.push(el);
-    };
+    const items: { el: HTMLElement; bearing: number }[] = [];
+    const place = (bearing: number, el: HTMLElement) => items.push({ el, bearing });
     const cards: [string, number][] = [['S', 0], ['E', Math.PI / 2], ['N', Math.PI], ['W', -Math.PI / 2]];
     for (const [l, b] of cards) place(b, h('span', { class: 'cdir' }, l));
     for (let k = 0; k < 24; k++) if (k % 6) place((k / 24) * Math.PI * 2, h('span', { class: 'cminor' }, '·'));
@@ -236,7 +231,26 @@ export class HudView {
       const dist = Math.hypot(m.x - cx, m.z - cz) * 8;
       place(b, h('span', { class: `cmark ${m.cls ?? ''}`, title: m.label ?? '' }, h('b', {}, m.icon), h('small', {}, dist < 1000 ? `${Math.round(dist)}m` : `${(dist / 1000).toFixed(1)}km`)));
     }
-    this.strip.replaceChildren(...items);
+    this.compassItems = items;
+    this.strip.replaceChildren(...items.map((i) => i.el));
+    this.compassYaw = NaN;
+    this.turnCompass(yaw);
+  }
+
+  /** Every frame: slide the compass's marks to the view's heading, so it turns with the mouse. */
+  turnCompass(yaw: number) {
+    if (yaw === this.compassYaw) return;
+    this.compassYaw = yaw;
+    const W = 520, HALF = Math.PI / 2; // ±90° visible
+    for (const { el, bearing } of this.compassItems) {
+      let d = bearing - yaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      const shown = Math.abs(d) <= HALF;
+      el.style.display = shown ? '' : 'none';
+      // yaw increases to the left (counter-clockwise from above), so a positive offset is left of center
+      if (shown) el.style.left = `${W / 2 - (d / HALF) * (W / 2)}px`;
+    }
   }
 
   /** Wind-up arcs at the screen edge toward attackers (F20); bearings relative to the view, progress 0..1. */
