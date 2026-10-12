@@ -450,7 +450,8 @@ drop/drag (the sword hand pulls a rope back over the shoulder).
 ### 8.2 Screens (they release pointer lock; the world keeps running, unless they were opened from the pause, §3.1)
 - **Journal** (Tab): tabs **Village** (job changes as in the base), **Monsters**, **Book of Creation**,
   **Chronicle**, **Gods**, and **Settings** (controls, video, audio, new island, dev buttons). Its contents are the
-  base panels restyled for a wide screen.
+  base panels restyled for a wide screen. Drag its header (not a tab or the ×) to move it; it stays there, kept on
+  screen (in `localStorage`, this browser only), and a double-click on the header centers it again.
 - **Map** (M): a full-screen canvas map of the island, drawn from tile colors and the explored mask. It shows the
   champion's position and facing arrow, the village, altars, found lairs, screams, guards, villagers (dots, within
   sight), and visible monsters. The mouse wheel zooms and dragging pans. Press M or Esc to close.

@@ -34,6 +34,25 @@ export interface UiCallbacks {
   panelChanged(open: boolean): void;
 }
 
+/** Where the journal was dragged to, remembered in this browser (a convenience: null, centered, when it can't be). */
+const SHEET_POS = 'hmfp:journal-pos';
+function loadSheetPos(): { x: number; y: number } | null {
+  try {
+    const p = JSON.parse(localStorage.getItem(SHEET_POS) ?? 'null');
+    return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
+  } catch {
+    return null;
+  }
+}
+function saveSheetPos(p: { x: number; y: number } | null) {
+  try {
+    if (p) localStorage.setItem(SHEET_POS, JSON.stringify(p));
+    else localStorage.removeItem(SHEET_POS);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 const GOD = { human: 'the Most High', monster: 'Dagon' } as const;
 const STATE_TEXT: Record<string, string> = {
   idle: 'Standing ready', walk: 'Walking', fight: 'Fighting', drag: 'Dragging', downed: 'Beaten down!', captive: 'Being carried off!',
@@ -70,6 +89,8 @@ export class Ui {
   private god: { trace: TraceEntry[]; live: LiveCall | null; version: number; status: string } = { trace: [], live: null, version: 0, status: '' };
   private renderedTab = '';
   private altarOpen = false;
+  /** where the journal was dragged to (its top-left, px), or null: centered */
+  private sheetPos: { x: number; y: number } | null = loadSheetPos();
 
   constructor(readonly cb: UiCallbacks, private devMode: boolean) {
     this.top.append(
@@ -89,6 +110,8 @@ export class Ui {
     }
     head.append(h('button', { class: 'x', onclick: () => this.closeSheet() }, '×'));
     this.sheet.append(head, this.sheetBody);
+    this.dragByHead(head);
+    window.addEventListener('resize', () => this.placeSheet());
     // first person: the HUD (hud.ts) replaces the mobile top bar, champion card and buttons
     this.root.append(this.toasts, this.status, this.ready, this.inspector, this.sheet, this.modal, this.fallen);
   }
@@ -211,6 +234,7 @@ export class Ui {
 
   openSheet(tab = this.tab) {
     this.sheet.classList.remove('hidden');
+    this.placeSheet();
     this.cb.panelChanged(true);
     this.showTab(tab);
   }
@@ -218,6 +242,55 @@ export class Ui {
   closeSheet() {
     this.sheet.classList.add('hidden');
     this.cb.panelChanged(false);
+  }
+
+
+  /** Put the journal where it was dragged, kept on screen (its header within reach), or in the middle. */
+  private placeSheet() {
+    const s = this.sheet.style;
+    if (!this.sheetPos) {
+      s.left = s.top = s.transform = '';
+      return;
+    }
+    const w = this.sheet.offsetWidth;
+    const x = Math.min(innerWidth - 120, Math.max(120 - w, this.sheetPos.x));
+    const y = Math.min(innerHeight - 48, Math.max(0, this.sheetPos.y));
+    s.left = `${x}px`;
+    s.top = `${y}px`;
+    s.transform = 'none';
+  }
+
+  /** Drag the journal by its header (not by a tab or the ×); double-click the header to center it again. */
+  private dragByHead(head: HTMLElement) {
+    const onButton = (e: Event) => !!(e.target as HTMLElement).closest('button');
+    head.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || onButton(e)) return;
+      e.preventDefault();
+      const r = this.sheet.getBoundingClientRect();
+      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      head.setPointerCapture(e.pointerId);
+      head.classList.add('dragging');
+      const move = (ev: PointerEvent) => {
+        this.sheetPos = { x: ev.clientX - dx, y: ev.clientY - dy };
+        this.placeSheet();
+      };
+      const up = () => {
+        head.removeEventListener('pointermove', move);
+        head.removeEventListener('pointerup', up);
+        head.removeEventListener('pointercancel', up);
+        head.classList.remove('dragging');
+        saveSheetPos(this.sheetPos);
+      };
+      head.addEventListener('pointermove', move);
+      head.addEventListener('pointerup', up);
+      head.addEventListener('pointercancel', up);
+    });
+    head.addEventListener('dblclick', (e) => {
+      if (onButton(e)) return;
+      this.sheetPos = null;
+      this.placeSheet();
+      saveSheetPos(null);
+    });
   }
 
   isSheetOpen() {

@@ -41,7 +41,7 @@ The dev server spawns `claude -p` for each god call. If the CLI is missing, the 
 | V | first / third person camera (also the button at the bottom right) |
 | M | map |
 | Z | minimap range: 60, 120 or 250 m (remembered). The minimap, top right, turns with you (your heading is up, N on its rim) and shows the ground around you with hillshading, the compass's landmarks (pinned to the rim when farther) and the monsters and villagers in sight |
-| Tab | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings) |
+| Tab | journal: Village (jobs), Monsters, Book of Creation, Chronicle, Gods, Settings (sensitivity, invert Y, FOV, shadows, volume, key bindings). Drag its header to move it (it stays there); double-click the header to center it again |
 | Esc | pause; Esc again (or a click) resumes. In Chrome and Edge the game goes fullscreen when you click into it, which is what lets Esc resume: hold Esc to leave fullscreen (Journal → Settings → Fullscreen turns it off). Outside fullscreen the browser takes the mouse on Esc and only gives it back for a click, so there the pause card says to click |
 
 A game day lasts 8 real minutes: 4 of daylight (06:00–18:00) and 4 of night.
