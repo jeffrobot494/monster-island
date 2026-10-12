@@ -6,6 +6,7 @@ import { SimClient } from './sim-client';
 import { Ui, h } from './ui/ui';
 import { HudView, type CompassMarker, type TargetInfo } from './ui/hud';
 import { WorldMap, type MapMarker } from './ui/map';
+import { Minimap, type MinimapDot } from './ui/minimap';
 import { pickPlatform } from './platform';
 import { KEYS } from './persist/save-store';
 import { CreationPipeline } from './god/pipeline';
@@ -102,6 +103,9 @@ async function boot() {
   const hudView = new HudView(uiRoot, settings);
   const map = new WorldMap(uiRoot);
   map.reveal = params.has('reveal');
+  const minimap = new Minimap(hudView.root, settings.minimapRange ?? 120);
+  // the compass's landmarks, for the minimap (rebuilt with the HUD, 10 times a second)
+  let landmarks: CompassMarker[] = [];
   let ui!: Ui;
 
   const autoSource = (prompt: string) => {
@@ -395,6 +399,9 @@ async function boot() {
         map.toggle(true, { x: controller.x, z: controller.z });
       }
       updateLockUi();
+    } else if (a === 'minimap') {
+      settings.minimapRange = minimap.cycle();
+      saveSettings(settings);
     } else if (a === 'camera') {
       settings.thirdPerson = !settings.thirdPerson;
       saveSettings(settings);
@@ -500,7 +507,10 @@ async function boot() {
   function onFrame(f: FramePayload) {
     sawFrame = true;
     renderer.onFrame(f);
-    if (f.tiles.length) map.tilesChanged();
+    if (f.tiles.length) {
+      map.tilesChanged();
+      minimap.terrainChanged();
+    }
     if (f.explored.length) map.markExplored(f.explored);
     // authority and epochs (F6)
     const prev = controller.ctrl;
@@ -568,6 +578,7 @@ async function boot() {
         break;
       case 'fullState': {
         renderer.onFullState(m);
+        minimap.terrainChanged();
         map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
         map.setExplored(m.explored);
         controller.walk = m.walkCost;
@@ -1064,6 +1075,20 @@ async function boot() {
       moveSpeed: controller.moveSpeed, sprinting: controller.sprinting, blocking: controller.blocking, dragging: !!hud?.champion?.dragging, roll,
     });
 
+    // the minimap, every frame: it turns with the view. Creatures only in sight, as on the M map
+    {
+      const dead = ctrlReason === 'dead';
+      const at = dead ? { x: spectator.x / M, z: spectator.z / M } : { x: controller.x, z: controller.z };
+      const sight = (hud?.champion?.sight ?? 10) * M, reach = Math.min(sight, minimap.range + 10);
+      const dots: MinimapDot[] = [];
+      renderer.ents.each((v) => {
+        if (v.id === champId() || v.flags & F_CORPSE || !(v.flags & (F_MONSTER | F_HUMAN))) return;
+        if (Math.hypot(v.pos.x - at.x * M, v.pos.z - at.z * M) > reach) return;
+        dots.push({ x: v.pos.x / M, z: v.pos.z / M, kind: v.flags & F_MONSTER ? 'monster' : 'villager' });
+      });
+      minimap.draw(renderer.terrain, at, dead ? spectator.yaw : controller.yaw, landmarks, dots);
+    }
+
     // look target and HUD
     const { eye, dir } = renderer.lookRay();
     look = ctrlReason === 'dead' ? null : renderer.ents.pick(eye, dir, 40, champId());
@@ -1112,6 +1137,7 @@ async function boot() {
       }
       for (const s of screams) marks.push({ x: s.x, z: s.z, icon: '!', cls: 'scream', label: 'A scream' });
       if (creationMarker && performance.now() < creationMarker.until) marks.push({ x: creationMarker.x, z: creationMarker.z, icon: '✦', label: creationMarker.label });
+      landmarks = marks;
       const dead = ctrlReason === 'dead';
       hudView.setCompass(dead ? spectator.yaw : controller.yaw, dead ? spectator.x / M : controller.x, dead ? spectator.z / M : controller.z, marks);
       if (map.open) {
@@ -1211,7 +1237,7 @@ async function boot() {
     sim.post({ type: 'devJudge', human: g === 'human' ? Number(n) || 300 : 0, monster: g === 'monster' ? Number(n) || 300 : 0 });
   }, 1500);
   renderer.renderer.setAnimationLoop(frame);
-  (window as any).__hm = { sim, pipeline, renderer, store, controller, audio, hud: () => hud, chronicle: () => chronicle };
+  (window as any).__hm = { sim, pipeline, renderer, store, controller, audio, minimap, hud: () => hud, chronicle: () => chronicle };
 }
 
 boot().catch((err) => {

@@ -436,6 +436,12 @@ drop/drag (the sword hand pulls a rope back over the shoulder).
   follows the carrier), and ✦ newest creation (for 10 minutes after its card).
 - **Top-left:** day, time with ☀/☾, the favor bar (☀ Most High vs ☾ Dagon, today's tally), and "Judgment in 3h 12m".
 - **Top-right:** 👥 villagers, monsters (6 icons, slain crossed out), food bar, and fold 🐑 count.
+- **Minimap** (under it, `ui/minimap.ts`): round, 190 px, heading up, N on the rim, drawn every frame. Its range is
+  60, 120 or 250 m (Z steps through them; `settings.minimapRange`, 120 by default). The terrain is baked at 2 m a pixel
+  from the 3D ground's vertex colors, hillshaded from the heights (light from the north-west, relief ×2), with the sea
+  plane over what lies below it; no fog of war (the M map keeps that). It bakes again at most every 2 s after tiles
+  change (~30 ms). On it: the compass's landmarks (pinned to the rim, fainter, when beyond it) and the monsters and
+  villagers within the champion's sight. Dead, it follows the spectator.
 - **Bottom-left:** HP bar, stamina bar, level and XP bar, and a state line ("Dragging Gaash — 2 helpers", "Torch
   lit", "Winded").
 - **Toasts** (top center, under the compass) and **banners** (shofar, Judgment, champion events). Their text is the

@@ -132,7 +132,8 @@ export class Terrain {
   defs = new Map<string, TileTypeDef>();
   private geo: THREE.BufferGeometry;
   private mesh: THREE.Mesh;
-  private colors: Float32Array;
+  /** the ground's color per vertex (rgb 0–1, a vertex every 4 m): the minimap bakes from it too */
+  readonly colors: Float32Array;
   private pos: Float32Array;
   water: THREE.Mesh;
   private decor = new THREE.Group();

@@ -127,6 +127,7 @@ export class HudView {
         row(keyLabel(b.torch), 'torch'),
         row(keyLabel(b.inspect), 'inspect'),
         row(keyLabel(b.map), 'map'),
+        row(keyLabel(b.minimap), 'minimap range (60 / 120 / 250 m)'),
         row(keyLabel(b.camera), 'first / third person'),
         row(keyLabel(b.journal), 'journal'),
         row('Esc', 'pause / resume'),

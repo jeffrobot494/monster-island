@@ -2,17 +2,17 @@
 import type { HostPointer } from './host-pointer';
 export type ActionName =
   | 'forward' | 'back' | 'left' | 'right' | 'sprint' | 'jump' | 'dodge' | 'interact' | 'finish' | 'torch' | 'sword' | 'spear' | 'throw' | 'inspect'
-  | 'map' | 'journal' | 'confirm' | 'camera';
+  | 'map' | 'minimap' | 'journal' | 'confirm' | 'camera';
 
 export const DEFAULT_BINDINGS: Record<ActionName, string> = {
   forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', jump: 'Space', dodge: 'KeyC', interact: 'KeyE',
-  finish: 'KeyF', torch: 'KeyT', sword: 'Digit1', spear: 'Digit2', throw: 'KeyR', inspect: 'KeyQ', map: 'KeyM', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
+  finish: 'KeyF', torch: 'KeyT', sword: 'Digit1', spear: 'Digit2', throw: 'KeyR', inspect: 'KeyQ', map: 'KeyM', minimap: 'KeyZ', journal: 'Tab', confirm: 'Enter', camera: 'KeyV',
 };
 
 export const ACTION_LABEL: Record<ActionName, string> = {
   forward: 'Move forward', back: 'Move back', left: 'Strafe left', right: 'Strafe right', sprint: 'Sprint', jump: 'Jump', dodge: 'Dodge',
   interact: 'Interact (bind, drag, drop, altar)', finish: 'Finish a downed monster', torch: 'Torch on/off', sword: 'Sword', spear: 'Spear', throw: 'Throw the spear in hand', inspect: 'Inspect',
-  map: 'Map', journal: 'Journal', confirm: 'Dismiss banner', camera: 'First / third person',
+  map: 'Map', minimap: 'Minimap range', journal: 'Journal', confirm: 'Dismiss banner', camera: 'First / third person',
 };
 
 export interface Settings {
@@ -23,6 +23,8 @@ export interface Settings {
   fxVolume: number;
   shadows: 'off' | 'low' | 'high';
   bindings: Record<ActionName, string>;
+  /** meters from you to the minimap's rim (60, 120 or 250; Z steps through them; 120 when unset) */
+  minimapRange?: number;
   /** over-the-shoulder camera instead of the champion's eyes */
   thirdPerson: boolean;
   /** going into the game goes fullscreen, holding Esc for the game: Esc pauses and resumes (Chrome, Edge) */
@@ -234,7 +236,7 @@ export class Controls {
     this.lastInput = performance.now();
     if (!e.repeat && action) {
       // UI toggles work with or without the lock
-      if (action === 'journal' || action === 'map' || action === 'confirm' || action === 'camera') {
+      if (action === 'journal' || action === 'map' || action === 'minimap' || action === 'confirm' || action === 'camera') {
         this.onAction(action);
         return;
       }
