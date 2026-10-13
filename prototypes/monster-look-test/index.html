@@ -1077,7 +1077,8 @@ function buildRigged(spec, style) {
     const t = walk.tracks.find((tr) => tr.name === b.name + '.quaternion');
     clipQ.multiply(t ? new THREE.Quaternion().fromArray(t.values, 0) : b.quaternion); bindQ.multiply(b.quaternion);
   }
-  const hold = { bones: trunk, bind: trunk.map((b) => b.quaternion.clone()), kids: byName.Spine.children.filter((c) => c.isBone), G: bindQ.invert().multiply(clipQ) };
+  const kids = byName.Spine.children.filter((c) => c.isBone);
+  const hold = { bones: trunk, bind: trunk.map((b) => b.quaternion.clone()), kids, G: bindQ.invert().multiply(clipQ), raw: [...trunk, ...kids].map(() => new THREE.Quaternion()), held: false };
   const meshes2 = meshParts(body, style, spec.H, Object.fromEntries(bones.map((b, i) => [b.name, i])));
   const geo = meshes2.find((p) => p.name === 'body').geo;
   const skel = new THREE.Skeleton(bones);
@@ -1113,10 +1114,19 @@ function buildRigged(spec, style) {
 }
 
 // After the mixer writes a frame: trunk back to its bind pose, the bones hanging off it re-aimed by the fixed offset.
+// The mixer's own values are kept so releaseTrunk can put them back before the next update.
 function holdTrunk(g) {
   const h = g.userData.hold; if (!h || !g.userData.current) return;
-  h.bones.forEach((b, i) => b.quaternion.copy(h.bind[i]));
-  for (const k of h.kids) k.quaternion.premultiply(h.G);
+  h.bones.forEach((b, i) => { h.raw[i].copy(b.quaternion); b.quaternion.copy(h.bind[i]); });
+  h.kids.forEach((k, i) => { h.raw[h.bones.length + i].copy(k.quaternion); k.quaternion.premultiply(h.G); });
+  h.held = true;
+}
+// Before the mixer runs: undo holdTrunk. The mixer skips writing a bone whose value hasn't changed since last frame (the
+// clips open on two identical keys), and a skipped bone would keep the offset and get it a second time.
+function releaseTrunk(g) {
+  const h = g.userData.hold; if (!h || !h.held) return;
+  [...h.bones, ...h.kids].forEach((b, i) => b.quaternion.copy(h.raw[i]));
+  h.held = false;
 }
 
 function playOn(grp, name, fade = 0.3) {
@@ -1259,7 +1269,7 @@ new ResizeObserver(resize).observe(stage); resize();
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
-  for (const g of lineup.children) { g.userData.mixer?.update(dt); holdTrunk(g); }
+  for (const g of lineup.children) { releaseTrunk(g); g.userData.mixer?.update(dt); holdTrunk(g); }
   controls.update(); renderer.render(scene, camera);
 });
 rebuild();
