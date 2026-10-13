@@ -92,6 +92,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1420; fon
 .btn.gold { background: linear-gradient(#ffe7a0, #e0aa40); font-weight: 600; }
 .btn.danger { background: #f8e0d8; border-color: #c08070; color: #7a1a0e; }
 .btn:disabled { opacity: 0.45; }
+.btn:active:not(:disabled) { transform: scale(0.97); filter: brightness(0.93); }
+.btn.sent, .btn.sent:disabled { opacity: 1; background: linear-gradient(#fff3c8, #f0cf78); border-color: #c89a3a; font-weight: 600; animation: prayrise 0.9s ease-out; }
+@keyframes prayrise { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(230, 180, 60, 0.8); } 40% { transform: scale(1.02); } 100% { transform: scale(1); box-shadow: 0 0 0 14px rgba(230, 180, 60, 0); } }
 .pray textarea, textarea.code { width: 100%; box-sizing: border-box; min-height: 64px; border-radius: 8px; border: 1px solid var(--edge); padding: 8px; font: 14px var(--body-serif); background: #fffdf6; user-select: text; -webkit-user-select: text; }
 textarea.code { min-height: 200px; font: 12px monospace; }
 .forbidden summary { cursor: pointer; color: var(--blood); font-size: 13px; margin-top: 8px; }
@@ -140,6 +143,7 @@ body { cursor: default; }
 @keyframes raidpulse { 50% { opacity: 0.55; } }
 .hud-tr { right: 18px; top: 16px; display: flex; gap: 14px; align-items: center; }
 .hud-tr .low { color: #ff8a6a; }
+.hud-tr .fps { min-width: 52px; text-align: right; font-size: 12px; color: #c8b48a; }
 .minimap { position: absolute; right: 18px; top: 62px; width: 190px; height: 190px; border-radius: 50%; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45); }
 .hud-bl { left: 18px; bottom: 18px; width: 300px; display: flex; flex-direction: column; gap: 5px; }
 .bar { position: relative; height: 10px; border-radius: 5px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }

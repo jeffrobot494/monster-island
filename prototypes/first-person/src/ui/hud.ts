@@ -57,6 +57,10 @@ export class HudView {
   play = h('div', { class: 'play hidden' });
   private camBtn = h('button', { class: 'cam-toggle', type: 'button' }) as HTMLButtonElement;
   private hint = h('div', { class: 'hint hidden' });
+  /** frames per second, at the right end of the top-right plate */
+  private fps = h('span', { class: 'fps', title: 'Frames per second' });
+  private fpsFrames = 0;
+  private fpsSince = 0;
   private hpI = h('i');
   private stI = h('i');
   private xpI = h('i');
@@ -188,6 +192,7 @@ export class HudView {
       h('span', { title: `${hud.monstersAlive} monsters alive` }, '👹'.repeat(hud.monstersAlive) + '✝'.repeat(Math.max(0, slain))),
       h('span', { class: hud.food < 60 ? 'low' : '', title: 'Food' }, `🌾 ${Math.round(hud.food)}`),
       h('span', { title: 'Lambs in the fold' }, `🐑 ${hud.fold}`),
+      this.fps,
     );
     const c = hud.champion;
     this.bl.classList.toggle('hidden', !c);
@@ -205,6 +210,16 @@ export class HudView {
     }
     this.stI.style.width = `${stamina}%`;
     this.stI.parentElement!.classList.toggle('winded', winded);
+  }
+
+  /** Count a rendered frame; the reading updates twice a second. */
+  tickFps(nowMs: number) {
+    this.fpsFrames++;
+    const dt = nowMs - this.fpsSince;
+    if (dt < 500) return;
+    if (this.fpsSince) this.fps.textContent = `${Math.round((this.fpsFrames * 1000) / dt)} FPS`;
+    this.fpsFrames = 0;
+    this.fpsSince = nowMs;
   }
 
   setTarget(t: TargetInfo | null, prompt: string) {

@@ -954,6 +954,7 @@ async function boot() {
   function frame() {
     const now = performance.now() / 1000;
     const fdt = Math.min(0.05, Math.max(0.001, now - lastNow));
+    hudView.tickFps(now * 1000);
     lastNow = now;
     const busy = screenOpen();
     // one-shot actions

@@ -411,7 +411,9 @@ export class Ui {
   }
 
   private altarKey = '';
+  private praying = false;
   private renderAltar(force = false) {
+    if (this.praying) return; // hold the "prayer rises" state until the modal closes
     const hud = this.hud;
     const c = hud?.champion;
     const key = JSON.stringify([hud?.fold, c?.dragging, c?.nearAltar, hud?.favor, hud?.prayer, this.villagers.filter((v) => v.inVillage).length]);
@@ -432,9 +434,22 @@ export class Ui {
       near ? null : h('p', { class: 'warn' }, 'You must stand at the altar to make offerings.'),
       h('button', { class: 'btn wide', ...(near && (hud?.fold ?? 0) > 0 ? {} : { disabled: true }), onclick: () => this.cb.action({ kind: 'offerLamb' }) }, `🐑 Offer a lamb (+40) · ${hud?.fold ?? 0} in the fold`),
       c?.dragging ? h('button', { class: 'btn wide gold', ...(near && c.dragging.value > 0 ? {} : { disabled: true }), onclick: () => this.cb.action({ kind: 'offerDragged' }) }, `🔥 Burn ${c.dragging.name.split(' ')[0]} (+${c.dragging.value})`) : h('p', { class: 'muted' }, 'Drag a crippled monster (or a fresh carcass) here for a far greater offering.'),
-      h('div', { class: 'pray' }, prayer, h('button', { class: 'btn wide', onclick: () => this.cb.action({ kind: 'pray', text: prayer.value }) }, '🙏 Pray')),
+      h('div', { class: 'pray' }, prayer, h('button', { class: 'btn wide', onclick: (e: Event) => this.pray(e.currentTarget as HTMLButtonElement, prayer) }, '🙏 Pray')),
       forbidden,
     ));
+  }
+
+  private pray(btn: HTMLButtonElement, prayer: HTMLTextAreaElement) {
+    if (this.praying) return;
+    this.cb.action({ kind: 'pray', text: prayer.value });
+    this.praying = true;
+    btn.classList.add('sent');
+    btn.disabled = prayer.disabled = true;
+    btn.textContent = prayer.value.trim() ? '🙏 Your prayer rises…' : '🙏 Prayer withdrawn';
+    setTimeout(() => {
+      this.praying = false;
+      if (btn.isConnected) this.closeModal(); // skip if another card (e.g. genesis) replaced the altar meanwhile
+    }, 900);
   }
 
   // ---------- cards ----------
