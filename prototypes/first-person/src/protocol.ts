@@ -57,6 +57,7 @@ export type MainToSim =
   | { type: 'devJudge'; human: number; monster: number }
   | { type: 'devSkipHours'; hours: number }
   | { type: 'devRaid' }
+  | { type: 'devShowMonsters'; on: boolean }
   | { type: 'devScenario'; name: string }
   | { type: 'devCrown' }
   | { type: 'devKillChampion' };
@@ -146,6 +147,8 @@ export interface Hud {
   /** real ms until the next Judgment */
   judgmentInMs: number;
   lairsHome: number[];
+  /** dev: every living monster, wherever it is (sent only while the dev reveal is on) */
+  devMonsters?: { id: number; name: string; x: number; z: number; state: string; target: string | null }[];
 }
 
 export interface FramePayload {

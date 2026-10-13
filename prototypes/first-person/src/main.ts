@@ -287,6 +287,7 @@ async function boot() {
       else if (cmd === 'skip-8') sim.post({ type: 'devSkipHours', hours: 8 });
       else if (cmd === 'raid') sim.post({ type: 'devRaid' });
       else if (cmd === 'fly') toggleFly();
+      else if (cmd === 'monsters') toggleShowMonsters();
       else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
         map.reveal = !map.reveal;
@@ -303,11 +304,19 @@ async function boot() {
     controller.setFlying(!controller.flying);
     ui.toast(controller.flying ? 'Fly mode: WASD along your view, Space up, C down, Shift for speed (F9 to land)' : 'Fly mode off', 'info', 4);
   }
-  // dev hotkeys: F8 crowns the next champion now (no waiting for dawn); F9 toggles fly mode
+  /** dev: every living monster on the compass, minimap and map, labelled with what it's doing */
+  let showMonsters = false;
+  function toggleShowMonsters() {
+    showMonsters = !showMonsters;
+    sim.post({ type: 'devShowMonsters', on: showMonsters });
+    ui.toast(showMonsters ? 'Showing every monster (F7 to hide)' : 'Monsters hidden', 'info', 3);
+  }
+  // dev hotkeys: F7 shows every monster; F8 crowns the next champion now (no waiting for dawn); F9 toggles fly mode
   if (devMode) window.addEventListener('keydown', (e) => {
-    if ((e.code !== 'F8' && e.code !== 'F9') || e.repeat) return;
+    if ((e.code !== 'F7' && e.code !== 'F8' && e.code !== 'F9') || e.repeat) return;
     e.preventDefault();
-    if (e.code === 'F8') sim.post({ type: 'devCrown' });
+    if (e.code === 'F7') toggleShowMonsters();
+    else if (e.code === 'F8') sim.post({ type: 'devCrown' });
     else toggleFly();
   });
   if (platform.warning) ui.toast(platform.warning, 'info', 10);
@@ -1161,6 +1170,7 @@ async function boot() {
           if (p) marks.push({ x: p.x + 0.5, z: p.z + 0.5, icon: mc.dead ? '✝' : '☠', cls: mc.dead ? 'dead' : '', label: `${mc.name}'s lair` });
         }
       }
+      if (showMonsters) for (const m of hud?.devMonsters ?? []) marks.push({ x: m.x, z: m.z, icon: '◆', cls: 'dev-monster', label: `${m.name} · ${m.state}${m.target ? ` → ${m.target}` : ''}` });
       for (const s of screams) marks.push({ x: s.x, z: s.z, icon: '!', cls: 'scream', label: 'A scream' });
       if (creationMarker && performance.now() < creationMarker.until) marks.push({ x: creationMarker.x, z: creationMarker.z, icon: '✦', label: creationMarker.label });
       landmarks = marks;
@@ -1168,7 +1178,7 @@ async function boot() {
       hudView.setCompass(dead ? spectator.yaw : controller.yaw, dead ? spectator.x / M : controller.x, dead ? spectator.z / M : controller.z, marks);
       if (map.open) {
         const kindOf = (icon: string): MapMarker['kind'] => (icon === '⌂' ? 'village' : icon === '🔥' ? 'altar' : icon === '▲' ? 'high' : icon === '☠' ? 'lair' : icon === '✝' ? 'lair-dead' : icon === '!' ? 'scream' : 'creation');
-        const mm: MapMarker[] = marks.map((m) => ({ x: m.x, z: m.z, kind: kindOf(m.icon), label: m.icon === '☠' || m.icon === '✝' ? m.label : undefined }));
+        const mm: MapMarker[] = marks.map((m) => (m.cls === 'dev-monster' ? { x: m.x, z: m.z, kind: 'monster', label: m.label } : { x: m.x, z: m.z, kind: kindOf(m.icon), label: m.icon === '☠' || m.icon === '✝' ? m.label : undefined }));
         // only what you can actually see right now
         const sight = (hud?.champion?.sight ?? 10) * M;
         renderer.ents.each((v) => {

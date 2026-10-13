@@ -69,6 +69,8 @@ function sendDefs(force = false) {
 
 const RANGE = 80; // tiles (640 m)
 const CORE_ROLES = /^(house|village-altar|high-altar|fold|granary|lair:)/;
+/** dev: put every living monster in the HUD (devShowMonsters) */
+let showMonsters = false;
 const prevPos = new Map<number, { x: number; z: number; v: number }>();
 const sentNames = new Map<number, string>();
 
@@ -289,6 +291,10 @@ function sendHud() {
     dangerNear,
     judgmentInMs: (DAY_MS - (((sim.clockMs % DAY_MS) + DAY_MS) % DAY_MS)) / sim.timescale,
     lairsHome: sim.monsters().filter((m) => m.state === 'rest' && sim.byRole(`lair:${m.monster!.region}`)?.tags.includes('found')).map((m) => m.monster!.region),
+    devMonsters: showMonsters ? sim.monsters().map((m) => {
+      const t = m.target >= 0 ? sim.ents.get(m.target) : undefined;
+      return { id: m.id, name: firstName(m), x: m.x, z: m.z, state: m.state, target: t ? (t.id === sim.championId ? 'you' : firstName(t)) : null };
+    }) : undefined,
   };
   post({ type: 'hud', hud });
 }
@@ -583,6 +589,11 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         inspectId = msg.id;
         if (island) sendInspect();
         break;
+      case 'devShowMonsters': {
+        showMonsters = msg.on;
+        sendHud();
+        break;
+      }
       case 'devRaid': {
         startRaid(island!.sim);
         flushOut();

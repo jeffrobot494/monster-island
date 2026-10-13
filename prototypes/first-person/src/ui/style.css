@@ -185,6 +185,7 @@ body { cursor: default; }
 .compass .cmark small { font-size: 9px; color: #c8b48a; margin-top: 2px; }
 .compass .cmark.scream b { color: #ff3a20; font-weight: 900; font-size: 20px; animation: blink 0.5s infinite alternate; }
 .compass .cmark.altar-hot b { filter: drop-shadow(0 0 4px #ffb040); }
+.compass .cmark.dev-monster b { color: #ff4030; }
 .compass .cmark.dead { opacity: 0.45; }
 .compass-tick { position: absolute; left: 50%; bottom: 0; width: 2px; height: 8px; margin-left: -1px; background: #ffd870; }
 .fxcanvas { position: absolute; inset: 0; width: 100%; height: 100%; }

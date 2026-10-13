@@ -146,6 +146,14 @@ export class WorldMap {
           ctx.beginPath();
           ctx.arc(x, y, 5, 0, Math.PI * 2);
           ctx.fill();
+          if (m.label) {
+            ctx.font = '600 12px Georgia, serif';
+            ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.lineWidth = 3;
+            ctx.strokeText(m.label, x, y - 9);
+            ctx.fillStyle = '#ffb0a0';
+            ctx.fillText(m.label, x, y - 9);
+          }
           break;
         case 'scream': {
           const p = 6 + Math.sin(t * 8) * 3;

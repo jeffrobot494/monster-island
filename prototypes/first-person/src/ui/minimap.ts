@@ -170,7 +170,7 @@ export class Minimap {
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0,0,0,0.75)';
       ctx.strokeText(m.icon, x, y);
-      ctx.fillStyle = scream ? '#ff4030' : m.cls === 'dead' ? '#b8ab90' : '#fff0c8';
+      ctx.fillStyle = scream || m.cls === 'dev-monster' ? '#ff4030' : m.cls === 'dead' ? '#b8ab90' : '#fff0c8';
       ctx.fillText(m.icon, x, y);
     }
     ctx.globalAlpha = 1;
