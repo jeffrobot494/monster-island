@@ -113,11 +113,12 @@ function jitter(hex, r, amt = 0.07) {
 }
 
 // ---------------------------------------------------------------- SDF body builder
-// Types: 0 tapered capsule, 1 ellipsoid, 2 rounded box, 3 cylinder, 4 capped cone (vertical, elliptical)
+// Types: 0 tapered capsule, 1 ellipsoid, 2 rounded box, 3 cylinder, 4 capped cone (vertical, elliptical),
+// 5 band: a horizontal slice of other shapes grown outward by a thickness (belts that hug the body)
 class Body {
   constructor(pal) { this.ops = []; this.eyes = []; this.pal = pal; }
   _push(p, mat, o) {
-    p.mat = mat; p.bone = this.curBone; p.part = this.curPart || 'body'; p.k = o.k ?? 0.06; p.op = o.op || 'u'; p.n = o.n || 0; p.f = o.f || 4;
+    p.mat = mat; p.bone = this.curBone; p.part = this.curPart || 'body'; p.k = o.k ?? 0.06; p.op = o.ghost ? 'g' : o.op || 'u'; p.n = o.n || 0; p.f = o.f || 4;
     if (o.rot) { const m = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(o.rot[0], o.rot[1], o.rot[2])).invert(); p.m = m.elements.slice(); }
     this.ops.push(p); return p;
   }
@@ -126,6 +127,7 @@ class Body {
   box(c, h, rr, mat, o = {}) { return this._push({ t: 2, c, h, rr }, mat, o); }
   cyl(c, r, h, mat, o = {}) { return this._push({ t: 3, c, r, h }, mat, o); }
   cone(c, h, r1, r2, zs, mat, o = {}) { return this._push({ t: 4, c, h, r1, r2, zs }, mat, o); }
+  band(refs, y, hh, th, mat, o = {}) { return this._push({ t: 5, refs, y, hh, th }, mat, o); }
   chain(pts, radii, mat, o = {}) { for (let i = 0; i < pts.length - 1; i++) this.cap(pts[i], pts[i + 1], radii[i], radii[i + 1], mat, o); }
   eye(c, r, color) { this.eyes.push({ c, r, color }); }
   bone(name) { this.curBone = name; }
@@ -136,7 +138,7 @@ class Body {
   // Bake to world units: scale positions/radii, compute bounds, order ops (unions, cuts, late unions).
   finalize(s) {
     const S = (v) => mul(v, s);
-    const order = { u: 0, s: 1, l: 2 };
+    const order = { g: -1, u: 0, s: 1, l: 2 }; // ghosts: shapes that only shape a band, never drawn
     this.ops.sort((a, b) => order[a.op] - order[b.op]);
     this.lo = [1e9, 1e9, 1e9]; this.hi = [-1e9, -1e9, -1e9];
     for (const p of this.ops) {
@@ -149,6 +151,13 @@ class Body {
         lo = [Math.min(p.a[0], p.b[0]) - r, Math.min(p.a[1], p.b[1]) - r, Math.min(p.a[2], p.b[2]) - r];
         hi = [Math.max(p.a[0], p.b[0]) + r, Math.max(p.a[1], p.b[1]) + r, Math.max(p.a[2], p.b[2]) + r];
         p.c = lerp(p.a, p.b, 0.5); p.R = vlen(p.ba) / 2 + r;
+      } else if (p.t === 5) {
+        p.y *= s; p.hh *= s; p.th *= s;
+        let zc = 0; for (const q of p.refs) zc += q.c[2] / p.refs.length;
+        p.c = [0, p.y, zc]; p.R = 0;
+        for (const q of p.refs) p.R = Math.max(p.R, vlen(sub(q.c, p.c)) + q.R);
+        p.R += p.th;
+        const rx = p.R; lo = [-rx, p.y - p.hh, zc - rx]; hi = [rx, p.y + p.hh, zc + rx];
       } else {
         p.c = S(p.c);
         if (p.t === 1) { p.r = S(p.r); p.R = Math.max(...p.r); }
@@ -158,7 +167,7 @@ class Body {
         lo = sub(p.c, [p.R, p.R, p.R]); hi = add(p.c, [p.R, p.R, p.R]);
       }
       p.R += p.n;
-      if (p.op !== 's') {
+      if (p.op !== 's' && p.op !== 'g') {
         const pb = ((this.parts ||= {})[p.part] ||= { lo: [1e9, 1e9, 1e9], hi: [-1e9, -1e9, -1e9] });
         for (let i = 0; i < 3; i++) {
           this.lo[i] = Math.min(this.lo[i], lo[i] - p.n); this.hi[i] = Math.max(this.hi[i], hi[i] + p.n);
@@ -184,6 +193,14 @@ function primDist(p, x, y, z) {
     let h = (ax * p.ba[0] + ay * p.ba[1] + az * p.ba[2]) * p.inv; h = h < 0 ? 0 : h > 1 ? 1 : h;
     const dx = ax - p.ba[0] * h, dy = ay - p.ba[1] * h, dz = az - p.ba[2] * h;
     return Math.sqrt(dx * dx + dy * dy + dz * dz) - (p.ra + (p.rb - p.ra) * h);
+  }
+  if (p.t === 5) {
+    let d = 1e9;
+    for (const q of p.refs) {
+      const b = primDist(q, x, y, z), h = clamp(0.5 + 0.5 * (d - b) / q.k, 0, 1);
+      d = d + (b - d) * h - q.k * h * (1 - h);
+    }
+    return Math.max(d - p.th, Math.abs(y - p.y) - p.hh);
   }
   qx = x - p.c[0]; qy = y - p.c[1]; qz = z - p.c[2];
   if (p.m) { const e = p.m; const tx = e[0] * qx + e[4] * qy + e[8] * qz, ty = e[1] * qx + e[5] * qy + e[9] * qz, tz = e[2] * qx + e[6] * qy + e[10] * qz; qx = tx; qy = ty; qz = tz; }
@@ -218,6 +235,7 @@ function field(ops, x, y, z, withCol) {
   let d = 1e9, cr = 0, cg = 0, cb = 0;
   for (let i = 0; i < ops.length; i++) {
     const p = ops[i];
+    if (p.op === 'g') continue;
     const dcx = x - p.c[0], dcy = y - p.c[1], dcz = z - p.c[2];
     const lb = Math.sqrt(dcx * dcx + dcy * dcy + dcz * dcz) - p.R;
     if (p.op === 's') {
@@ -230,6 +248,7 @@ function field(ops, x, y, z, withCol) {
       continue;
     }
     if (lb - d >= p.k) continue;
+    if (p.t === 5 && Math.abs(y - p.y) - p.hh - d >= p.k) continue;
     let b = primDist(p, x, y, z);
     if (p.n) b += (fbm(x * p.f, y * p.f, z * p.f) - 0.5) * 2 * p.n;
     if (b - d >= p.k) continue;
@@ -364,12 +383,12 @@ function meshBody(body, cellsAcross, height, boneIdx, cellSize, aoScale = 1) {
       const x = P[vi * 3], y = P[vi * 3 + 1], z = P[vi * 3 + 2];
       const near = opsNear(x, y, z);
       let dmin = 1e9; const cand = [];
-      for (const p of near) { if (p.op === 's' || !p.bone) continue; const d = primDist(p, x, y, z); cand.push(p, d); if (d < dmin) dmin = d; }
+      for (const p of near) { if (p.op === 's' || p.op === 'g' || !p.bone) continue; const d = primDist(p, x, y, z); cand.push(p, d); if (d < dmin) dmin = d; }
       const acc = new Map();
       const addW = (name, w) => { const i = boneIdx[name]; if (i !== undefined) acc.set(i, (acc.get(i) || 0) + w); };
       for (let c = 0; c < cand.length; c += 2) {
         const p = cand[c]; let w = 1 - (cand[c + 1] - dmin) / blend; if (w <= 0) continue; w *= w;
-        if (p.bone === 'kilt') { const top = p.c[1] + p.h, t = clamp((top - y) / (2 * p.h), 0, 1); addW('Hips', w * (1 - 0.75 * t)); addW(x > 0 ? 'LeftUpLeg' : 'RightUpLeg', w * 0.75 * t); }
+        if (p.bone === 'kilt') { const hh = p.hh ?? p.h, top = p.c[1] + hh, t = clamp((top - y) / (2 * hh), 0, 1); addW('Hips', w * (1 - 0.75 * t)); addW(x > 0 ? 'LeftUpLeg' : 'RightUpLeg', w * 0.75 * t); }
         else addW(p.bone, w);
       }
       const top = [...acc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
