@@ -1,0 +1,1186 @@
+<title>Monster Look Test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus+SC&family=Alegreya+Sans:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a hazy diorama stage on top, the rolled individuals as a ledger beneath it. Single dusk look, matching the concept art. */
+:root {
+  --bg: #17120d;
+  --panel: #211a12;
+  --line: #3a2e20;
+  --fg: #eadcc0;
+  --muted: #a8977a;
+  --bronze: #d9963a;
+  --ink: #0d0a07;
+  --display: "Marcellus SC", "Trajan Pro", Georgia, serif;
+  --body: "Alegreya Sans", "Gill Sans", "Trebuchet MS", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { background: var(--bg); color: var(--fg); }
+body { font-family: var(--body); font-size: 16px; line-height: 1.45; padding-inline: 16px; padding-block: 16px 40px; }
+.wrap { max-width: 1400px; margin: 0 auto; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; }
+h1 { font-family: var(--display); font-weight: 400; font-size: 1.6rem; letter-spacing: .04em; margin: 0; text-wrap: balance; }
+h1 small { display: block; font-family: var(--body); font-size: .85rem; letter-spacing: 0; color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-left: auto; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg button { font: 500 .9rem var(--body); color: var(--muted); background: transparent; border: 0; padding: 7px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--fg); box-shadow: inset 0 -2px 0 var(--bronze); }
+.seg button:hover { color: var(--fg); }
+.label { font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin-right: 6px; }
+.reroll { font: 700 .9rem var(--body); color: var(--ink); background: var(--bronze); border: 0; border-radius: 4px; padding: 8px 16px; cursor: pointer; }
+.reroll:hover { filter: brightness(1.1); }
+button:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.stage { position: relative; width: 100%; aspect-ratio: 16 / 8; max-height: 74vh; max-width: 100%; border-radius: 4px; overflow: hidden; background: var(--panel); }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 120px rgba(13,10,7,.55); }
+.status { position: absolute; left: 14px; bottom: 12px; font: .8rem var(--mono); color: var(--fg); background: rgba(13,10,7,.55); padding: 4px 8px; border-radius: 3px; z-index: 1; }
+.ledger { display: grid; grid-template-columns: minmax(0, 420px); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; display: grid; gap: 4px; min-width: 0; }
+.card h3 { font-family: var(--display); font-weight: 400; font-size: 1.05rem; margin: 0; }
+.card .ep { color: var(--muted); font-style: italic; font-size: .9rem; }
+.card dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 4px 0 0; font-size: .82rem; }
+.card dt { color: var(--muted); }
+.card dd { margin: 0; font-family: var(--mono); font-size: .78rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.note { color: var(--muted); font-size: .9rem; max-width: 70ch; }
+@media (max-width: 600px) { .stage { aspect-ratio: 4 / 5; } .controls { margin-left: 0; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Monster Look Test<small>One Nephil rolled from the giant family, with the champion for scale</small></h1>
+    <div class="controls">
+      <div><span class="label">Motion</span><span class="seg" id="anims"></span></div>
+      <div><span class="label">Build</span><span class="seg" id="builds"></span></div>
+      <div><span class="label">Style</span><span class="seg" id="styles"></span></div>
+      <button class="reroll" id="reroll">Roll a new giant</button>
+    </div>
+  </header>
+  <div class="stage" id="stage"><div class="status" id="status">Shaping…</div></div>
+  <div class="ledger" id="ledger"></div>
+  <p class="note">Drag to orbit, scroll to zoom. The giant is built in the browser from about 70 soft shapes blended into a body, with the hands meshed finer and the weapon as its own piece, so every trait in the card is just a number fed to the same recipe. Nothing was modeled by hand.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/utils/SkeletonUtils.js"></script>
+<script>
+'use strict';
+// ---------------------------------------------------------------- math & noise
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const vlen = (a) => Math.hypot(a[0], a[1], a[2]);
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a) => mul(a, 1 / (vlen(a) || 1));
+const basisRot = (X, Y, Z) => { const e = new THREE.Euler().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...X), new THREE.Vector3(...Y), new THREE.Vector3(...Z))); return [e.x, e.y, e.z]; };
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+function mulberry(seed) {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+const range = (r, a, b) => a + (b - a) * r();
+const pick = (r, arr) => arr[Math.floor(r() * arr.length)];
+
+function hash3(i, j, k) {
+  let h = Math.imul(i, 374761393) ^ Math.imul(j, 668265263) ^ Math.imul(k, 1274126177);
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function vnoise(x, y, z) {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  let fx = x - ix, fy = y - iy, fz = z - iz;
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
+  const a = hash3(ix, iy, iz), b = hash3(ix + 1, iy, iz), c = hash3(ix, iy + 1, iz), d = hash3(ix + 1, iy + 1, iz);
+  const e = hash3(ix, iy, iz + 1), f = hash3(ix + 1, iy, iz + 1), g = hash3(ix, iy + 1, iz + 1), h = hash3(ix + 1, iy + 1, iz + 1);
+  const x1 = a + (b - a) * fx, x2 = c + (d - c) * fx, x3 = e + (f - e) * fx, x4 = g + (h - g) * fx;
+  const y1 = x1 + (x2 - x1) * fy, y2 = x3 + (x4 - x3) * fy;
+  return y1 + (y2 - y1) * fz;
+}
+const fbm = (x, y, z) => 0.62 * vnoise(x, y, z) + 0.38 * vnoise(x * 2.3 + 17.1, y * 2.3 + 3.7, z * 2.3 + 9.2);
+
+function hexRGB(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]; }
+function jitter(hex, r, amt = 0.07) {
+  const c = new THREE.Color(hex); const hsl = {}; c.getHSL(hsl);
+  c.setHSL((hsl.h + (r() - 0.5) * amt * 0.6 + 1) % 1, clamp(hsl.s + (r() - 0.5) * amt * 2, 0, 1), clamp(hsl.l + (r() - 0.5) * amt * 1.5, 0, 1));
+  return '#' + c.getHexString();
+}
+
+// ---------------------------------------------------------------- SDF body builder
+// Types: 0 tapered capsule, 1 ellipsoid, 2 rounded box, 3 cylinder, 4 capped cone (vertical, elliptical)
+class Body {
+  constructor(pal) { this.ops = []; this.eyes = []; this.pal = pal; }
+  _push(p, mat, o) {
+    p.mat = mat; p.bone = this.curBone; p.part = this.curPart || 'body'; p.k = o.k ?? 0.06; p.op = o.op || 'u'; p.n = o.n || 0; p.f = o.f || 4;
+    if (o.rot) { const m = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(o.rot[0], o.rot[1], o.rot[2])).invert(); p.m = m.elements.slice(); }
+    this.ops.push(p); return p;
+  }
+  cap(a, b, ra, rb, mat, o = {}) { return this._push({ t: 0, a, b, ra, rb }, mat, o); }
+  ell(c, r, mat, o = {}) { return this._push({ t: 1, c, r }, mat, o); }
+  box(c, h, rr, mat, o = {}) { return this._push({ t: 2, c, h, rr }, mat, o); }
+  cyl(c, r, h, mat, o = {}) { return this._push({ t: 3, c, r, h }, mat, o); }
+  cone(c, h, r1, r2, zs, mat, o = {}) { return this._push({ t: 4, c, h, r1, r2, zs }, mat, o); }
+  chain(pts, radii, mat, o = {}) { for (let i = 0; i < pts.length - 1; i++) this.cap(pts[i], pts[i + 1], radii[i], radii[i + 1], mat, o); }
+  eye(c, r, color) { this.eyes.push({ c, r, color }); }
+  bone(name) { this.curBone = name; }
+  // Shapes in different parts never blend: each part is meshed on its own (hands finer, weapons as separate props).
+  part(name) { this.curPart = name; }
+  joint(name, pos) { (this.joints ||= {})[name] = pos; }
+  sym(fn) { fn(1); fn(-1); }
+  // Bake to world units: scale positions/radii, compute bounds, order ops (unions, cuts, late unions).
+  finalize(s) {
+    const S = (v) => mul(v, s);
+    const order = { u: 0, s: 1, l: 2 };
+    this.ops.sort((a, b) => order[a.op] - order[b.op]);
+    this.lo = [1e9, 1e9, 1e9]; this.hi = [-1e9, -1e9, -1e9];
+    for (const p of this.ops) {
+      p.k *= s; p.n *= s; p.f /= s; p.col = hexRGB(this.pal[p.mat]);
+      let lo, hi;
+      if (p.t === 0) {
+        p.a = S(p.a); p.b = S(p.b); p.ra *= s; p.rb *= s;
+        p.ba = sub(p.b, p.a); p.inv = 1 / Math.max(1e-9, p.ba[0] ** 2 + p.ba[1] ** 2 + p.ba[2] ** 2);
+        const r = Math.max(p.ra, p.rb);
+        lo = [Math.min(p.a[0], p.b[0]) - r, Math.min(p.a[1], p.b[1]) - r, Math.min(p.a[2], p.b[2]) - r];
+        hi = [Math.max(p.a[0], p.b[0]) + r, Math.max(p.a[1], p.b[1]) + r, Math.max(p.a[2], p.b[2]) + r];
+        p.c = lerp(p.a, p.b, 0.5); p.R = vlen(p.ba) / 2 + r;
+      } else {
+        p.c = S(p.c);
+        if (p.t === 1) { p.r = S(p.r); p.R = Math.max(...p.r); }
+        if (p.t === 2) { p.h = S(p.h); p.rr *= s; p.R = vlen(p.h) + p.rr; }
+        if (p.t === 3) { p.r *= s; p.h *= s; p.R = Math.hypot(p.r, p.h); }
+        if (p.t === 4) { p.h *= s; p.r1 *= s; p.r2 *= s; p.R = Math.hypot(Math.max(p.r1, p.r2), p.h); }
+        lo = sub(p.c, [p.R, p.R, p.R]); hi = add(p.c, [p.R, p.R, p.R]);
+      }
+      p.R += p.n;
+      if (p.op !== 's') {
+        const pb = ((this.parts ||= {})[p.part] ||= { lo: [1e9, 1e9, 1e9], hi: [-1e9, -1e9, -1e9] });
+        for (let i = 0; i < 3; i++) {
+          this.lo[i] = Math.min(this.lo[i], lo[i] - p.n); this.hi[i] = Math.max(this.hi[i], hi[i] + p.n);
+          pb.lo[i] = Math.min(pb.lo[i], lo[i] - p.n); pb.hi[i] = Math.max(pb.hi[i], hi[i] + p.n);
+        }
+      }
+    }
+    for (const e of this.eyes) { e.c = S(e.c); e.r *= s; }
+    if (this.joints) for (const k in this.joints) this.joints[k] = S(this.joints[k]);
+    this.s = s;
+    return this;
+  }
+  // One body-like object per part, each with its own shapes and bounds.
+  split() {
+    return Object.entries(this.parts || {}).map(([name, b]) => ({ name, ops: this.ops.filter((p) => p.part === name), lo: b.lo, hi: b.hi, s: this.s }));
+  }
+}
+
+function primDist(p, x, y, z) {
+  let qx, qy, qz;
+  if (p.t === 0) {
+    const ax = x - p.a[0], ay = y - p.a[1], az = z - p.a[2];
+    let h = (ax * p.ba[0] + ay * p.ba[1] + az * p.ba[2]) * p.inv; h = h < 0 ? 0 : h > 1 ? 1 : h;
+    const dx = ax - p.ba[0] * h, dy = ay - p.ba[1] * h, dz = az - p.ba[2] * h;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - (p.ra + (p.rb - p.ra) * h);
+  }
+  qx = x - p.c[0]; qy = y - p.c[1]; qz = z - p.c[2];
+  if (p.m) { const e = p.m; const tx = e[0] * qx + e[4] * qy + e[8] * qz, ty = e[1] * qx + e[5] * qy + e[9] * qz, tz = e[2] * qx + e[6] * qy + e[10] * qz; qx = tx; qy = ty; qz = tz; }
+  if (p.t === 1) {
+    const r = p.r;
+    const k0 = Math.sqrt((qx / r[0]) ** 2 + (qy / r[1]) ** 2 + (qz / r[2]) ** 2);
+    const k1 = Math.sqrt((qx / (r[0] * r[0])) ** 2 + (qy / (r[1] * r[1])) ** 2 + (qz / (r[2] * r[2])) ** 2);
+    return k1 < 1e-9 ? -Math.min(r[0], r[1], r[2]) : k0 * (k0 - 1) / k1;
+  }
+  if (p.t === 2) {
+    const dx = Math.abs(qx) - p.h[0] + p.rr, dy = Math.abs(qy) - p.h[1] + p.rr, dz = Math.abs(qz) - p.h[2] + p.rr;
+    return Math.hypot(Math.max(dx, 0), Math.max(dy, 0), Math.max(dz, 0)) + Math.min(Math.max(dx, dy, dz), 0) - p.rr;
+  }
+  if (p.t === 3) {
+    const dx = Math.hypot(qx, qy) - p.r, dy = Math.abs(qz) - p.h;
+    return Math.min(Math.max(dx, dy), 0) + Math.hypot(Math.max(dx, 0), Math.max(dy, 0));
+  }
+  // capped cone, axis y, elliptical in z
+  const h = p.h, r1 = p.r1, r2 = p.r2;
+  const q0 = Math.hypot(qx, qz / p.zs), q1 = qy;
+  const k1x = r2, k1y = h, k2x = r2 - r1, k2y = 2 * h;
+  const cax = q0 - Math.min(q0, q1 < 0 ? r1 : r2), cay = Math.abs(q1) - h;
+  const t = clamp(((k1x - q0) * k2x + (k1y - q1) * k2y) / (k2x * k2x + k2y * k2y), 0, 1);
+  const cbx = q0 - k1x + k2x * t, cby = q1 - k1y + k2y * t;
+  const sgn = cbx < 0 && cay < 0 ? -1 : 1;
+  return sgn * Math.sqrt(Math.min(cax * cax + cay * cay, cbx * cbx + cby * cby));
+}
+
+const COL = [0, 0, 0];
+// Signed distance of the whole body; with withCol, also the blended albedo at that point (into COL).
+function field(ops, x, y, z, withCol) {
+  let d = 1e9, cr = 0, cg = 0, cb = 0;
+  for (let i = 0; i < ops.length; i++) {
+    const p = ops[i];
+    const dcx = x - p.c[0], dcy = y - p.c[1], dcz = z - p.c[2];
+    const lb = Math.sqrt(dcx * dcx + dcy * dcy + dcz * dcz) - p.R;
+    if (p.op === 's') {
+      if (lb > -d + p.k) continue;
+      let b = primDist(p, x, y, z);
+      if (p.n) b += (fbm(x * p.f, y * p.f, z * p.f) - 0.5) * 2 * p.n;
+      const h = clamp(0.5 - 0.5 * (d + b) / p.k, 0, 1);
+      d = d + (-b - d) * h + p.k * h * (1 - h);
+      if (withCol) { cr += (p.col[0] - cr) * h; cg += (p.col[1] - cg) * h; cb += (p.col[2] - cb) * h; }
+      continue;
+    }
+    if (lb - d >= p.k) continue;
+    let b = primDist(p, x, y, z);
+    if (p.n) b += (fbm(x * p.f, y * p.f, z * p.f) - 0.5) * 2 * p.n;
+    if (b - d >= p.k) continue;
+    if (d - b >= p.k) { d = b; if (withCol) { cr = p.col[0]; cg = p.col[1]; cb = p.col[2]; } continue; }
+    const h = clamp(0.5 + 0.5 * (d - b) / p.k, 0, 1); // weight toward b
+    d = d + (b - d) * h - p.k * h * (1 - h);
+    if (withCol) { cr += (p.col[0] - cr) * h; cg += (p.col[1] - cg) * h; cb += (p.col[2] - cb) * h; }
+  }
+  if (withCol) { COL[0] = cr; COL[1] = cg; COL[2] = cb; }
+  return d;
+}
+
+// ---------------------------------------------------------------- surface nets mesher
+const CORNERS = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
+const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+
+function cellFor(body, cellsAcross, height) {
+  const ext = sub(body.hi, body.lo);
+  return Math.min(Math.max(ext[0], ext[1], ext[2]) / cellsAcross, height / (cellsAcross * 0.55));
+}
+function meshBody(body, cellsAcross, height, boneIdx, cellSize, aoScale = 1) {
+  const ops = body.ops;
+  const lo = body.lo, hi = body.hi;
+  const ext = sub(hi, lo);
+  let cell = cellSize || cellFor(body, cellsAcross, height);
+  while (((ext[0] / cell + 4) * (ext[1] / cell + 4) * (ext[2] / cell + 4)) > 2.6e6) cell *= 1.08;
+  const o = sub(lo, [cell * 2, cell * 2, cell * 2]);
+  const nx = Math.ceil(ext[0] / cell) + 5, ny = Math.ceil(ext[1] / cell) + 5, nz = Math.ceil(ext[2] / cell) + 5;
+  const F = new Float32Array(nx * ny * nz);
+  // Work in 4×4×4 blocks: a block far from the surface takes its centre's distance; a block near it is
+  // sampled exactly, but only against the shapes close enough to matter there.
+  const st = 4, bx = Math.ceil(nx / st), by = Math.ceil(ny / st), bz = Math.ceil(nz / st);
+  const blockOps = new Array(bx * by * bz).fill(null);
+  const br = (st - 1) * 0.5 * cell * 1.733;
+  for (let bk = 0; bk < bz; bk++) for (let bj = 0; bj < by; bj++) for (let bi = 0; bi < bx; bi++) {
+    const x0 = o[0] + (bi * st + (st - 1) / 2) * cell, y0 = o[1] + (bj * st + (st - 1) / 2) * cell, z0 = o[2] + (bk * st + (st - 1) / 2) * cell;
+    const dc = field(ops, x0, y0, z0, false);
+    const i1 = Math.min(nx, bi * st + st), j1 = Math.min(ny, bj * st + st), k1 = Math.min(nz, bk * st + st);
+    if (Math.abs(dc) > br + 2 * cell) {
+      for (let k = bk * st; k < k1; k++) for (let j = bj * st; j < j1; j++) for (let i = bi * st; i < i1; i++) F[i + nx * (j + ny * k)] = dc;
+      continue;
+    }
+    const list = ops.filter((p) => {
+      const lb = Math.hypot(x0 - p.c[0], y0 - p.c[1], z0 - p.c[2]) - p.R;
+      return lb < (p.op === 's' ? -dc : dc) + 2 * br + p.k + 2 * cell;
+    });
+    blockOps[bi + bx * (bj + by * bk)] = list;
+    for (let k = bk * st; k < k1; k++) for (let j = bj * st; j < j1; j++) for (let i = bi * st; i < i1; i++)
+      F[i + nx * (j + ny * k)] = field(list, o[0] + i * cell, o[1] + j * cell, o[2] + k * cell, false);
+  }
+  const opsNear = (x, y, z) => {
+    const bi = Math.floor((x - o[0]) / cell / st), bj = Math.floor((y - o[1]) / cell / st), bk = Math.floor((z - o[2]) / cell / st);
+    return (bi >= 0 && bj >= 0 && bk >= 0 && bi < bx && bj < by && bk < bz && blockOps[bi + bx * (bj + by * bk)]) || ops;
+  };
+  const cx = nx - 1, cy = ny - 1;
+  const cellV = new Int32Array(cx * cy * (nz - 1)).fill(-1);
+  const pos = [];
+  const v = new Float32Array(8);
+  for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    let mask = 0;
+    for (let c = 0; c < 8; c++) { const C = CORNERS[c]; v[c] = F[(i + C[0]) + nx * ((j + C[1]) + ny * (k + C[2]))]; if (v[c] < 0) mask |= 1 << c; }
+    if (mask === 0 || mask === 255) continue;
+    let sx = 0, sy = 0, sz = 0, cnt = 0;
+    for (const [a, b] of EDGES) {
+      if ((v[a] < 0) === (v[b] < 0)) continue;
+      const t = v[a] / (v[a] - v[b]); const A = CORNERS[a], B = CORNERS[b];
+      sx += A[0] + (B[0] - A[0]) * t; sy += A[1] + (B[1] - A[1]) * t; sz += A[2] + (B[2] - A[2]) * t; cnt++;
+    }
+    cellV[i + cx * (j + cy * k)] = pos.length / 3;
+    pos.push(o[0] + (i + sx / cnt) * cell, o[1] + (j + sy / cnt) * cell, o[2] + (k + sz / cnt) * cell);
+  }
+  const idx = [];
+  const cid = (i, j, k) => cellV[i + cx * (j + cy * k)];
+  for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+    const v0 = F[i + nx * (j + ny * k)] < 0;
+    if (v0 !== (F[(i + 1) + nx * (j + ny * k)] < 0)) quad(cid(i, j, k), cid(i, j - 1, k), cid(i, j - 1, k - 1), cid(i, j, k - 1));
+    if (v0 !== (F[i + nx * ((j + 1) + ny * k)] < 0)) quad(cid(i, j, k), cid(i - 1, j, k), cid(i - 1, j, k - 1), cid(i, j, k - 1));
+    if (v0 !== (F[i + nx * (j + ny * (k + 1))] < 0)) quad(cid(i, j, k), cid(i - 1, j, k), cid(i - 1, j - 1, k), cid(i, j - 1, k));
+  }
+  function quad(a, b, c, d) { if (a < 0 || b < 0 || c < 0 || d < 0) return; idx.push(a, b, c, a, c, d); }
+
+  // project to the surface, sample normals, colour and occlusion
+  const nV = pos.length / 3;
+  const P = new Float32Array(pos), N = new Float32Array(nV * 3), Cc = new Float32Array(nV * 3);
+  const e = cell * 1.6; // wide enough to smooth skin lumps out of the shading
+  const H = height;
+  for (let vi = 0; vi < nV; vi++) {
+    let x = P[vi * 3], y = P[vi * 3 + 1], z = P[vi * 3 + 2];
+    const near = opsNear(x, y, z);
+    let gx = 0, gy = 0, gz = 0;
+    for (let it = 0; it < 2; it++) {
+      gx = field(near, x + e, y, z) - field(near, x - e, y, z);
+      gy = field(near, x, y + e, z) - field(near, x, y - e, z);
+      gz = field(near, x, y, z + e) - field(near, x, y, z - e);
+      const gl = Math.hypot(gx, gy, gz) || 1; gx /= gl; gy /= gl; gz /= gl;
+      if (it === 1) break;
+      const dd = clamp(field(near, x, y, z), -cell * 0.6, cell * 0.6);
+      x -= gx * dd; y -= gy * dd; z -= gz * dd;
+    }
+    P[vi * 3] = x; P[vi * 3 + 1] = y; P[vi * 3 + 2] = z;
+    N[vi * 3] = gx; N[vi * 3 + 1] = gy; N[vi * 3 + 2] = gz;
+    field(near, x - gx * cell * 0.3, y - gy * cell * 0.3, z - gz * cell * 0.3, true);
+    let r = COL[0], g = COL[1], b = COL[2];
+    // occlusion: how much body crowds the space just outside this point
+    let occ = 0, sca = 1;
+    for (let s = 1; s <= 5; s++) {
+      const hh = H * aoScale * (0.006 + 0.022 * s);
+      const dd = field(ops, x + gx * hh, y + gy * hh, z + gz * hh);
+      occ += (hh - dd) * sca / (H * aoScale) * 18; sca *= 0.7;
+    }
+    const ao = clamp(1 - occ, 0, 1);
+    const mott = 0.93 + 0.14 * fbm(x * 7, y * 7, z * 7);
+    const grime = 0.72 + 0.28 * smooth(0, H * 0.45, y);
+    const k = (0.3 + 0.7 * ao) * mott * grime;
+    Cc[vi * 3] = r * k; Cc[vi * 3 + 1] = g * k; Cc[vi * 3 + 2] = b * k;
+  }
+  // orient triangles by the field gradient
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    const ux = P[b * 3] - P[a * 3], uy = P[b * 3 + 1] - P[a * 3 + 1], uz = P[b * 3 + 2] - P[a * 3 + 2];
+    const wx = P[c * 3] - P[a * 3], wy = P[c * 3 + 1] - P[a * 3 + 1], wz = P[c * 3 + 2] - P[a * 3 + 2];
+    const fx = uy * wz - uz * wy, fy = uz * wx - ux * wz, fz = ux * wy - uy * wx;
+    if (fx * (N[a * 3] + N[b * 3] + N[c * 3]) + fy * (N[a * 3 + 1] + N[b * 3 + 1] + N[c * 3 + 1]) + fz * (N[a * 3 + 2] + N[b * 3 + 2] + N[c * 3 + 2]) < 0) { idx[t + 1] = c; idx[t + 2] = b; }
+  }
+  const geo = new THREE.BufferGeometry();
+  if (boneIdx) {
+    // Skin weights: each shape belongs to a bone; a vertex takes weight from every shape whose surface is within
+    // `blend` of the nearest one, so joints bend through a soft band instead of a seam.
+    const SI = new Uint16Array(nV * 4), SW = new Float32Array(nV * 4);
+    const blend = 0.09 * body.s;
+    for (let vi = 0; vi < nV; vi++) {
+      const x = P[vi * 3], y = P[vi * 3 + 1], z = P[vi * 3 + 2];
+      const near = opsNear(x, y, z);
+      let dmin = 1e9; const cand = [];
+      for (const p of near) { if (p.op === 's' || !p.bone) continue; const d = primDist(p, x, y, z); cand.push(p, d); if (d < dmin) dmin = d; }
+      const acc = new Map();
+      const addW = (name, w) => { const i = boneIdx[name]; if (i !== undefined) acc.set(i, (acc.get(i) || 0) + w); };
+      for (let c = 0; c < cand.length; c += 2) {
+        const p = cand[c]; let w = 1 - (cand[c + 1] - dmin) / blend; if (w <= 0) continue; w *= w;
+        if (p.bone === 'kilt') { const top = p.c[1] + p.h, t = clamp((top - y) / (2 * p.h), 0, 1); addW('Hips', w * (1 - 0.75 * t)); addW(x > 0 ? 'LeftUpLeg' : 'RightUpLeg', w * 0.75 * t); }
+        else addW(p.bone, w);
+      }
+      const top = [...acc.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+      if (!top.length) top.push([boneIdx.Hips, 1]);
+      const sum = top.reduce((a, e) => a + e[1], 0);
+      top.forEach(([i, w], k) => { SI[vi * 4 + k] = i; SW[vi * 4 + k] = w / sum; });
+    }
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(SI, 4));
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(SW, 4));
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(Cc, 3));
+  geo.setIndex(nV > 65535 ? new THREE.Uint32BufferAttribute(idx, 1) : new THREE.Uint16BufferAttribute(idx, 1));
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+  return geo;
+}
+
+// ---------------------------------------------------------------- names
+const SYL_A = ['Og', 'Ish', 'Ahi', 'Bel', 'Shem', 'Gol', 'Ark', 'Zim', 'Hur', 'Tal', 'Nim', 'Ash', 'Kesh', 'Ram', 'Yeb', 'Azaz'];
+const SYL_B = ['man', 'bai', 'rod', 'ath', 'ek', 'ezer', 'on', 'ai', 'ush', 'iel', 'oth', 'ar', 'im', 'ad'];
+function nameFor(r, epithets) { return { name: pick(r, SYL_A) + pick(r, SYL_B), epithet: 'the ' + pick(r, epithets) }; }
+
+// ---------------------------------------------------------------- families
+const BONE = '#d6c49a', HOOF = '#2a221c', MOUTH = '#3a120c', LEATHER = '#4a3222';
+
+// Builds set the ranges each giant rolls its proportions from; within a build every number varies continuously.
+const NEPHIL_BUILDS = {
+  lanky:   { label: 'lanky', H: [4.0, 5.0], Ls: [1.3, 1.5], Ts: [1.08, 1.2], sw: [0.66, 0.8], ww: [0.52, 0.62], T: [0.52, 0.66], musc: [0.05, 0.35], gut: [0, 0.08], armL: [1.2, 1.4], hunch: [0.4, 1], hs: [0.86, 1.0], weapons: ['spear', 'spear', 'club', 'fists'] },
+  brute:   { label: 'brute', H: [3.0, 3.7], Ls: [0.8, 0.92], Ts: [0.92, 1.0], sw: [1.08, 1.25], ww: [1.1, 1.3], T: [1.05, 1.2], musc: [0.2, 0.6], gut: [0.55, 1], armL: [0.95, 1.08], hunch: [0.1, 0.7], hs: [0.98, 1.18], weapons: ['club', 'maul', 'maul', 'fists'] },
+  athlete: { label: 'athletic', H: [3.5, 4.3], Ls: [1.05, 1.15], Ts: [1.0, 1.08], sw: [1.22, 1.4], ww: [0.6, 0.7], T: [0.88, 0.98], musc: [0.8, 1], gut: [0, 0.06], armL: [1.0, 1.1], hunch: [0, 0.3], hs: [0.9, 1.04], weapons: ['maul', 'club', 'spear', 'fists'] },
+};
+
+const HAFT_R = { club: 0.052, maul: 0.048, spear: 0.044 };
+
+// A closed fist around a haft of radius haftR (an empty fist closes on nothing much). The haft axis g runs across the
+// hand, drooping a little toward the forearm so a weapon points forward and slightly down at rest. Fingers are
+// separate capsules, spaced so they never touch, each wrapping the haft in its own plane. Returns the grip frame.
+function fist(B, el, wr, sd, hT, haftR) {
+  const fa = norm(sub(wr, el));
+  const g = norm(add(norm(sub([0, 0, 1], mul(fa, fa[2]))), mul(fa, 0.55)));
+  const a = norm(sub(fa, mul(g, dot(fa, g)))); // the hand's own long axis, bent at the wrist to meet the haft square
+  let n = norm(cross(g, a)); if (n[0] * sd < 0) n = mul(n, -1); // back of the hand faces out
+  const fr = 0.034 * hT, sp = 2 * fr + 0.014 * hT, rho = haftR + fr * 0.92;
+  const c = add(wr, mul(a, 0.15 * hT + rho * 0.55));
+  const P = (deg, rr, o) => { const t = deg * Math.PI / 180; return add(add(c, mul(g, o)), add(mul(n, Math.cos(t) * rr), mul(a, Math.sin(t) * rr))); };
+  const sk = { k: 0.006 };
+  B.cap(add(wr, mul(fa, -0.05)), add(c, add(mul(n, rho * 0.6), mul(a, -0.1 * hT))), 0.075 * hT, 0.07 * hT, 'skin', { k: 0.03 }); // wrist
+  B.ell(add(c, add(mul(n, rho * 0.62), mul(a, -0.1 * hT))), [1.9 * sp, 0.12 * hT, 0.062 * hT], 'skin', { k: 0.03, rot: basisRot(g, a, n) }); // back of the hand
+  [[1, 1, 0.95], [1, 1.05, 1], [0.94, 0.98, 0.95], [0.84, 0.88, 0.8]].forEach(([rs, ls, ts], i) => {
+    const o = (1.5 - i) * sp, r0 = fr * rs;
+    const k0 = P(30, rho + 0.012, o), j1 = P(30 + 72 * ls, rho, o), j2 = P(30 + 140 * ls, rho, o), tip = P(30 + 190 * ts, rho - 0.004, o);
+    B.cap(k0, j1, r0 * 1.06, r0, 'skin', sk); B.cap(j1, j2, r0, r0 * 0.94, 'skin', sk); B.cap(j2, tip, r0 * 0.94, r0 * 0.8, 'skin', sk);
+    B.ell(P(22, rho + 0.02, o), [r0 * 0.95, r0 * 0.95, r0 * 0.95], 'skin', { k: 0.014 }); // knuckle
+  });
+  // thumb: from the heel of the hand, over the top of the haft, tip pressing on the index finger
+  const og = 1.5 * sp + fr * 0.55;
+  const t0 = P(-62, rho + 0.055 * hT, og - 0.2 * fr), t1 = P(-118, rho + fr * 1.15, og + 0.25 * fr), t2 = P(-168, rho + fr * 1.55, og - 0.35 * fr);
+  B.cap(t0, t1, 0.046 * hT, 0.04 * hT, 'skin', { k: 0.012 }); B.cap(t1, t2, 0.04 * hT, 0.032 * hT, 'skin', sk);
+  B.ell(P(-38, rho + 0.03, og - 0.9 * fr), [0.06 * hT, 0.07 * hT, 0.05 * hT], 'skin', { k: 0.03 }); // thenar pad
+  return { c, g, a, n };
+}
+
+function genNephil(r) {
+  const rolled = pick(r, Object.keys(NEPHIL_BUILDS)), build = NEPHIL_BUILDS[state.build] ? state.build : rolled, Bd = NEPHIL_BUILDS[build];
+  const roll = (k) => range(r, Bd[k][0], Bd[k][1]);
+  const Ht = roll('H'), Ls = roll('Ls'), Ts = roll('Ts'), sw = roll('sw'), ww = roll('ww'), T = roll('T');
+  const musc = roll('musc'), gut = roll('gut'), armL = roll('armL'), hunch = roll('hunch'), hs = roll('hs');
+  const beard = r() < 0.75 ? range(r, 0.3, 1) : 0, oneEye = r() < 0.2, tusks = r() < 0.4;
+  const weapon = pick(r, Bd.weapons), hair = pick(r, ['bald', 'topknot', 'mane']);
+  const B = new Body({
+    skin: jitter(pick(r, build === 'lanky' ? ['#9a9478', '#8a8270', '#a89a80', '#7e7a62'] : ['#a88a68', '#8f8a62', '#9c7458', '#b49c7c', '#7e7458']), r),
+    cloth: jitter(pick(r, ['#8e2f22', '#a8462c', '#6b4a2a', '#b8a47a']), r), cloth2: jitter(pick(r, ['#7a2418', '#9a3a22', '#5a4026']), r),
+    hair: jitter(pick(r, ['#2a1e16', '#4a3020', '#6a5a48', '#3a3428']), r), leather: LEATHER, bone: BONE, mouth: MOUTH,
+    wood: '#4e3624', stone: '#6e685a', iron: '#4e4c48', socket: '#1a100a',
+  });
+  const M = 0.85 + 0.4 * musc, ripped = musc > 0.7 && gut < 0.2;
+  const U = (y) => 1.5 * Ls + (y - 1.5) * Ts; // upper-body heights: hips sit on the legs, the torso stretches with Ts
+  const skin = { k: 0.07, n: 0.005, f: 9 };
+  const lx = 0.25 * (0.5 + 0.5 * ww);
+  const chest = [0, U(2.42 - 0.12 * hunch), 0.04 + 0.22 * hunch];
+  const chestR = [0.56 * sw, 0.46 * Ts, 0.38 * (0.7 + 0.3 * T)];
+  const neckB = [0, U(2.8 - 0.25 * hunch), 0.06 + 0.42 * hunch];
+  const head = [0, U(3.08 - 0.36 * hunch), 0.12 + 0.6 * hunch];
+  // legs
+  B.sym((sd) => {
+    const hip = [sd * lx, 1.5 * Ls, 0], knee = [sd * (lx + 0.06), 0.82 * Ls, 0.1], ank = [sd * (lx + 0.09), 0.16, 0], toe = [sd * (lx + 0.13), 0.09, 0.3];
+    const L = sd > 0 ? 'Left' : 'Right';
+    B.joint(L + 'UpLeg', hip); B.joint(L + 'Leg', knee); B.joint(L + 'Foot', ank); B.joint(L + 'ToeBase', toe);
+    B.bone(L + 'UpLeg');
+    B.cap(hip, knee, 0.23 * T, 0.17 * T, 'skin', skin);
+    B.ell(add(lerp(hip, knee, 0.45), [sd * 0.04, 0, 0.05]), [0.19 * T * M, 0.3 * Ls, 0.2 * T * M], 'skin', skin);
+    if (ripped) B.ell(add(lerp(hip, knee, 0.78), [-sd * 0.06, 0, 0.08]), [0.1 * M, 0.13, 0.1 * M], 'skin', skin);
+    B.bone(L + 'Leg');
+    B.cap(knee, ank, 0.16 * T, 0.1 * T, 'skin', skin);
+    B.ell(add(lerp(knee, ank, 0.25), [0, 0, -0.06]), [0.14 * M * T, 0.22 * Ls, 0.14 * M * T], 'skin', skin);
+    for (let b = 0; b < 3; b++) B.cap(lerp(knee, ank, 0.5 + 0.14 * b), lerp(knee, ank, 0.6 + 0.14 * b), (0.155 - 0.015 * b) * T + 0.012, (0.145 - 0.015 * b) * T + 0.012, 'cloth2', { k: 0.008, n: 0.004, f: 9 });
+    B.bone(L + 'Foot');
+    B.cap(ank, toe, 0.12 * T, 0.1 * T, 'skin', { k: 0.05 });
+    B.bone(L + 'ToeBase');
+    B.ell(add(toe, [0, -0.01, 0.02]), [0.13 * T, 0.08, 0.1], 'skin', { k: 0.04 });
+  });
+  // trunk
+  const bellyZ = 0.1 + 0.18 * gut, bellyR = [0.42 * ww + 0.1 * gut, (0.46 + 0.05 * gut) * Ts, 0.28 * (0.6 + 0.4 * T) + 0.22 * gut];
+  B.joint('Hips', [0, 1.5 * Ls + 0.1, -0.03]); B.joint('Spine02', [0, U(1.66), -0.04]); B.joint('Spine01', [0, U(1.9), 0.08 * hunch]);
+  B.joint('Spine', [0, U(2.62 - 0.2 * hunch), 0.03 + 0.3 * hunch]); B.joint('neck', neckB);
+  B.joint('Head', add(head, [0, -0.12 * hs, -0.03])); B.joint('head_end', add(head, [0, 0.25 * hs, 0]));
+  B.bone('Hips');
+  B.ell([0, U(1.58), -0.04], [0.46 * ww + 0.04, 0.33, 0.32 * (0.7 + 0.3 * T)], 'skin', skin);
+  B.bone('Spine02');
+  B.ell([0, U(1.88), bellyZ], bellyR, 'skin', skin);
+  B.bone('Spine');
+  B.ell(chest, chestR, 'skin', skin);
+  B.sym((sd) => B.ell(add(chest, [sd * 0.22 * sw, 0.06, chestR[2] * 0.62]), [0.27 * M * (0.6 + 0.4 * sw), 0.2 * M, 0.17 * M * (0.7 + 0.3 * T)], 'skin', skin));
+  B.bone('Spine01');
+  B.cap([0, U(1.9), -0.05], neckB, 0.24 * (ww + sw) / 2 + 0.04, 0.24 * T, 'skin', skin);
+  if (ripped) {
+    B.bone('Spine');
+    B.sym((sd) => B.ell([sd * 0.36 * sw, U(2.18), -0.06 + 0.1 * hunch], [0.2 * M, 0.36 * Ts, 0.2], 'skin', skin)); // lats
+    B.bone('Spine02');
+    for (let i = 0; i < 3; i++) B.sym((sd) => B.ell([sd * 0.075, U(2.0 - 0.13 * i), bellyZ + bellyR[2] - 0.05], [0.075, 0.058, 0.05], 'skin', { k: 0.035 }));
+  }
+  // neck, head
+  B.bone('neck');
+  B.cap(neckB, add(head, [0, -0.08, -0.06]), 0.22 * M * (0.55 + 0.45 * T), 0.17 * (0.7 + 0.3 * T), 'skin', skin);
+  const hd = (v) => add(head, mul(v, hs));
+  B.bone('Head');
+  B.ell(head, [0.2 * hs, 0.24 * hs, 0.22 * hs], 'skin', skin);
+  B.ell(hd([0, -0.12, 0.07]), [0.19 * (0.8 + 0.2 * T), 0.13, 0.17].map((x) => x * hs), 'skin', { k: 0.05 });
+  B.cap(hd([-0.13, 0.06, 0.18]), hd([0.13, 0.06, 0.18]), 0.075 * hs, 0.075 * hs, 'skin', { k: 0.05, n: 0.006, f: 12 });
+  B.ell(hd([0, -0.04, 0.24]), [0.07, 0.085, 0.07].map((x) => x * hs), 'skin', { k: 0.03 });
+  B.sym((sd) => B.ell(hd([sd * 0.11, -0.07, 0.17]), [0.07, 0.05, 0.05].map((x) => x * hs), 'skin', { k: 0.04 }));
+  B.sym((sd) => B.ell(hd([sd * 0.2, -0.01, 0.01]), [0.04, 0.07, 0.05].map((x) => x * hs), 'skin', { k: 0.03 }));
+  for (const ex of oneEye ? [0] : [-0.075, 0.075]) {
+    const er = oneEye ? 0.07 : 0.045;
+    B.ell(hd([ex, -0.005, 0.19]), [er, er * 0.75, er], 'socket', { op: 's', k: 0.03 });
+    B.eye(hd([ex, -0.005, 0.19]), er * 0.55 * hs, '#ffd36a');
+  }
+  B.cap(hd([-0.075, -0.15, 0.235]), hd([0.075, -0.15, 0.235]), 0.016 * hs, 0.016 * hs, 'mouth', { op: 's', k: 0.02 });
+  if (beard) {
+    B.ell(hd([0, -0.26 - 0.16 * beard, 0.15]), [0.2, 0.15 + 0.2 * beard, 0.11].map((x) => x * hs), 'hair', { k: 0.04, n: 0.03, f: 10 });
+    B.sym((sd) => B.ell(hd([sd * 0.15, -0.12, 0.1]), [0.07, 0.12, 0.08].map((x) => x * hs), 'hair', { k: 0.04, n: 0.02, f: 12 }));
+    B.cap(hd([-0.09, -0.115, 0.225]), hd([0.09, -0.115, 0.225]), 0.03 * hs, 0.03 * hs, 'hair', { k: 0.02, n: 0.012, f: 16, op: 'l' });
+  }
+  if (tusks) B.sym((sd) => B.cap(hd([sd * 0.065, -0.17, 0.2]), hd([sd * 0.09, -0.05, 0.25]), 0.026 * hs, 0.004, 'bone', { k: 0.008, op: 'l' }));
+  if (hair === 'topknot') B.cap(hd([0, 0.2, -0.06]), hd([0, 0.34, -0.14]), 0.08, 0.05, 'hair', { k: 0.03, n: 0.015, f: 12 });
+  if (hair === 'mane') B.ell(hd([0, 0.06, -0.08]), [0.23, 0.26, 0.22].map((x) => x * hs), 'hair', { k: 0.03, n: 0.03, f: 10 });
+  // arms
+  let weaponHand;
+  const aL = armL * (0.5 + 0.5 * Ts);
+  B.sym((sd) => {
+    const sh = [sd * 0.6 * sw, U(2.66 - 0.18 * hunch), 0.06 + 0.3 * hunch];
+    const el = add(sh, [sd * 0.15, -0.62 * aL, 0.08]);
+    const wr = add(el, [sd * 0.03, -0.54 * aL, 0.24]);
+    const L = sd > 0 ? 'Left' : 'Right';
+    B.joint(L + 'Shoulder', [sd * 0.12 * sw, neckB[1] - 0.06, neckB[2] - 0.06]); B.joint(L + 'Arm', sh); B.joint(L + 'ForeArm', el); B.joint(L + 'Hand', wr);
+    B.bone(L + 'Shoulder');
+    B.cap(add(neckB, [0, -0.06 * musc, -0.04]), sh, 0.2 * T * (1.1 - 0.2 * musc), 0.19 * T, 'skin', skin); // trapezius
+    B.bone(L + 'Arm');
+    B.ell(sh, [0.25 * M * T, 0.27 * M * T, 0.25 * M * T], 'skin', skin);
+    B.cap(sh, el, 0.19 * T, 0.14 * T, 'skin', skin);
+    B.ell(add(lerp(sh, el, 0.5), [0, 0, 0.08]), [0.15 * M * T, 0.22 * aL, 0.15 * M * T], 'skin', skin);
+    if (ripped) B.ell(add(lerp(sh, el, 0.5), [sd * 0.02, 0, -0.08]), [0.13 * M, 0.2 * aL, 0.12 * M], 'skin', skin); // triceps
+    B.bone(L + 'ForeArm');
+    B.cap(el, wr, 0.16 * T, 0.11 * T, 'skin', skin);
+    B.ell(add(lerp(el, wr, 0.25), [sd * 0.03, 0, 0]), [0.15 * M * T, 0.2 * aL, 0.15 * M * T], 'skin', skin);
+    for (let b = 0; b < 3; b++) B.cap(lerp(el, wr, 0.5 + 0.15 * b), lerp(el, wr, 0.6 + 0.15 * b), (0.163 - 0.012 * b) * T + 0.012, (0.153 - 0.012 * b) * T + 0.012, 'cloth2', { k: 0.008, n: 0.004, f: 9 });
+    const hT = 0.7 + 0.3 * T;
+    B.cap(lerp(el, wr, 0.9), add(wr, mul(norm(sub(wr, el)), 0.03)), Math.max(0.11 * T, 0.08 * hT) + 0.022, Math.max(0.11 * T, 0.08 * hT) + 0.02, 'cloth2', { k: 0.008, n: 0.004, f: 9 }); // cuff over the hand seam
+    B.bone(L + 'Hand'); B.part('hand' + L);
+    const armed = sd === -1 && weapon !== 'fists';
+    const grip = fist(B, el, wr, sd, hT, armed ? HAFT_R[weapon] : 0.022);
+    B.part('body');
+    if (sd === -1) weaponHand = grip;
+  });
+  // kilt, belt, flap, strap: sized to clear the thighs and belly
+  const hipOut = lx + 0.23 * T;
+  const kiltTop = Math.max(0.5 * ww + 0.06 * gut, hipOut), kiltBot = Math.max(0.62 * ww + 0.05 * gut, hipOut + 0.12);
+  B.bone('kilt');
+  B.cone([0, U(1.78) - 0.33, 0.04 + 0.05 * gut], 0.3, kiltBot, kiltTop, 0.78, 'cloth', { k: 0.015, n: 0.02, f: 5 });
+  const beltR = Math.max(kiltTop + 0.03, bellyR[0] + 0.02);
+  B.bone('Hips');
+  B.cone([0, U(1.8), 0.06 + 0.12 * gut], 0.06, beltR, beltR, 0.72 + 0.25 * gut, 'leather', { k: 0.01 });
+  B.box([0, U(1.78) - 0.45, 0.4 + 0.14 * gut], [0.15, 0.36, 0.03], 0.02, 'cloth2', { k: 0.015, n: 0.012, f: 6, rot: [0.12, 0, 0] });
+  B.bone('Spine01');
+  B.cap(add(chest, [0.42 * sw, 0.32, 0.06]), [-0.4 * ww, U(1.85), 0.24 + 0.18 * gut], 0.05, 0.05, 'leather', { k: 0.012, op: 'l' });
+  // weapon: its own mesh, laid along the axis the right fist closes around
+  const { c: h, g, a: ga, n: gn } = weaponHand;
+  const at = (t) => add(h, mul(g, t));
+  B.bone('RightHand'); B.part('weapon');
+  if (weapon === 'club') {
+    B.cap(at(-0.24), at(0.25), HAFT_R.club * 0.92, HAFT_R.club, 'wood', { k: 0.01 });
+    B.cap(at(0.18), at(1.0), 0.075, 0.2, 'wood', { k: 0.03, n: 0.035, f: 6 });
+    for (let i = 0; i < 4; i++) B.ell(add(at(0.62 + 0.11 * i), [range(r, -0.14, 0.14), range(r, -0.1, 0.1), range(r, -0.1, 0.1)]), [0.09, 0.09, 0.09], 'wood', { k: 0.04, n: 0.02, f: 8 });
+  } else if (weapon === 'maul') {
+    B.cap(at(-0.3), at(1.0), HAFT_R.maul, HAFT_R.maul, 'wood', { k: 0.01 });
+    B.box(at(1.08), [0.2, 0.34, 0.2], 0.05, 'stone', { k: 0.02, n: 0.018, f: 7, rot: basisRot(g, ga, gn) });
+    B.cap(add(at(1.08), mul(gn, -0.22)), add(at(1.08), mul(gn, 0.22)), 0.055, 0.055, 'leather', { k: 0.01, op: 'l' });
+  } else if (weapon === 'spear') {
+    const top = at(1.45);
+    B.cap(at(-0.95), top, HAFT_R.spear, HAFT_R.spear * 0.9, 'wood', { k: 0.01 });
+    B.cap(add(top, mul(g, -0.04)), add(top, mul(g, 0.08)), 0.06, 0.05, 'leather', { k: 0.01 });
+    B.cap(add(top, mul(g, 0.05)), add(top, mul(g, 0.55)), 0.075, 0.004, 'iron', { k: 0.01, op: 'l' });
+  }
+  B.part('body');
+  const nominal = U(3.08 - 0.36 * hunch) + 0.24 * hs;
+  B.finalize(Ht / nominal);
+  const traits = [
+    ['Build', Bd.label], ['Height', Ht.toFixed(1) + ' m'], ['Legs / torso', Ls.toFixed(2) + ' / ' + Ts.toFixed(2)],
+    ['Shoulders / waist', sw.toFixed(2) + ' / ' + ww.toFixed(2)], ['Limb thickness', T.toFixed(2)], ['Muscle', musc.toFixed(2)], ['Gut', gut.toFixed(2)], ['Hunch', hunch.toFixed(2)],
+    ['Eyes', oneEye ? 'one, cyclopean' : 'two'], ['Tusks', tusks ? 'yes' : 'no'], ['Weapon', weapon === 'fists' ? 'bare fists' : weapon], ['Hair', beard ? hair + ', bearded' : hair],
+  ];
+  return { body: B, H: Ht, traits, ...nameFor(r, ['Breaker', 'Unbowed', 'Gate-Crusher', 'Old', 'Ox-Eater', 'Wall', 'Grave-Digger', 'Long-Shanked', 'Reaper']) };
+}
+
+function hornCurve(base, sd, R0, curl, spread, back = 1) {
+  const pts = [], rad = [];
+  const c = add(base, [0, -R0, 0]);
+  for (let i = 0; i <= 14; i++) {
+    const t = i / 14, a = Math.PI / 2 + t * curl, R = R0 * (1 - 0.45 * t);
+    pts.push(add(c, [sd * (0.02 + spread * t), R * Math.sin(a), R * Math.cos(a) * back]));
+    rad.push((0.075 - 0.06 * t) * (i % 2 ? 1.0 : 1.12));
+  }
+  return { pts, rad };
+}
+
+function genSeir(r) {
+  const H = range(r, 2.2, 2.9), s = H / 2.6;
+  const hunch = range(r, 0.3, 1), lean = r(), furLen = r(), hornType = pick(r, ['ram', 'ibex', 'four']);
+  const hornSize = range(r, 0.8, 1.3), armL = range(r, 0.95, 1.2), beard = r() < 0.7;
+  const B = new Body({
+    skin: jitter(pick(r, ['#5a4a3a', '#6a5040', '#4a3c30', '#7a6250']), r), fur: jitter(pick(r, ['#3a2c20', '#4e3a28', '#2e2620', '#6a5a46']), r),
+    bone: jitter(pick(r, ['#cbb88c', '#9a8a6a', '#3a3028']), r, 0.05), hoof: HOOF, mouth: MOUTH, socket: '#140c08', claw: '#2a221a',
+  });
+  const fur = { k: 0.06, n: 0.02 + 0.025 * furLen, f: 10 };
+  const sk = { k: 0.06, n: 0.006, f: 6 };
+  B.sym((sd) => {
+    const hip = [sd * 0.18, 1.2, -0.05], knee = [sd * 0.21, 0.84, 0.26], hock = [sd * 0.22, 0.42, -0.14], fet = [sd * 0.22, 0.12, -0.02], hf = [sd * 0.22, 0.05, 0.06];
+    B.cap(hip, knee, 0.2, 0.14, 'fur', fur);
+    B.ell(lerp(hip, knee, 0.4), [0.17, 0.24, 0.19], 'fur', fur);
+    B.cap(knee, hock, 0.12, 0.07, 'fur', { ...fur, n: fur.n * 0.7 });
+    B.cap(hock, fet, 0.065, 0.055, 'skin', sk);
+    B.cap(fet, hf, 0.07, 0.08, 'hoof', { k: 0.02 });
+  });
+  B.ell([0, 1.25, -0.08], [0.32, 0.24, 0.24], 'fur', fur);
+  const chest = [0, 1.75 - 0.08 * hunch, 0.06 + 0.24 * hunch];
+  const neckB = [0, 2.0 - 0.18 * hunch, 0.1 + 0.42 * hunch];
+  const head = [0, 2.2 - 0.28 * hunch, 0.2 + 0.58 * hunch];
+  B.cap([0, 1.3, -0.04], chest, 0.24 - 0.05 * lean, 0.3, 'skin', sk);
+  B.ell(chest, [0.36 - 0.05 * lean, 0.3, 0.24], 'skin', sk);
+  B.sym((sd) => B.ell(add(chest, [sd * 0.14, 0.02, 0.17]), [0.17, 0.13, 0.11], 'skin', sk));
+  for (let i = 0; i < 3; i++) B.sym((sd) => B.ell([sd * 0.07, 1.5 - 0.1 * i + 0.05 * hunch, 0.2 + 0.1 * hunch], [0.07, 0.05, 0.05], 'skin', { k: 0.04 }));
+  B.cap(chest, neckB, 0.2, 0.13, 'skin', sk);
+  B.ell(add(chest, [0, 0.14, -0.1]), [0.3, 0.2, 0.22], 'fur', { ...fur, n: fur.n * 0.8 }); // shaggy back
+  // goat head
+  B.cap(neckB, head, 0.12, 0.11, 'fur', { k: 0.05, n: 0.015, f: 12 });
+  B.ell(head, [0.13, 0.14, 0.15], 'skin', sk);
+  const snout = add(head, [0, -0.1, 0.24]);
+  B.cap(add(head, [0, -0.02, 0.06]), snout, 0.11, 0.075, 'skin', sk);
+  B.ell(add(snout, [0, -0.06, -0.06]), [0.065, 0.04, 0.1], 'skin', { k: 0.03 });
+  B.sym((sd) => B.ell(add(snout, [sd * 0.03, 0.01, 0.07]), [0.018, 0.012, 0.03], 'mouth', { op: 's', k: 0.015 }));
+  B.sym((sd) => B.ell(add(head, [sd * 0.17, 0.02, -0.02]), [0.1, 0.03, 0.05], 'skin', { k: 0.03, rot: [0, 0, sd * -0.5] }));
+  if (beard) B.cap(add(snout, [0, -0.08, -0.06]), add(snout, [0, -0.3 - 0.15 * furLen, -0.08]), 0.05, 0.02, 'fur', { k: 0.03, n: 0.015, f: 16 });
+  B.sym((sd) => {
+    B.ell(add(head, [sd * 0.09, 0.03, 0.11]), [0.05, 0.026, 0.05], 'socket', { op: 's', k: 0.025 });
+    B.eye(add(head, [sd * 0.09, 0.03, 0.095]), 0.024, '#ff6a20');
+  });
+  // horns
+  const hb = (sd) => add(head, [sd * 0.07, 0.11, 0.0]);
+  B.sym((sd) => {
+    let hc;
+    if (hornType === 'ram') hc = hornCurve(hb(sd), sd, 0.14 * hornSize, 4.6, 0.22 * hornSize);
+    else hc = hornCurve(hb(sd), sd, 0.42 * hornSize, 1.45, 0.14 * hornSize);
+    B.chain(hc.pts, hc.rad.map((x) => x * (hornType === 'ram' ? 1.15 : 0.95) * hornSize), 'bone', { k: 0.02, op: 'l' });
+    if (hornType === 'four') {
+      const h2 = hornCurve(add(hb(sd), [sd * 0.06, -0.03, 0.03]), sd, 0.1 * hornSize, 3.0, 0.25);
+      B.chain(h2.pts, h2.rad.map((x) => x * 0.7), 'bone', { k: 0.02, op: 'l' });
+    }
+  });
+  // arms with claws
+  B.sym((sd) => {
+    const sh = [sd * 0.3, 1.88 - 0.12 * hunch, 0.06 + 0.3 * hunch];
+    const el = add(sh, [sd * 0.12, -0.42 * armL, -0.02]);
+    const wr = add(el, [sd * 0.02, -0.4 * armL, 0.2]);
+    B.ell(sh, [0.13, 0.13, 0.13], 'skin', sk);
+    B.cap(sh, el, 0.1, 0.075, 'skin', sk);
+    B.ell(lerp(sh, el, 0.45), [0.09, 0.13, 0.09], 'skin', sk);
+    B.cap(el, wr, 0.08, 0.05, 'skin', sk);
+    B.ell(add(wr, [0, -0.06, 0.02]), [0.06, 0.07, 0.04], 'skin', { k: 0.03 });
+    for (let f = -1; f <= 1; f++) {
+      const k1 = add(wr, [sd * f * 0.035, -0.11, 0.04]), k2 = add(k1, [sd * f * 0.02, -0.08, 0.06]), tip = add(k2, [sd * f * 0.01, -0.06, 0.08]);
+      B.cap(k1, k2, 0.022, 0.018, 'skin', { k: 0.015 });
+      B.cap(k2, tip, 0.017, 0.003, 'claw', { k: 0.008, op: 'l' });
+    }
+  });
+  // tail
+  B.cap([0, 1.25, -0.28], [0, 1.35, -0.42], 0.06, 0.04, 'fur', { k: 0.04, n: 0.02, f: 12 });
+  B.finalize(s);
+  return {
+    body: B, H, ...nameFor(r, ['Hairy One', 'Dancer in Ruins', 'Bleater', 'Kid-Thief', 'Rutting', 'Ash-Hoofed']),
+    traits: [['Height', H.toFixed(1) + ' m'], ['Hunch', hunch.toFixed(2)], ['Horns', hornType + ' × ' + hornSize.toFixed(2)], ['Fur', furLen.toFixed(2)], ['Reach', armL.toFixed(2)], ['Beard', beard ? 'yes' : 'no']],
+  };
+}
+
+function genTannin(r) {
+  const L = range(r, 8, 14), s = L / 11;
+  const rear = range(r, 1.6, 2.8), girth = range(r, 0.85, 1.25), turns = range(r, 1.2, 2.0), frill = r() < 0.65 ? range(r, 0.5, 1.2) : 0;
+  const spines = r() < 0.7, jaw = range(r, 0.25, 0.75), horns = pick(r, [0, 2, 2, 4]);
+  const B = new Body({
+    skin: jitter(pick(r, ['#2e5a4a', '#3a6a3a', '#24483e', '#4a5a34', '#5a4a30']), r), band: jitter(pick(r, ['#c8b070', '#1a2a22', '#8a5a2a', '#aab08a']), r),
+    bone: jitter('#cbb88c', r, 0.05), mouth: '#5a1a14', socket: '#100c08', spine: jitter('#2a2418', r, 0.05),
+  });
+  const ctrl = [];
+  const coilR0 = 0.35, step = 0.62 * girth;
+  const coilEnd = turns * Math.PI * 2;
+  for (let a = 0; a <= coilEnd; a += 0.45) {
+    const rho = coilR0 + step * a / (Math.PI * 2);
+    ctrl.push(new THREE.Vector3(Math.cos(a) * rho, 0.3 * girth + 0.06 * Math.sin(a * 2), Math.sin(a) * rho - 0.3));
+  }
+  const last = ctrl[ctrl.length - 1];
+  const rhoE = coilR0 + step * turns;
+  const tang = new THREE.Vector3(-Math.sin(coilEnd), 0, Math.cos(coilEnd)).normalize();
+  const fwd = new THREE.Vector3(0, 0, 1);
+  const p1 = last.clone().addScaledVector(tang, 0.6).setY(0.45);
+  const mid = new THREE.Vector3(last.x * 0.4, rear * 0.55, 0.3);
+  const top = new THREE.Vector3(last.x * 0.1 + range(r, -0.3, 0.3), rear, 0.5);
+  const neck = new THREE.Vector3(top.x, rear + 0.05, 0.95);
+  ctrl.push(p1, mid, top, neck);
+  const curve = new THREE.CatmullRomCurve3(ctrl, false, 'centripetal');
+  const N = 70, pts = curve.getSpacedPoints(N).map((v) => [v.x, v.y, v.z]);
+  const radAt = (t) => 0.06 + 0.28 * girth * Math.pow(Math.sin(Math.PI * Math.min(1, t * 1.05)), 0.6) * (t > 0.85 ? 0.85 : 1);
+  for (let i = 0; i < N; i++) {
+    const t = i / N;
+    const mat = Math.floor(i / 3) % 3 === 0 ? 'band' : 'skin';
+    B.cap(pts[i], pts[i + 1], radAt(t), radAt((i + 1) / N), mat, { k: 0.08, n: 0.006, f: 14 });
+    if (spines && i % 2 === 0 && t > 0.15) {
+      const tg = sub(pts[i + 1], pts[i]);
+      const up = [0, 1, 0];
+      const dir = [up[0] - tg[0] * 0.8, up[1], up[2] - tg[2] * 0.8];
+      const dl = vlen(dir);
+      const len = 0.12 + 0.22 * Math.sin(Math.PI * t);
+      B.cap(add(pts[i], [0, radAt(t) * 0.8, 0]), add(pts[i], add([0, radAt(t) * 0.8, 0], mul(dir, len / dl))), 0.035 * girth, 0.004, 'spine', { k: 0.03, op: 'l' });
+    }
+  }
+  // head
+  const hp = pts[N], hv = sub(pts[N], pts[N - 3]);
+  const hdir = mul(hv, 1 / vlen(hv));
+  const head = add(hp, mul(hdir, 0.12));
+  const sn = add(head, [0, -0.05, 0.42]);
+  B.ell(head, [0.24 * girth, 0.17, 0.26], 'skin', { k: 0.06 });
+  B.cap(head, sn, 0.17 * girth, 0.09, 'skin', { k: 0.05 });
+  B.sym((sd) => B.cap(add(head, [sd * 0.13, 0.1, 0.12]), add(sn, [sd * 0.05, 0.05, -0.12]), 0.04, 0.025, 'skin', { k: 0.03 }));
+  const jawEnd = add(head, [0, -0.12 - 0.4 * jaw, 0.36 - 0.1 * jaw]);
+  B.cap(add(head, [0, -0.1, -0.05]), jawEnd, 0.13 * girth, 0.06, 'skin', { k: 0.04, op: 'l' });
+  B.ell(lerp(add(head, [0, -0.1, 0.15]), add(sn, [0, -0.08, -0.05]), 0.5), [0.1, 0.07, 0.16], 'mouth', { k: 0.02, op: 's' });
+  for (let i = 0; i < 2; i++) B.sym((sd) => {
+    const root = add(sn, [sd * (0.06 - 0.01 * i), -0.06, -0.06 - 0.12 * i]);
+    B.cap(root, add(root, [0, -0.13 + 0.05 * i, 0.02]), 0.02 - 0.005 * i, 0.003, 'bone', { k: 0.006, op: 'l' });
+  });
+  B.sym((sd) => {
+    B.ell(add(head, [sd * 0.16, 0.08, 0.16]), [0.05, 0.03, 0.05], 'socket', { op: 's', k: 0.025 });
+    B.eye(add(head, [sd * 0.155, 0.075, 0.15]), 0.028, '#e8ff70');
+    if (horns) for (let i = 0; i < horns / 2; i++) {
+      const root = add(head, [sd * (0.1 + 0.05 * i), 0.12, -0.12 - 0.12 * i]);
+      B.cap(root, add(root, [sd * 0.1, 0.12 + 0.05 * i, -0.3]), 0.04, 0.005, 'bone', { k: 0.02, op: 'l' });
+    }
+    if (frill) {
+      const nb = pts[N - 6];
+      B.ell(add(nb, [sd * 0.3 * frill, 0.05, -0.02]), [0.32 * frill, 0.28 * frill, 0.05], 'band', { k: 0.05, n: 0.02, f: 9, rot: [0, sd * 0.35, sd * 0.2] });
+    }
+  });
+  B.finalize(s);
+  return {
+    body: B, H: rear * s + 0.4, ...nameFor(r, ['Coiled', 'Deep-Throated', 'Strangler', 'Salt-Born', 'Undying', 'Slow Fire']),
+    traits: [['Length', L.toFixed(1) + ' m'], ['Rears to', (rear * s).toFixed(1) + ' m'], ['Girth', girth.toFixed(2)], ['Coils', turns.toFixed(1)], ['Hood', frill ? frill.toFixed(2) : 'none'], ['Horns', String(horns)], ['Spines', spines ? 'yes' : 'no']],
+  };
+}
+
+function genReem(r) {
+  const Hs = range(r, 1.9, 2.6), s = Hs / 2.2;
+  const hump = r(), mane = r(), hornLen = range(r, 0.8, 1.4), hornUp = r(), legs = range(r, 0.9, 1.1), head = r();
+  const B = new Body({
+    skin: jitter(pick(r, ['#3a2c24', '#4a3428', '#2e2420', '#5a4a3a']), r), fur: jitter(pick(r, ['#241a14', '#3a2a1e', '#6a4a2a']), r),
+    bone: jitter('#d8caa4', r, 0.05), hoof: HOOF, socket: '#100806', mouth: MOUTH,
+  });
+  const sk = { k: 0.1, n: 0.012, f: 4 };
+  const fur = { k: 0.08, n: 0.035 + 0.02 * mane, f: 8 };
+  const lh = 0.85 * legs;
+  B.ell([0, 1.55, -0.2], [0.68, 0.62, 1.2], 'skin', sk);
+  B.ell([0, 1.62, -1.0], [0.55, 0.55, 0.45], 'skin', sk);
+  B.ell([0, 1.85 + 0.25 * hump, 0.5], [0.62, 0.6 + 0.2 * hump, 0.72], 'skin', sk);
+  B.ell([0, 1.95 + 0.3 * hump, 0.45], [0.58, 0.45 + 0.2 * hump, 0.65], 'fur', fur);
+  const hpos = [0, 1.25 - 0.3 * head, 1.45];
+  B.cap([0, 1.8, 0.7], hpos, 0.52, 0.34, 'skin', sk);
+  B.ell([0, 1.15 - 0.2 * head, 1.05], [0.25, 0.35, 0.35], 'skin', sk);
+  B.ell(add(hpos, [0, 0.05, 0.05]), [0.3, 0.3, 0.36], 'skin', { k: 0.06, n: 0.01, f: 5, rot: [0.5, 0, 0] });
+  const muz = add(hpos, [0, -0.32, 0.3]);
+  B.ell(muz, [0.22, 0.2, 0.2], 'skin', { k: 0.08 });
+  B.sym((sd) => B.ell(add(muz, [sd * 0.08, -0.02, 0.18]), [0.035, 0.025, 0.04], 'mouth', { op: 's', k: 0.02 }));
+  B.ell(add(hpos, [0, 0.2, 0.05]), [0.22, 0.12, 0.14], 'fur', { k: 0.04, n: 0.035, f: 12 });
+  B.sym((sd) => {
+    B.ell(add(hpos, [sd * 0.2, 0.0, 0.2]), [0.05, 0.035, 0.05], 'socket', { op: 's', k: 0.025 });
+    B.eye(add(hpos, [sd * 0.195, -0.005, 0.185]), 0.026, '#ff3a1a');
+    B.ell(add(hpos, [sd * 0.3, 0.1, -0.05]), [0.12, 0.05, 0.07], 'skin', { k: 0.03, rot: [0, 0, sd * -0.3] });
+    const p0 = add(hpos, [sd * 0.22, 0.18, -0.02]);
+    const p1 = add(p0, [sd * 0.45 * hornLen, 0.05, 0.05]);
+    const p2 = add(p0, [sd * (0.65 - 0.2 * hornUp) * hornLen, (0.2 + 0.45 * hornUp) * hornLen, 0.55 * hornLen]);
+    const hp = [], hr = [];
+    for (let i = 0; i <= 12; i++) { const t = i / 12; hp.push(add(add(mul(p0, (1 - t) ** 2), mul(p1, 2 * t * (1 - t))), mul(p2, t * t))); hr.push((0.11 - 0.095 * t) * (i % 2 ? 1 : 1.08)); }
+    B.chain(hp, hr, 'bone', { k: 0.02, op: 'l' });
+    // legs
+    const fs = [sd * 0.38, 1.4, 0.65], fk = [sd * 0.4, 1.4 - 0.62 * lh, 0.72], fh = [sd * 0.4, 0.1, 0.74];
+    B.cap(fs, fk, 0.24, 0.12, 'skin', sk); B.cap(fk, fh, 0.11, 0.09, 'skin', { k: 0.05 });
+    B.cap(add(fh, [0, 0.02, 0]), [fh[0], 0.02, fh[2] + 0.06], 0.1, 0.11, 'hoof', { k: 0.02 });
+    B.ell(lerp(fs, fk, 0.2), [0.24, 0.32, 0.26], 'fur', fur);
+    const bs = [sd * 0.38, 1.5, -1.05], bk = [sd * 0.4, 1.38 - 0.68 * lh, -1.3], bh = [sd * 0.4, 0.1, -1.12];
+    B.cap(bs, add(bs, [0, -0.4, 0.05]), 0.3, 0.2, 'skin', sk);
+    B.cap(add(bs, [0, -0.4, 0.05]), bk, 0.2, 0.09, 'skin', sk); B.cap(bk, bh, 0.09, 0.085, 'skin', { k: 0.05 });
+    B.cap(add(bh, [0, 0.02, 0]), [bh[0], 0.02, bh[2] + 0.06], 0.1, 0.11, 'hoof', { k: 0.02 });
+  });
+  B.cap([0, 1.75, -1.4], [0, 0.9, -1.55], 0.05, 0.035, 'skin', { k: 0.05 });
+  B.ell([0, 0.85, -1.56], [0.07, 0.15, 0.07], 'fur', { k: 0.03, n: 0.03, f: 14 });
+  B.finalize(s);
+  return {
+    body: B, H: (2.0 + 0.3 * hump) * s, ...nameFor(r, ['Gorer', 'Untamed', 'Red-Eyed', 'Thunder-Hoof', 'Field-Ruiner']), yaw: 0.65,
+    traits: [['At shoulder', Hs.toFixed(1) + ' m'], ['Hump', hump.toFixed(2)], ['Horns', hornLen.toFixed(2) + (hornUp > 0.5 ? ', lyre' : ', forward')], ['Mane', mane.toFixed(2)], ['Head carriage', head > 0.5 ? 'low' : 'high']],
+  };
+}
+
+function genChampion() {
+  const B = new Body({ skin: '#a87a58', cloth: '#c9b78e', leather: '#4a3222', bronze: '#a8783a', hair: '#1e1610', wood: '#5a4028' });
+  const sk = { k: 0.04 };
+  B.sym((sd) => {
+    const hip = [sd * 0.1, 0.92, 0], knee = [sd * 0.11, 0.5, 0.03], ank = [sd * 0.12, 0.08, 0];
+    B.cap(hip, knee, 0.075, 0.055, 'skin', sk); B.cap(knee, ank, 0.05, 0.035, 'skin', sk);
+    B.cap(lerp(knee, ank, 0.4), ank, 0.045, 0.04, 'leather', { k: 0.01 });
+    B.cap(ank, [sd * 0.12, 0.04, 0.12], 0.04, 0.035, 'leather', { k: 0.02 });
+    const sh = [sd * 0.19, 1.42, 0], el = [sd * 0.24, 1.15, 0.03], wr = [sd * 0.26, 0.92, 0.1];
+    B.cap(sh, el, 0.05, 0.04, 'skin', sk); B.cap(el, wr, 0.04, 0.03, 'skin', sk);
+    B.ell(add(wr, [0, -0.04, 0.01]), [0.03, 0.045, 0.03], 'skin', sk);
+  });
+  B.ell([0, 1.25, 0], [0.17, 0.22, 0.11], 'skin', sk);
+  B.cone([0, 0.98, 0], 0.18, 0.21, 0.16, 0.8, 'cloth', { k: 0.01, n: 0.008, f: 14 });
+  B.cone([0, 1.28, 0], 0.17, 0.17, 0.2, 0.7, 'cloth', { k: 0.02, n: 0.004, f: 14 });
+  B.cap([0, 1.42, 0], [0, 1.55, 0.01], 0.05, 0.045, 'skin', sk);
+  B.ell([0, 1.64, 0.02], [0.085, 0.11, 0.1], 'skin', sk);
+  B.ell([0, 1.68, -0.01], [0.092, 0.1, 0.1], 'hair', { k: 0.02, n: 0.008, f: 30 });
+  B.cyl([-0.32, 1.1, 0.1], 0.32, 0.025, 'bronze', { k: 0.01, rot: [0, -1.35, 0] });
+  B.cap([0.27, 0.9, 0.12], [0.36, 2.2, -0.2], 0.012, 0.012, 'wood', { k: 0.005 });
+  B.cap([0.36, 2.2, -0.2], [0.38, 2.38, -0.24], 0.022, 0.002, 'bronze', { k: 0.005 });
+  B.finalize(1);
+  return { body: B, H: 1.75 };
+}
+
+const FAMILIES = {
+  nephil: { label: 'Nephil', gen: genNephil, blurb: 'giant biped' },
+  seir: { label: "Se'ir", gen: genSeir, blurb: 'goat-demon' },
+  tannin: { label: 'Tannin', gen: genTannin, blurb: 'serpent' },
+  reem: { label: "Re'em", gen: genReem, blurb: 'wild-ox' },
+};
+
+// ---------------------------------------------------------------- scene
+const stage = document.getElementById('stage');
+const statusEl = document.getElementById('status');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const HAZE = '#d6a85c';
+scene.fog = new THREE.Fog(HAZE, 10, 55);
+{
+  const c = document.createElement('canvas'); c.width = 16; c.height = 512;
+  const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, 512);
+  gr.addColorStop(0, '#9a6428'); gr.addColorStop(0.45, '#cf9548'); gr.addColorStop(0.62, HAZE); gr.addColorStop(1, '#b88a48');
+  g.fillStyle = gr; g.fillRect(0, 0, 16, 512);
+  const tex = new THREE.CanvasTexture(c); scene.background = tex;
+}
+const camera = new THREE.PerspectiveCamera(36, 2, 0.1, 400);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.52; controls.minDistance = 2; controls.maxDistance = 40;
+
+scene.add(new THREE.HemisphereLight('#f0c888', '#3a2c1a', 0.55));
+const sun = new THREE.DirectionalLight('#ffe8c0', 0.75);
+sun.position.set(-8, 14, 9); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -14, right: 14, top: 10, bottom: -6, near: 1, far: 50 }); sun.shadow.bias = -0.0008;
+scene.add(sun);
+const rim = new THREE.DirectionalLight('#ffb050', 0.7); rim.position.set(6, 6, -10); scene.add(rim);
+
+// sun disc and glow, far behind
+{
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d'); const gr = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+  gr.addColorStop(0, 'rgba(255,240,190,1)'); gr.addColorStop(0.18, 'rgba(255,232,170,1)'); gr.addColorStop(0.22, 'rgba(255,215,140,.5)'); gr.addColorStop(1, 'rgba(255,200,120,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), fog: false, depthWrite: false }));
+  sp.position.set(-10, 26, -120); sp.scale.set(70, 70, 1); scene.add(sp);
+}
+
+// ground, rocks, ruins, grass
+const rng0 = mulberry(7);
+{
+  const g = new THREE.PlaneGeometry(220, 220, 160, 160); g.rotateX(-Math.PI / 2);
+  const p = g.attributes.position, cols = [];
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i), d = Math.hypot(x, z + 2);
+    const y = smooth(9, 30, d) * (fbm(x * 0.06, 0, z * 0.06) - 0.4) * 5 + (fbm(x * 0.5, 1, z * 0.5) - 0.5) * 0.12 * smooth(4, 8, d);
+    p.setY(i, y);
+    const n = fbm(x * 0.35, 3, z * 0.35), m = fbm(x * 0.05, 9, z * 0.05);
+    const c = new THREE.Color('#4a4a2a').lerp(new THREE.Color('#7a6234'), n * 0.9).lerp(new THREE.Color('#3a3420'), m * 0.6);
+    cols.push(c.r, c.g, c.b);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3)); g.computeVertexNormals();
+  const ground = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  ground.receiveShadow = true; scene.add(ground);
+  const ruin = new THREE.MeshLambertMaterial({ color: '#5a4630', flatShading: true });
+  for (let i = 0; i < 34; i++) {
+    const x = range(rng0, -70, 70), z = range(rng0, -80, -24);
+    if (rng0() < 0.55) { // broken column, sometimes leaning, sometimes in a colonnade
+      const h = range(rng0, 2.5, 9), rad = range(rng0, 0.5, 1.0);
+      const n = rng0() < 0.4 ? 3 + Math.floor(rng0() * 4) : 1;
+      for (let c = 0; c < n; c++) {
+        const hh = c && rng0() < 0.4 ? h * range(rng0, 0.2, 0.6) : h;
+        const m = new THREE.Mesh(new THREE.CylinderGeometry(rad * 0.9, rad, hh, 9), ruin);
+        m.position.set(x + c * rad * 4, hh / 2 - 0.3, z); m.rotation.z = range(rng0, -0.08, 0.08); scene.add(m);
+        if (hh === h && rng0() < 0.5) { const cap = new THREE.Mesh(new THREE.BoxGeometry(rad * 2.6, rad * 0.6, rad * 2.6), ruin); cap.position.set(m.position.x, hh - 0.3 + rad * 0.3, z); scene.add(cap); }
+      }
+    } else { // tumbled wall with a jagged top
+      const len = range(rng0, 4, 14), segs = 5;
+      for (let c = 0; c < segs; c++) {
+        const hh = range(rng0, 1, 5);
+        const m = new THREE.Mesh(new THREE.BoxGeometry(len / segs + 0.05, hh, range(rng0, 0.8, 1.4)), ruin);
+        m.position.set(x + c * len / segs, hh / 2 - 0.3, z); scene.add(m);
+      }
+    }
+  }
+  const rockM = new THREE.MeshLambertMaterial({ color: '#4a4030', flatShading: true });
+  for (let i = 0; i < 60; i++) {
+    const a = range(rng0, 0, Math.PI * 2), d = range(rng0, 7, 26);
+    const m = new THREE.Mesh(new THREE.DodecahedronGeometry(range(rng0, 0.15, 0.7), 0), rockM);
+    m.position.set(Math.cos(a) * d, 0, Math.sin(a) * d * 0.6 + 2); m.scale.y = 0.6; m.rotation.set(rng0() * 3, rng0() * 3, rng0() * 3); m.receiveShadow = m.castShadow = true; scene.add(m);
+  }
+  const grassM = new THREE.MeshLambertMaterial({ color: '#3a3a1e' });
+  const blade = new THREE.ConeGeometry(0.018, 1, 3); blade.translate(0, 0.5, 0);
+  const grass = new THREE.InstancedMesh(blade, grassM, 2400); const o = new THREE.Object3D();
+  let tx = 0, tz = 0;
+  for (let i = 0; i < 2400; i++) {
+    if (i % 12 === 0) { tx = range(rng0, -18, 18); tz = range(rng0, -10, 12); }
+    let x = tx + range(rng0, -0.3, 0.3), z = tz + range(rng0, -0.3, 0.3);
+    if (Math.abs(x) < 9 && z < 3 && z > -6) z += 9;
+    o.position.set(x, 0, z); o.rotation.set(range(rng0, -0.35, 0.35), rng0() * 6, range(rng0, -0.35, 0.35)); o.scale.set(1, range(rng0, 0.12, 0.42), 1);
+    o.updateMatrix(); grass.setMatrixAt(i, o.matrix);
+  }
+  scene.add(grass);
+}
+
+// materials per style
+const toonGrad = (() => { const d = new Uint8Array([60, 60, 60, 255, 125, 125, 125, 255, 190, 190, 190, 255, 240, 240, 240, 255]); const t = new THREE.DataTexture(d, 4, 1, THREE.RGBAFormat); t.minFilter = t.magFilter = THREE.NearestFilter; t.needsUpdate = true; return t; })();
+const MAT = {
+  ink: new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGrad }),
+  painted: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0 }),
+  faceted: new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }),
+};
+// Back-face hull pushed out along the normal. Hands get a thin line, or the hulls of neighbouring fingers fill the gaps.
+const makeOutline = (w) => { const m = new THREE.MeshBasicMaterial({ color: '#1a120a', side: THREE.BackSide }); m.onBeforeCompile = (sh) => { sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', `vec3 transformed = position + normal * ${w.toFixed(4)};`); }; return m; };
+const outlineMat = makeOutline(0.022), outlineThin = makeOutline(0.007);
+// Each part's grid relative to the body's: hands are meshed several times finer so fingers resolve.
+const PART_CELL = (name) => (name.startsWith('hand') ? 0.3 : name === 'weapon' ? 0.7 : 1);
+function meshParts(body, style, H, boneIdx) {
+  const parts = body.split(), main = parts.find((p) => p.name === 'body') || parts[0];
+  const cell0 = cellFor(main, STYLES[style].cells, H);
+  return parts.map((p) => ({ name: p.name, geo: meshBody(p, STYLES[style].cells, H, boneIdx, cell0 * PART_CELL(p.name), p.name.startsWith('hand') ? 0.45 : 1) }));
+}
+const glowTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.25, 'rgba(255,255,255,.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+
+const STYLES = { ink: { label: 'Ink & toon', cells: 150 }, painted: { label: 'Painted', cells: 150 }, faceted: { label: 'Faceted', cells: 46 } };
+
+// ---------------------------------------------------------------- the Nephil's skeleton and clips (from the game's nephil.glb)
+const RIG = { ready: false };
+RIG.loaded = new Promise((res) => {
+  const parse = (buf) => new THREE.GLTFLoader().parse(buf, '', (g) => {
+    RIG.scene = g.scene;
+    let hips; g.scene.traverse((o) => { if (o.isBone && o.name === 'Hips') hips = o; });
+    RIG.hipsRest = hips.position.clone();
+    // Bones keep their own lengths: only the hips may translate (vertically; the sim moves the body).
+    RIG.clips = g.animations.map((c) => { const cl = c.clone(); cl.tracks = cl.tracks.filter((t) => !t.name.endsWith('.scale') && (!t.name.endsWith('.position') || t.name === 'Hips.position')); return cl; });
+    RIG.ready = true; res();
+  }, (err) => { console.warn('nephil rig failed to parse; giants stay static', err); res(); });
+  // The model ships as base64 inside JSON, since the artifact host only serves web file types.
+  fetch('nephil-rig.json').then((r) => r.json()).then((j) => {
+    const bin = atob(j.glb), buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    parse(buf.buffer);
+  }).catch((err) => { console.warn('nephil-rig.json failed to load; giants stay static', err); res(); });
+});
+
+// Trunk bones point in arbitrary directions at rest, so they keep their rest orientation and only re-seat children.
+const MULTI = new Set(['Hips', 'Spine02', 'Spine01', 'Spine', 'neck', 'Head']);
+// Move the Nephil's skeleton onto this giant's joints. Each limb bone gets the smallest rotation that turns its
+// REST direction onto the new one (measured from rest, so no twist builds up down the chain) and stretches to the new
+// length; trunk bones keep their rest orientation and re-seat their children; leaves follow their parent's swing.
+function retarget(byName, J) {
+  const V = THREE.Vector3, Q = THREE.Quaternion;
+  byName.Hips.parent.updateMatrixWorld(true);
+  const rest = new Map();
+  for (const b of Object.values(byName)) { b.updateMatrixWorld(true); rest.set(b, { q: b.getWorldQuaternion(new Q()), p: b.getWorldPosition(new V()) }); }
+  const seat = (bone, t) => { bone.parent.updateMatrixWorld(true); const v = new V(...t); bone.parent.worldToLocal(v); bone.position.copy(v); bone.updateMatrixWorld(true); };
+  const visit = (B, parentSwing) => {
+    const kids = B.children.filter((c) => c.isBone && J[c.name]);
+    const aims = kids.length === 1 && !MULTI.has(B.name);
+    let swing;
+    if (aims) {
+      const C = kids[0];
+      const rd = rest.get(C).p.clone().sub(rest.get(B).p), rl = rd.length(); rd.normalize();
+      const des = new V(...J[C.name]).sub(new V(...J[B.name])), dl = des.length(); des.normalize();
+      swing = new Q().setFromUnitVectors(rd, des);
+      C.position.multiplyScalar(dl / rl);
+    } else swing = kids.length ? new Q() : parentSwing.clone();
+    const wNew = swing.clone().multiply(rest.get(B).q);
+    B.quaternion.copy(B.parent.getWorldQuaternion(new Q()).invert().multiply(wNew));
+    B.updateMatrixWorld(true);
+    if (!aims) for (const C of kids) seat(C, J[C.name]);
+    for (const C of B.children) if (C.isBone) visit(C, swing);
+  };
+  seat(byName.Hips, J.Hips); visit(byName.Hips, new Q());
+}
+
+function buildRigged(spec, style) {
+  const body = spec.body, grp = new THREE.Group();
+  const rig = THREE.SkeletonUtils.clone(RIG.scene);
+  let src; const meshes = [];
+  rig.traverse((o) => { if (o.isSkinnedMesh) src = o; if (o.isMesh) meshes.push(o); });
+  const bones = src.skeleton.bones;
+  meshes.forEach((m) => m.parent.remove(m));
+  grp.add(rig); grp.updateMatrixWorld(true);
+  const byName = Object.fromEntries(bones.map((b) => [b.name, b]));
+  retarget(byName, body.joints);
+  grp.updateMatrixWorld(true);
+  const meshes2 = meshParts(body, style, spec.H, Object.fromEntries(bones.map((b, i) => [b.name, i])));
+  const geo = meshes2.find((p) => p.name === 'body').geo;
+  const skel = new THREE.Skeleton(bones);
+  for (const part of meshes2) {
+    const m = new THREE.SkinnedMesh(part.geo, MAT[style]); m.castShadow = true; m.frustumCulled = false;
+    grp.add(m); m.bind(skel);
+    if (style === 'ink') { const o = new THREE.SkinnedMesh(part.geo, part.name.startsWith('hand') ? outlineThin : outlineMat); o.frustumCulled = false; grp.add(o); o.bind(skel, m.bindMatrix); }
+  }
+  const head = byName.Head, ws = head.getWorldScale(new THREE.Vector3()).x;
+  for (const e of body.eyes) {
+    const c = new THREE.Color(e.color);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(e.r / ws, 12, 8), new THREE.MeshBasicMaterial({ color: c.clone().lerp(new THREE.Color('#ffffff'), 0.35) }));
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.85 }));
+    sp.scale.setScalar(e.r * 9 / ws);
+    for (const o of [ball, sp]) { o.position.copy(head.worldToLocal(new THREE.Vector3(...e.c))); head.add(o); }
+  }
+  // the clips' hip motion, rescaled to this giant's hip height and pinned horizontally
+  const hips = byName.Hips, rest = RIG.hipsRest, ours = hips.position.clone(), ratio = ours.y / rest.y;
+  const mixer = new THREE.AnimationMixer(grp), actions = {};
+  for (const c of RIG.clips) {
+    const cl = c.clone();
+    cl.tracks = cl.tracks.map((t) => {
+      if (t.name !== 'Hips.position') return t;
+      const t2 = t.clone(), v = t2.values;
+      for (let i = 0; i < v.length; i += 3) { v[i] = ours.x; v[i + 1] = ours.y + (v[i + 1] - rest.y) * ratio; v[i + 2] = ours.z; }
+      return t2;
+    });
+    actions[cl.name] = mixer.clipAction(cl);
+  }
+  grp.userData = { geo, width: geo.boundingBox.max.x - geo.boundingBox.min.x, mixer, actions };
+  if (!state.bind) playOn(grp, state.anim, 0);
+  return grp;
+}
+
+function playOn(grp, name, fade = 0.3) {
+  const { actions, current } = grp.userData; const next = actions && actions[name];
+  if (!next || next === current) return;
+  next.reset().setEffectiveWeight(1).play();
+  if (current) current.crossFadeTo(next, fade, false);
+  grp.userData.current = next;
+}
+
+function buildObject(spec, style) {
+  if (RIG.ready && spec.body.joints) return buildRigged(spec, style);
+  const grp = new THREE.Group();
+  const parts = meshParts(spec.body, style, spec.H), geo = (parts.find((p) => p.name === 'body') || parts[0]).geo;
+  for (const part of parts) {
+    const m = new THREE.Mesh(part.geo, MAT[style]); m.castShadow = true; grp.add(m);
+    if (style === 'ink') grp.add(new THREE.Mesh(part.geo, part.name.startsWith('hand') ? outlineThin : outlineMat));
+  }
+  for (const e of spec.body.eyes) {
+    const c = new THREE.Color(e.color);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(e.r, 12, 8), new THREE.MeshBasicMaterial({ color: c.clone().lerp(new THREE.Color('#ffffff'), 0.35) }));
+    ball.position.set(...e.c); grp.add(ball);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.85 }));
+    sp.position.set(...e.c); sp.scale.setScalar(e.r * 9); grp.add(sp);
+  }
+  grp.userData.geo = geo; grp.userData.width = geo.boundingBox.max.x - geo.boundingBox.min.x;
+  return grp;
+}
+
+// ---------------------------------------------------------------- state & UI
+const COUNT = 1;
+const ANIMS = { idle: { label: 'Idle' }, walk: { label: 'Walk' }, run: { label: 'Run' }, attack: { label: 'Attack' }, hit: { label: 'Hit' }, fall: { label: 'Fall' }, jump: { label: 'Jump' } };
+const BUILDS = { any: { label: 'Any' }, lanky: { label: 'Lanky' }, brute: { label: 'Brute' }, athlete: { label: 'Athletic' } };
+const state = { family: 'nephil', close: false, build: 'any', anim: 'idle', style: 'ink', seeds: [] };
+try { const saved = JSON.parse(localStorage.getItem('mlt') || '{}'); if (STYLES[saved.style]) state.style = saved.style; } catch (e) { }
+for (const tok of location.hash.slice(1).split('-')) { if (FAMILIES[tok]) state.family = tok; if (STYLES[tok]) state.style = tok; if (tok === 'close') state.close = true; if (BUILDS[tok]) state.build = tok; if (ANIMS[tok]) state.anim = tok; if (tok === 'bind' || tok === 'ref' || tok === 'hand') state[tok] = true; }
+function newSeeds() { state.seeds = Array.from({ length: COUNT }, () => (Math.random() * 2 ** 31) >>> 0); }
+newSeeds();
+
+function segButtons(el, items, key) {
+  el.innerHTML = '';
+  for (const [id, it] of Object.entries(items)) {
+    const b = document.createElement('button'); b.type = 'button'; b.id = key + '-' + id; b.textContent = it.label;
+    b.setAttribute('aria-pressed', String(state[key] === id));
+    b.onclick = () => { state[key] = id; try { localStorage.setItem('mlt', JSON.stringify({ family: state.family, style: state.style })); } catch (e) { } segButtons(el, items, key); if (key === 'anim') lineup.children.forEach((g) => playOn(g, state.anim)); else rebuild(); };
+    el.append(b);
+  }
+}
+segButtons(document.getElementById('styles'), STYLES, 'style');
+segButtons(document.getElementById('builds'), BUILDS, 'build');
+segButtons(document.getElementById('anims'), ANIMS, 'anim');
+document.getElementById('reroll').onclick = () => { newSeeds(); rebuild(); };
+
+let lineup = new THREE.Group(); scene.add(lineup);
+let champion = null, champStyle = null, buildId = 0;
+const tick = () => new Promise((res) => setTimeout(res, 0));
+const dispose = (g) => g.traverse((o) => { if (o.geometry && o.geometry !== g.userData.geo) o.geometry.dispose(); if (o.material && o.material.map === glowTex) o.material.dispose(); });
+
+async function rebuild() {
+  const id = ++buildId;
+  statusEl.hidden = false; statusEl.textContent = 'Shaping…';
+  await RIG.loaded;
+  await tick();
+  const fam = FAMILIES[state.family];
+  const specs = state.seeds.map((sd) => ({ seed: sd, ...fam.gen(mulberry(sd)) }));
+  const objs = [];
+  const t0 = performance.now();
+  for (let i = 0; i < specs.length; i++) {
+    statusEl.textContent = `Shaping ${i + 1} of ${specs.length}…`;
+    await tick(); if (id !== buildId) return;
+    objs.push(buildObject(specs[i], state.style));
+  }
+  if (champStyle !== state.style) {
+    if (champion) { scene.remove(champion); dispose(champion); champion.userData.geo.dispose(); }
+    champion = buildObject(genChampion(), state.style); champStyle = state.style; scene.add(champion);
+  }
+  if (id !== buildId) return;
+  scene.remove(lineup); lineup.traverse((o) => { if (o.userData.geo) o.userData.geo.dispose(); }); dispose(lineup);
+  lineup = new THREE.Group();
+  const gap = state.family === 'tannin' ? 0.6 : 0.9;
+  const widths = objs.map((o, i) => (specs[i].yaw ? o.userData.geo.boundingSphere.radius * 1.3 : o.userData.width));
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (objs.length - 1);
+  let x = -total / 2; let maxH = 0;
+  objs.forEach((o, i) => {
+    const r = mulberry(specs[i].seed ^ 99);
+    const bb = o.userData.geo.boundingBox;
+    o.position.set(x + widths[i] / 2 - (specs[i].yaw ? 0 : (bb.min.x + bb.max.x) / 2), 0, (i % 2) * -0.8 - (state.family === 'tannin' ? 1 : 0));
+    o.rotation.y = specs[i].yaw ? specs[i].yaw * (i % 2 ? -1 : 1) : range(r, -0.3, 0.3);
+    x += widths[i] + gap; maxH = Math.max(maxH, bb.max.y);
+    lineup.add(o);
+  });
+  scene.add(lineup);
+  if (state.ref && RIG.ready && !RIG.refObj) { // debug: the original Nephil playing the same clip
+    const g = new THREE.Group(), m = THREE.SkeletonUtils.clone(RIG.scene); g.add(m);
+    m.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+    const mixer = new THREE.AnimationMixer(g), actions = {};
+    for (const c of RIG.clips) actions[c.name] = mixer.clipAction(c);
+    g.userData = { mixer, actions }; g.position.set(3.2, 0, 0); g.scale.setScalar(1.4);
+    playOn(g, state.anim, 0); RIG.refObj = g; lineup.add(g);
+    for (const o of [g, ...objs]) { const h = new THREE.SkeletonHelper(o); h.material.depthTest = false; h.material.linewidth = 2; scene.add(h); }
+  }
+  champion.position.set(-1.7, 0, 2.4); champion.rotation.y = Math.PI + 0.45;
+  camera.position.set(1.2, 0.9, maxH * 1.75 + 1.2);
+  controls.target.set(-0.4, maxH * 0.52, 0);
+  if (state.close) {
+    const o = objs[0], bb = o.userData.geo.boundingBox, h = bb.max.y;
+    const c = o.localToWorld(new THREE.Vector3((bb.min.x + bb.max.x) / 2, h * 0.72, (bb.min.z + bb.max.z) / 2));
+    controls.target.copy(c); camera.position.set(c.x + h * 0.35, c.y - h * 0.08, c.z + h * 1.15);
+  }
+  if (state.hand) { // diagnostic: frame the weapon hand
+    let hb = null; objs[0].traverse((b) => { if (b.isBone && b.name === 'RightHand') hb = b; });
+    if (hb) { const c = hb.getWorldPosition(new THREE.Vector3()); controls.target.copy(c); camera.position.set(c.x - 1.3, c.y + 0.5, c.z + 0.9); }
+  }
+  controls.update();
+  renderLedger(specs);
+  statusEl.textContent = `${specs.length} built in ${Math.round(performance.now() - t0)} ms`;
+}
+
+function renderLedger(specs) {
+  const el = document.getElementById('ledger'); el.innerHTML = '';
+  for (const s of specs) {
+    const c = document.createElement('div'); c.className = 'card';
+    c.innerHTML = `<h3></h3><div class="ep"></div><dl></dl>`;
+    c.querySelector('h3').textContent = s.name; c.querySelector('.ep').textContent = s.epithet;
+    const dl = c.querySelector('dl');
+    for (const [k, v] of [...s.traits, ['Seed', String(s.seed)]]) { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; dl.append(dt, dd); }
+    el.append(c);
+  }
+}
+
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(stage); resize();
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  for (const g of lineup.children) g.userData.mixer?.update(dt);
+  controls.update(); renderer.render(scene, camera);
+});
+rebuild();
+</script>
