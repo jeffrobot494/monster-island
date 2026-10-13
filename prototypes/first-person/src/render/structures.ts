@@ -52,6 +52,8 @@ export class Structures {
   lairGlow = new Map<number, THREE.Mesh>();
   braziers: THREE.Mesh[] = [];
   foldLambs: THREE.Group[] = [];
+  /** the player's colliders for walls drawn here and nowhere in the tiles (the fold's): circles, tiles */
+  solids: { x: number; z: number; r: number; top: number }[] = [];
   altarPos = new THREE.Vector3();
   highAltarPos = new THREE.Vector3();
 
@@ -61,6 +63,7 @@ export class Structures {
     this.lairGlow.clear();
     this.braziers = [];
     this.foldLambs = [];
+    this.solids = [];
     const y = (x: number, z: number) => t.y(x, z);
     const V = L.village;
 
@@ -147,7 +150,16 @@ export class Structures {
       const fx = F.x + 0.5, fz = F.z + 0.5, gy = y(fx, fz);
       const grp = new THREE.Group();
       grp.position.set(fx * M, gy, fz * M);
-      for (const [sx, sz, w, d] of [[0, 3.4, 7, 0.6], [0, -3.4, 7, 0.6], [3.4, 0, 0.6, 7], [-3.4, 1.6, 0.6, 3.8]] as const) put(grp, BOX, '#9a9080', [w, 1.0, d], [sx, 0.5, sz]);
+      for (const [sx, sz, w, d] of [[0, 3.4, 7, 0.6], [0, -3.4, 7, 0.6], [3.4, 0, 0.6, 7], [-3.4, 1.6, 0.6, 3.8]] as const) {
+        put(grp, BOX, '#9a9080', [w, 0.7, d], [sx, 0.35, sz]);
+        // the walls are only geometry, not tiles: a row of circles along each so you can't walk through them. Their
+        // top sits under the stones' so a running jump (~0.85 m) clears the wall: past its middle, you land inside
+        const len = Math.max(w, d), n = Math.ceil(len / 0.4), along = w > d;
+        for (let k = 0; k <= n; k++) {
+          const o = -len / 2 + 0.3 + ((len - 0.6) * k) / n;
+          this.solids.push({ x: fx + (sx + (along ? o : 0)) / M, z: fz + (sz + (along ? 0 : o)) / M, r: 0.3 / M, top: gy + 0.5 });
+        }
+      }
       for (let k = 0; k < 6; k++) {
         const lamb = new THREE.Group();
         lamb.position.set(-2 + (k % 3) * 2, 0, -1.2 + Math.floor(k / 3) * 2.2);

@@ -67,7 +67,8 @@ export interface MountBody {
 /** ground: Space beside it; air: Space held in a jump; drop: falling into it from above */
 export type MountHow = 'ground' | 'air' | 'drop';
 
-export interface Solid { x: number; z: number; r: number } // tiles
+/** tiles; `top` (meters, absolute): feet above it pass over (a low wall you can hop), none = no top */
+export interface Solid { x: number; z: number; r: number; top?: number }
 
 /** the body's collision samples: a circle of radius R */
 const RING: [number, number][] = [[R, 0], [-R, 0], [0, R], [0, -R], [R * 0.7, R * 0.7], [-R * 0.7, R * 0.7], [R * 0.7, -R * 0.7], [-R * 0.7, -R * 0.7], [0, 0]];
@@ -1209,6 +1210,7 @@ export class ChampionController {
       // push out of solid circles (monsters, altars, trunks)
       const near = this.decorSolids.get(Math.floor(this.z) * SIZE + Math.floor(this.x));
       for (const s of near ? [...this.solids, ...near] : this.solids) {
+        if (s.top !== undefined && this.feetY >= s.top) continue;
         const dx = this.x - s.x, dz = this.z - s.z, d = Math.hypot(dx, dz), min = s.r + R;
         if (d < min && d > 1e-6) {
           const nx = s.x + (dx / d) * min, nz = s.z + (dz / d) * min;

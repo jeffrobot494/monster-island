@@ -1055,6 +1055,7 @@ async function boot() {
         controller.solids = [];
         const L = renderer.layout;
         if (L) controller.solids.push({ x: L.villageAltar.x + 0.5, z: L.villageAltar.z + 0.5, r: 1.3 / M }, { x: L.highAltar.x + 0.5, z: L.highAltar.z + 0.5, r: 1.9 / M });
+        controller.solids.push(...renderer.structures.solids);
         renderer.ents.each((v) => {
           if (!(v.flags & F_MONSTER) || v.flags & (F_DOWNED | F_BOUND | F_CORPSE)) return;
           if (v.pos.y - renderer.terrain.y(v.pos.x / M, v.pos.z / M) > 3) return; // flying overhead
