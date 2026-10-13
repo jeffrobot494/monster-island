@@ -4,3 +4,4 @@ dist
 dev/.vite.pid
 dev/.cdp.pid
 game.config.playground.json
+dist-arena

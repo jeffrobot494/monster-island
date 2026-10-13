@@ -1,0 +1,51 @@
+/* The combat arena's panel and status plate (src/arena/panel.ts), in the game's pause-card style. */
+.arena-panel { position: absolute; left: 14px; top: 14px; bottom: 14px; width: min(400px, calc(100vw - 28px)); display: flex; flex-direction: column; background: rgba(20, 14, 10, 0.94); color: #f4e6c8; border: 1px solid var(--gold); border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); z-index: 5; font-size: 13px; user-select: none; }
+.arena-panel header { padding: 14px 16px 10px; border-bottom: 1px solid rgba(217, 164, 64, 0.35); }
+.ap-title { font-family: var(--serif); font-size: 20px; color: var(--gold); }
+.ap-status { margin: 4px 0 10px; color: #d8c49c; font-variant-numeric: tabular-nums; min-height: 1.2em; }
+.ap-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ap-body { overflow-y: auto; padding: 4px 16px 16px; flex: 1; }
+.ap-body section { padding: 10px 0 6px; border-bottom: 1px solid rgba(217, 164, 64, 0.18); }
+.ap-body section:last-child { border-bottom: 0; }
+.ap-body h3 { margin: 0 0 8px; font-family: var(--serif); font-size: 13px; font-weight: 500; letter-spacing: 0.06em; color: var(--gold); text-transform: uppercase; }
+.ap-row { display: grid; grid-template-columns: 1fr 150px 52px; align-items: center; gap: 8px; padding: 3px 0; }
+.ap-row > span { color: #e8d8b4; }
+.ap-row output { font-variant-numeric: tabular-nums; color: #ffe39a; text-align: right; }
+.ap-row input[type='range'] { width: 100%; accent-color: var(--gold); }
+.ap-row input[type='range']:disabled { opacity: 0.35; }
+.ap-row select { grid-column: 2 / 4; background: #2a1e14; color: #f4e6c8; border: 1px solid rgba(217, 164, 64, 0.5); border-radius: 6px; padding: 3px 6px; font: inherit; }
+.ap-check { grid-template-columns: 1fr auto; }
+.ap-check input { accent-color: var(--gold); width: 16px; height: 16px; }
+.ap-btn { font: inherit; font-size: 12px; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(217, 164, 64, 0.55); background: #3a2a1a; color: #f4e6c8; cursor: pointer; }
+.ap-btn:hover { background: #4a3622; }
+.ap-btn:active { transform: scale(0.97); }
+.ap-btn.ap-go { background: linear-gradient(#ffe7a0, #e0aa40); color: var(--ink); border-color: #c89a3a; font-weight: 600; }
+.ap-btn.ap-hot { background: #8e2216; border-color: #c0402a; color: #fff; }
+.ap-btn.ap-quiet { background: transparent; color: #b8a47c; margin-top: 6px; }
+.ap-mini { font: inherit; font-size: 11px; padding: 2px 7px; border-radius: 6px; border: 1px solid rgba(217, 164, 64, 0.45); background: #2e2216; color: #f4e6c8; cursor: pointer; }
+.ap-mini:hover { background: #4a3622; }
+.ap-inline { display: flex; gap: 6px; margin: 6px 0; }
+.ap-mons { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+.ap-mon { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+.ap-mon input { accent-color: var(--gold); }
+.ap-mon span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-mon i { font-style: normal; font-size: 10px; color: #9ac0e0; }
+.arena-panel section > .ap-btn { margin-top: 8px; display: block; width: 100%; }
+.ap-note { margin: 4px 0 0; color: #a8946c; font-size: 11px; }
+.ap-sandbox { color: #d8c49c; }
+.ap-sandbox ul { margin: 6px 0; padding-left: 18px; font-family: ui-monospace, monospace; font-size: 12px; color: #ffe39a; }
+.ap-sandbox p { margin: 6px 0 0; font-family: ui-monospace, monospace; font-size: 11px; color: #a8946c; }
+
+.arena-plate { position: absolute; left: 18px; top: 16px; width: 220px; background: var(--dark); color: #f4e6c8; border: 1px solid rgba(201, 169, 106, 0.4); border-radius: 10px; padding: 7px 10px; font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none !important; }
+.arena-plate-line { color: #e8d8b4; margin-bottom: 4px; line-height: 1.35; }
+.arena-plate-hint { color: #a8946c; font-size: 10px; margin-top: 4px; }
+.arena-mon { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 6px; margin: 3px 0; }
+.arena-mon span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arena-mon b { display: block; height: 6px; border-radius: 3px; background: #3a1410; overflow: hidden; }
+.arena-mon b i { display: block; height: 100%; background: linear-gradient(90deg, #c0301c, #e8503a); }
+.arena-mon b.down i { background: #e0c040; }
+
+/* the game's clock/favor plate means nothing here: the arena's plate takes its place */
+body.arena .hud-tl { display: none !important; }
+/* the pause card makes room for the panel */
+body.arena .play { padding-left: min(430px, 40vw); box-sizing: border-box; }

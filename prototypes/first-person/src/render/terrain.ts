@@ -5,6 +5,7 @@ import type { TileTypeDef } from '../sim/types';
 import { Ground, M, WATER_Y, NV } from '../sim/ground';
 import { SIZE, TileGrid, CORE_TILES } from '../sim/world';
 import type { TerrainState } from '../protocol';
+import type { TerrainSettings } from '../sim/terrain-import';
 import type { FeatureSurface } from '../input/feature-surface';
 import { buildFeatureMesh } from './feature-mesh';
 
@@ -126,6 +127,8 @@ const GROUND: Record<string, string> = {
 };
 
 export class Terrain {
+  /** builds the feature mesh and its climbing surface from the terrain's settings (the arena puts in its own) */
+  static featureBuilder: (s: TerrainSettings) => { mesh: THREE.Mesh; surface: FeatureSurface } = buildFeatureMesh;
   group = new THREE.Group();
   grid = new TileGrid();
   ground: Ground;
@@ -215,7 +218,7 @@ export class Terrain {
       }
       this.surface = null;
       if (terrain) {
-        const built = buildFeatureMesh(terrain.settings);
+        const built = Terrain.featureBuilder(terrain.settings);
         this.group.add((this.features = built.mesh));
         this.surface = built.surface;
       }

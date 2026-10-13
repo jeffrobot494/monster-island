@@ -1,0 +1,8 @@
+{
+  // The arena's typecheck (npm run arena:typecheck): the game plus src/arena/sandbox/, where a sandbox file's
+  // relative imports resolve as if it sat at its place under src/ (rootDirs), sandbox copies first.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "rootDirs": ["src/arena/sandbox", "src"] },
+  "include": ["src", "test", "dev", "vite.config.ts", "vite.arena.config.ts"],
+  "exclude": ["test/old", "src/arena/sandbox/.base"]
+}

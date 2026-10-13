@@ -20,6 +20,12 @@ dev/serve.sh            # Vite on :5201; the log prints a LAN token for the AI m
 
 The dev server spawns `claude -p` for each god call. If the CLI is missing, the game falls back to a manual god.
 
+## Combat arena
+
+A big bowl for fighting over and over while tuning combat, monsters and followers: `npm run arena`, then
+http://localhost:5202/. Combat changes are made in a sandbox (`src/arena/sandbox/`) that only the arena uses, and are
+ported into the game with `npm run arena:promote`. See [`src/arena/README.md`](src/arena/README.md).
+
 ## Controls
 
 | Input | Action |

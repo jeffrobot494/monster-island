@@ -10,7 +10,16 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build:run": "VITE_RUNDOT=1 npm run build && node scripts/vendor-rundot.mjs",
-    "deploy": "npm run build:run && rundot deploy --ignore-checks sandbox-blocked-modals"
+    "deploy": "npm run build:run && rundot deploy --ignore-checks sandbox-blocked-modals",
+    "arena": "vite --config vite.arena.config.ts",
+    "arena:test": "vitest run --config vite.arena.config.ts",
+    "arena:typecheck": "tsc --noEmit -p tsconfig.arena.json",
+    "arena:fork": "node scripts/arena.mjs fork",
+    "arena:status": "node scripts/arena.mjs status",
+    "arena:diff": "node scripts/arena.mjs diff",
+    "arena:sync": "node scripts/arena.mjs sync",
+    "arena:promote": "node scripts/arena.mjs promote",
+    "arena:drop": "node scripts/arena.mjs drop"
   },
   "dependencies": {
     "@series-inc/rundot-game-sdk": "5.29.1",
