@@ -3,7 +3,7 @@
 import type { Sim } from './sim';
 import type { Entity, RideGoal } from './types';
 import { DAY_MS, HOUR_MS, inWindow } from './clock';
-import { applyDamage, armFactor, dropCarried, firstName, gainXp, heal, kill, legFactor, regionName, setDowned, sigLost } from './combat';
+import { applyDamage, armFactor, dropCarried, firstName, gainXp, heal, isWounded, kill, legFactor, regionName, setDowned, sigLost } from './combat';
 import { rollRestless } from './populate';
 import { offerFavor } from './favor';
 import { SIZE } from './world';
@@ -387,7 +387,7 @@ function stepMonsterAI(sim: Sim, m: Entity) {
 
   const active = monsterActive(sim, m) && (M.satedUntil ?? 0) <= sim.clockMs;
   // wounded monsters heal at the lair
-  if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && m.hp < max && sim.tick % 10 === 0) heal(sim, m, (max * 0.1 * sim.msPerTick * 10) / HOUR_MS);
+  if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && isWounded(sim, m) && sim.tick % 10 === 0) heal(sim, m, (max * 0.1 * sim.msPerTick * 10) / HOUR_MS);
 
   // anak (and the hungry, after a kill) eat the dead
   if ((M.archetype === 'anak' || sim.tick < M.feedAt) && sim.tick % 20 === 0 && m.state !== 'stalk' && m.state !== 'grab' && !raiding(sim)) {

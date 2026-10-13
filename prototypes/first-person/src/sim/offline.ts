@@ -5,7 +5,7 @@ import { DAY_MS, HOUR_MS } from './clock';
 import { SIZE } from './world';
 import { PRODUCTION, doorOf, onShift, pickSite, productionMul } from './village';
 import { boldness, isEnraged, raiding } from './monster-ai';
-import { applyDamage, firstName, gainXp, heal, kill } from './combat';
+import { applyDamage, firstName, gainXp, heal, isWounded, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
 import { clearClimb, cs } from './champion';
 
@@ -101,7 +101,7 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
         M.huntAt.shift();
         resolveHunt(sim, m, sum);
       }
-      if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && m.hp < sim.maxHp(m)) heal(sim, m, sim.maxHp(m) * 0.1 * f);
+      if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && isWounded(sim, m)) heal(sim, m, sim.maxHp(m) * 0.1 * f);
     }
     // food
     let eaters = 0;

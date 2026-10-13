@@ -3,7 +3,7 @@
 // modes when the player isn't driving; dragging along a breadcrumb trail; regeneration; succession.
 import type { Sim } from './sim';
 import type { Entity, Zone } from './types';
-import { applyDamage, armFactor, firstName, heal, legFactor, releaseDragged, kill, spawnSevered } from './combat';
+import { applyDamage, armFactor, firstName, heal, isWounded, legFactor, releaseDragged, kill, spawnSevered } from './combat';
 import { JOB_TINT } from './core-defs';
 import { doorOf } from './village';
 import { M, WATER_Y } from './ground';
@@ -645,7 +645,7 @@ export function stepChampion(sim: Sim, c: Entity) {
       break;
     }
   }
-  if (sim.tick - S.lastThreat > 100 && c.hp < sim.maxHp(c)) heal(sim, c, sim.maxHp(c) * 0.002);
+  if (sim.tick - S.lastThreat > 100 && isWounded(sim, c)) heal(sim, c, sim.maxHp(c) * 0.002);
 
   // idle defense: autopilot after 5 minutes without input (R19, F9)
   if (!sim.order && sim.tick - S.lastInput > IDLE_TICKS) {

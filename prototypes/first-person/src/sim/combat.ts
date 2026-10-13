@@ -54,12 +54,20 @@ export function sigLost(e: Entity): boolean {
   return !!isHurt(e, 'sig');
 }
 
-/** Heal hp and zones proportionally (zones heal back to ok, never regrow severed limbs). */
+/** True while e has hp or any (unsevered) zone left to heal. */
+export function isWounded(sim: Sim, e: Entity): boolean {
+  if (e.hp < sim.maxHp(e)) return true;
+  return !!e.zones && Object.values(e.zones).some((z) => z && z.state !== 'severed' && z.hp < z.max);
+}
+
+/**
+ * Heal hp and zones (zones heal back to ok, never regrow severed limbs). Zones heal at the full rate even once hp
+ * is capped, so a crippled limb doesn't stay crippled forever after a fight that cost less than a third of max hp.
+ */
 export function heal(sim: Sim, e: Entity, n: number) {
   const max = sim.maxHp(e);
-  const before = e.hp;
   e.hp = Math.min(max, e.hp + n);
-  const frac = (e.hp - before) / max;
+  const frac = n / max;
   if (e.zones) for (const z of Object.values(e.zones)) {
     if (!z || z.state === 'severed') continue;
     z.hp = Math.min(z.max, z.hp + z.max * frac * 1.5);
