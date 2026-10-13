@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = join(ROOT, 'dist');
+const DIST = join(ROOT, process.argv[2] || 'dist');
 const OUT = join(DIST, 'vendor/rundot-sdk');
 const ENTRY = 'rundot-game-api/index.js';
 // the package exports only its entries, so find dist/ from the api entry's own path
@@ -59,4 +59,4 @@ if (!html.includes(TAG)) {
   writeFileSync(htmlPath, html);
 }
 const version = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8')).version;
-console.log(`vendored RUN.world SDK ${version}: ${files.size} files -> dist/vendor/rundot-sdk/`);
+console.log(`vendored RUN.world SDK ${version}: ${files.size} files -> ${process.argv[2] || 'dist'}/vendor/rundot-sdk/`);

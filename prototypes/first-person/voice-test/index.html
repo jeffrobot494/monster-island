@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vosk voice command test</title>
+<style>
+body{font:16px system-ui;background:#101723;color:#e7edf5;margin:0;padding:28px}main{max-width:850px;margin:auto}h1{font-size:30px}p{line-height:1.6;color:#bdcadd}button{font:inherit;padding:12px 18px;margin:6px 8px 6px 0;border:0;border-radius:8px;background:#8de0ce;color:#10251f}button:disabled{opacity:.4}section{background:#1c2839;border-radius:12px;padding:18px;margin:18px 0}#command{font-size:36px;color:#8de0ce;min-height:45px}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:340px;overflow:auto;font-size:13px}label{display:block;margin:10px 0}
+</style></head><body><main>
+<h1>Vosk voice command test</h1>
+<p>Speech is processed on this device. The English model is bundled with this test. No transcription service or persistent browser storage is used.</p>
+<section><strong>Say commands continuously — try “attack attack!”</strong><p id="words"></p><p>Commands fire from live recognition without waiting for a pause. Duplicate activations are allowed.</p><label><input id="grammar" type="checkbox" checked> Restrict recognition to the ten commands (change while stopped)</label><button id="start">Start microphone</button><button id="stop" disabled>Stop</button><button id="download">Download diagnostics</button><p id="status" role="status">Ready to test</p></section>
+<section><strong>Last command sequence</strong><div id="command" aria-live="polite">—</div><p>Live transcript: <span id="partial">—</span></p><p id="meter">Microphone level: —</p></section>
+<section><strong>Diagnostics and recognized speech</strong><pre id="log"></pre></section>
+</main><script src="./vendor/vosk.js"></script><script src="./app.js"></script></body></html>

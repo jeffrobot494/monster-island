@@ -4,4 +4,6 @@ dist
 dev/.vite.pid
 dev/.cdp.pid
 game.config.playground.json
+voice-test/vendor/
+dist-voice/
 dist-arena

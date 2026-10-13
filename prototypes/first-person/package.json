@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "voice:prepare": "python scripts/prepare-voice-test.py",
+    "voice:build": "node scripts/build-voice-test.mjs && node scripts/vendor-rundot.mjs dist-voice",
+    "voice:test": "node scripts/test-voice-test.mjs",
+    "voice": "node scripts/serve-voice-test.mjs",
     "dev:local": "VITE_PLATFORM=local vite",
     "dev": "VITE_PLATFORM=local vite",
     "build": "tsc --noEmit && vite build",

@@ -1,0 +1,11 @@
+import { cpSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+const root = fileURLToPath(new URL('../', import.meta.url));
+if (!existsSync(join(root, 'voice-test/vendor/model.tar.gz'))) throw new Error('Run npm run voice:prepare first');
+const out = join(root, 'dist-voice');
+mkdirSync(out, { recursive: true });
+for (const file of ['index.html', 'app.js', 'vendor']) cpSync(join(root, 'voice-test', file), join(out, file), { recursive: true });
+const bytes = statSync(join(out, 'vendor/model.tar.gz')).size + statSync(join(out, 'vendor/vosk.js')).size;
+if (bytes > 95_000_000) throw new Error('Voice assets exceed size budget');
+console.log(`Voice assets: ${(bytes / 1e6).toFixed(1)} MB -> dist-voice`);
