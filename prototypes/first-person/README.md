@@ -152,6 +152,8 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 | `?nolock=1` | drag-to-look without pointer lock; it doesn't pause on loading (Esc pauses, clicking the card resumes) |
 | `?hideplay=1` | hide the click-to-play card, and never pause (headless screenshots) |
 | `?noshadow=1` | shadows off |
+| `?skyhour=21.5` | draw the sky (and its light) at that hour, whatever the clock says. Only the picture changes |
+| `?skylapse=s` | run the sky through a whole day every s real seconds, from the current hour (also **F10**, at 48 s) |
 | `?third=1` | start in third person |
 | `?fly=m` | start in fly mode, m meters above the sea (aerial screenshots) |
 | `?terrain=off` | a new island ignores the terraformer's saved terrain (procedural) |
@@ -165,7 +167,9 @@ All of the base game's parameters (`?slot`, `?fresh=1`, `?seed`, `?timescale=N`,
 **Dev tools** (dev server only): Journal → Settings → Dev has **New champion now** (also the **F8** key, anywhere,
 any time) to crown the next champion immediately instead of waiting for dawn, and **Kill the champion** to test
 succession. **Fly mode** (also **F9**) lifts you off the ground: WASD flies where you look, Space up, C down, Shift
-for 240 m/s; nothing can hurt you while flying, and F9 again drops you onto the nearest dry land. The other buttons
+for 240 m/s; nothing can hurt you while flying, and F9 again drops you onto the nearest dry land. **Sky time-lapse**
+(also **F10**) runs the sky through a whole day in 48 seconds so you can watch the other worlds come and go; only the
+picture changes, the sim keeps its own time. The other buttons
 force a judgment, skip 8 hours, start a raid, install a reference module or toggle fog of war.
 
 Headless screenshots on the Windows GPU: `ANGLE=d3d11 WIN=1600,900 dev/winshot.sh "<url>&shot=6000" out.png`.

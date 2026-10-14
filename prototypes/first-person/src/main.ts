@@ -287,6 +287,7 @@ async function boot() {
       else if (cmd === 'skip-8') sim.post({ type: 'devSkipHours', hours: 8 });
       else if (cmd === 'raid') sim.post({ type: 'devRaid' });
       else if (cmd === 'fly') toggleFly();
+      else if (cmd === 'sky-lapse') toggleSkyLapse();
       else if (cmd === 'monsters') toggleShowMonsters();
       else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
@@ -311,12 +312,24 @@ async function boot() {
     sim.post({ type: 'devShowMonsters', on: showMonsters });
     ui.toast(showMonsters ? 'Showing every monster (F7 to hide)' : 'Monsters hidden', 'info', 3);
   }
-  // dev hotkeys: F7 shows every monster; F8 crowns the next champion now (no waiting for dawn); F9 toggles fly mode
+  // dev: look at the sky without waiting on the clock. A time-lapse (F10, or ?skylapse=<real seconds per game day>)
+  // runs the picture through the day from the current hour; ?skyhour=21.5 holds the sky at an hour. Only the picture
+  // changes: the sim keeps its own time.
+  let skyLapse = devMode ? Number(params.get('skylapse')) || 0 : 0;
+  if (devMode && params.has('skyhour')) renderer.skyHour = (Number(params.get('skyhour')) || 0) % 24;
+  function toggleSkyLapse() {
+    skyLapse = skyLapse ? 0 : 48;
+    if (!skyLapse) renderer.skyHour = null;
+    ui.toast(skyLapse ? 'Sky time-lapse: a day in 48 seconds (F10 to stop)' : 'Sky time-lapse off', 'info', 3);
+  }
+  // dev hotkeys: F7 shows every monster; F8 crowns the next champion now (no waiting for dawn); F9 toggles fly mode;
+  // F10 the sky time-lapse
   if (devMode) window.addEventListener('keydown', (e) => {
-    if ((e.code !== 'F7' && e.code !== 'F8' && e.code !== 'F9') || e.repeat) return;
+    if ((e.code !== 'F7' && e.code !== 'F8' && e.code !== 'F9' && e.code !== 'F10') || e.repeat) return;
     e.preventDefault();
     if (e.code === 'F7') toggleShowMonsters();
     else if (e.code === 'F8') sim.post({ type: 'devCrown' });
+    else if (e.code === 'F10') toggleSkyLapse();
     else toggleFly();
   });
   if (platform.warning) ui.toast(platform.warning, 'info', 10);
@@ -1104,6 +1117,7 @@ async function boot() {
       viewReady = true;
       updateLockUi(); // still at the click-to-play card: hold the world there
     }
+    if (skyLapse) renderer.skyHour = ((renderer.skyHour ?? renderer.hour) + (fdt * 24) / skyLapse) % 24;
     renderer.render(cam, {
       champId: champId(), sightTiles: hud?.champion?.sight ?? 12, torch: !!hud?.champion?.torch, fold: hud?.fold ?? 0,
       lairsHome: new Set(hud?.lairsHome ?? []), viewModel: !champPose && (ctrlReason === 'player' || ctrlReason === 'hold' || ctrlReason === 'autopilot'), champPose,

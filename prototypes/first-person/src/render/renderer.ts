@@ -6,7 +6,7 @@ import { Structures } from './structures';
 import { Entities, type ChampPose } from './entities';
 import { Particles, particleUniforms } from './particles';
 import { Sprites } from './sprites';
-import { Sky } from './sky';
+import { Sky, clockLight } from './sky';
 import { ViewModel } from './viewmodel';
 import { F_DOWNED, F_TELEGRAPH, F_DRAGGED, type FramePayload, type SimToMain } from '../protocol';
 import type { ShapeDef } from '../sim/types';
@@ -57,6 +57,8 @@ export class Renderer {
   layout: IslandLayout | null = null;
   hour = 12;
   light = 1;
+  /** dev: draw the sky (and its light) at this hour instead of the sim's, by the clock's light alone */
+  skyHour: number | null = null;
   private clock = new THREE.Clock();
   private rings = new RingPool('#ff2a1a', 0.86, 0.95);
   private ringFill = new RingPool('#ff2a1a', 0.0, 0.28);
@@ -194,7 +196,8 @@ export class Renderer {
     this.eye.copy(this.camera.position);
 
     this.sky.sightM = o.sightTiles * M;
-    this.sky.update(this.hour, this.light, this.eye);
+    const light = this.skyHour === null ? this.light : clockLight(this.skyHour);
+    this.sky.update(this.skyHour ?? this.hour, light, this.eye);
     const fog = this.scene.fog as THREE.Fog;
     particleUniforms.fogColor.value.copy(fog.color);
     particleUniforms.fogNear.value = fog.near;
@@ -263,7 +266,7 @@ export class Renderer {
     }
 
     this.view.visible = o.viewModel && this.viewAllowed;
-    this.view.update(dt, t, o.moveSpeed, o.sprinting, o.blocking, this.light);
+    this.view.update(dt, t, o.moveSpeed, o.sprinting, o.blocking, light);
     this.renderer.autoClear = true;
     this.renderer.render(this.scene, this.camera);
     this.view.render(this.renderer);
