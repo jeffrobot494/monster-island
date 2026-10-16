@@ -313,7 +313,7 @@ describe('the controller on a body', () => {
 
 describe('the sim', () => {
   it('36: mount poses: accepted on a nephil, refused elsewhere; the ridden nephil leaves its rider be', () => {
-    const island = Island.create(1, START, 1, { now }, DEFAULT_SETTINGS); // seed 1 has a nephil
+    const island = Island.create(1, START, 1, DEFAULT_SETTINGS); // seed 1 has a nephil
     const sim = island.sim;
     const c = sim.champion()!;
     const n = sim.monsters().find((m) => m.monster!.archetype === 'nephil')!;
@@ -363,7 +363,7 @@ describe('the sim', () => {
     expect(c.human!.mount).toBeUndefined();
     expect(c.human!.climb).toBeUndefined();
     // procedural islands ignore mount poses
-    const p = Island.create(1, START, 1, { now });
+    const p = Island.create(1, START, 1);
     const pc = p.sim.champion()!, pn = p.sim.monsters().find((m) => m.monster!.archetype === 'nephil')!;
     const x0 = pc.x;
     p.sim.inputs.push({ type: 'pose', x: pn.x, z: pn.z, yaw: 0, pitch: 0, epoch: cs(p.sim).epoch, input: true, alt: 3, climb: 'mount', mount: { id: pn.id, cap: 4 } });

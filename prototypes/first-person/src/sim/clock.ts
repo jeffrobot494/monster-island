@@ -55,3 +55,9 @@ export function fmtClock(clockMs: number): string {
   const hh = Math.floor(h), mm = Math.floor((h - hh) * 60);
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
+
+/** The strictly next occurrence of an hour, including fractional hours. */
+export function nextHour(clockMs: number, hour: number): number {
+  const at = Math.floor(clockMs / DAY_MS) * DAY_MS + hour * HOUR_MS;
+  return at > clockMs ? at : at + DAY_MS;
+}

@@ -13,7 +13,7 @@ import { startRaid, telegraphRadius, vReachOk } from '../src/sim/monster-ai';
 import type { Entity } from '../src/sim/types';
 import { now, START } from './helpers';
 
-const terrainIsland = (seed = 7) => Island.create(seed, START, 1, { now }, DEFAULT_SETTINGS);
+const terrainIsland = (seed = 7) => Island.create(seed, START, 1, DEFAULT_SETTINGS);
 
 function feed(island: Island, i: ChampInput) {
   island.sim.inputs.push(i);
@@ -119,7 +119,7 @@ describe('climbing: the sim', () => {
     m.z = c.z;
     c.human!.alt = 30;
     expect(vReachOk(sim, m, c)).toBe(false);
-    const proc = Island.create(7, START, 1, { now }).sim;
+    const proc = Island.create(7, START, 1).sim;
     const pc = proc.champion()!, pm = groundMonster(proc);
     pc.human!.alt = 30;
     expect(vReachOk(proc, pm, pc)).toBe(true);
@@ -335,7 +335,7 @@ describe('climbing: the sim', () => {
   });
 
   it('11: procedural islands are untouched (no heights, no sieges)', () => {
-    const island = Island.create(5, START, 1, { now });
+    const island = Island.create(5, START, 1);
     const sim = island.sim;
     expect(sim.grid.base).toBeNull();
     const c = sim.champion()!;

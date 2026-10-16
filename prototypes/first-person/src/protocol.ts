@@ -8,11 +8,12 @@ import type { TerrainSettings } from './sim/terrain-import';
 
 /** A terraformer island's ground (sim/terrain-import.ts); null for a procedural one. */
 export type TerrainState = { settings: TerrainSettings; base: Float32Array; orig: Float32Array } | null;
-import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Job, ShapeDef, TileTypeDef } from './sim/types';
+import type { Atmosphere, ChronicleEvent, EmitterDef, Job, ShapeDef, TileTypeDef } from './sim/types';
 
 // id, shapeIdx, x, y(m), z, yaw, tint, scale, flags, lift(m), roll, squash, ring(m), anim, zoneMask, hpFrac, seen, windup
-export const ENT_STRIDE = 18;
-export const O = { id: 0, shape: 1, x: 2, y: 3, z: 4, yaw: 5, tint: 6, scale: 7, flags: 8, lift: 9, roll: 10, squash: 11, ring: 12, anim: 13, mask: 14, hp: 15, seen: 16, windup: 17 } as const;
+export const ENT_STRIDE = 19;
+export const O = { id: 0, shape: 1, x: 2, y: 3, z: 4, yaw: 5, tint: 6, scale: 7, flags: 8, lift: 9, roll: 10, squash: 11, ring: 12, anim: 13, mask: 14, hp: 15, seen: 16, windup: 17, fx: 18 } as const;
+export const FX = ['', 'frenzy', 'turncoat', 'ascended'];
 export const F_INHABITANT = 1;
 export const F_TELEGRAPH = 2;
 export const F_DOWNED = 4;
@@ -29,28 +30,19 @@ export const F_HUMAN = 4096;
 export const F_ITEM = 8192; // a spear (rack or ground): can be picked up
 export const F_SHAKE = 16384; // a ridden monster shuddering before a shake lands (docs/climbing-phase4-plan.md)
 
-export interface ModuleSource {
-  id: string;
-  source: string;
-  status: 'active' | 'quarantined';
-}
-
 export type Action =
   | { kind: 'offerLamb' }
   | { kind: 'offerDragged' }
   | { kind: 'offerVillager'; id: number }
-  | { kind: 'pray'; text: string }
   | { kind: 'setJob'; id: number; job: Job };
 
 export type MainToSim =
-  | { type: 'init'; save: string | null; seed: number; modules: ModuleSource[]; clockMs: number; realMs: number; timescale: number; quarantine?: string[]; reveal?: boolean; invincible?: boolean; skip?: number; terrain?: TerrainSettings | null }
+  | { type: 'devEvent'; op: 'fire' | 'end' | 'list'; id?: string; iid?: number }
+  | { type: 'init'; save: string | null; seed: number; clockMs: number; realMs: number; timescale: number; reveal?: boolean; invincible?: boolean; skip?: number; terrain?: TerrainSettings | null }
   | { type: 'control'; paused: boolean }
   | { type: 'catchUp'; clockMs: number; realMs: number }
   | { type: 'input'; input: ChampInput }
   | { type: 'action'; action: Action }
-  | { type: 'install'; id: string; source: string; record: CreationRecord; night: number }
-  | { type: 'creationFailed'; night: number }
-  | { type: 'setModuleStatus'; id: string; status: 'active' | 'quarantined' }
   | { type: 'requestSave' }
   | { type: 'resync' }
   | { type: 'inspect'; id: number | null }
@@ -95,6 +87,8 @@ export interface MonsterCard {
 }
 
 export interface Hud {
+  events: { iid: number; id: string; title: string; phase: 'armed' | 'active'; at: number | null }[];
+  eventHistory: { iid: number; def: string; title: string; day: number; endedDay?: number }[];
   tick: number;
   clockMs: number;
   day: number;
@@ -135,11 +129,6 @@ export interface Hud {
   alarm: boolean;
   /** the monsters are raiding the village tonight */
   raid: boolean;
-  prayer: string;
-  pendingCreations: CreationRequest[];
-  creations: CreationRecord[];
-  domainHistory: Record<'human' | 'monster', { night: number; domain: string }[]>;
-  missingSystems: string[];
   gameOver: { winner: 'human' | 'monster'; day: number } | null;
   stats: { monsterKills: number; villagerDeaths: number; humanSacrifices: number; monsterSacrifices: number };
   /** monsters near the champion (for the danger check before showing a creation card) */
@@ -190,13 +179,6 @@ export interface InspectInfo {
   maxHp?: number;
 }
 
-export interface ModuleStat {
-  id: string;
-  status: 'active' | 'quarantined';
-  faultsToday: number;
-  msPerTick: number;
-}
-
 export type SimToMain =
   | FramePayload
   | { type: 'fullState'; seq: number; tick: number; tiles: string[]; elev: Float32Array; explored: Uint8Array; ents: Float32Array; attached: [number, string[]][]; atmosphere: Atmosphere; layout: IslandLayout; epoch: number; walkCost: Uint8Array; terrain: TerrainState }
@@ -208,12 +190,7 @@ export type SimToMain =
   | { type: 'hud'; hud: Hud }
   | { type: 'villagers'; villagers: VillagerInfo[]; monsters: MonsterCard[] }
   | { type: 'save'; world: string; tick: number; reason: string }
-  | { type: 'moduleFault'; id: string; hook: string; error: string; stack?: string }
-  | { type: 'quarantined'; id: string; reason: string }
-  | { type: 'installed'; id: string; ok: boolean; error?: string }
-  | { type: 'moduleStats'; stats: ModuleStat[] }
   | { type: 'inspect'; info: InspectInfo | null }
-  | { type: 'visible'; id: string; x: number; z: number; what: string }
   | { type: 'away'; summary: AwaySummary }
   | { type: 'actionResult'; error: string | null }
   | { type: 'error'; error: string };

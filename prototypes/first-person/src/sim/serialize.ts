@@ -6,9 +6,9 @@ import { groundChampion } from './champion';
 import { NV } from './ground';
 import { BASE_QUANTUM } from './island-import';
 import type { TerrainSettings } from './terrain-import';
-import type { Atmosphere, CreationRecord, CreationRequest, Entity, Faction } from './types';
+import type { Atmosphere, Entity, Faction } from './types';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 function rle<T>(arr: ArrayLike<T>): [T, number][] {
   const out: [T, number][] = [];
@@ -68,6 +68,7 @@ function unrle<T>(runs: [T, number][], into: { length: number; [i: number]: T })
 }
 
 export interface SavedCore {
+  events: Sim['events'];
   v: number;
   seed: number;
   tick: number;
@@ -91,15 +92,10 @@ export interface SavedCore {
   timber: number;
   fold: number;
   favor: Record<Faction, number>;
-  prayer: string;
   alarmUntil: number;
   raidUntil?: number;
-  pendingCreations: CreationRequest[];
-  domainHistory: Sim['domainHistory'];
   nightIndex: number;
   lastJudgedCalDay: number;
-  creations: CreationRecord[];
-  missingSystems: string[];
   championId: number;
   championPendingDawn: boolean;
   champState: unknown;
@@ -118,6 +114,7 @@ export function serializeCore(sim: Sim): SavedCore {
   const stockQ = Array.from(sim.stock, (v) => Math.round(v * 50));
   return {
     v: SCHEMA_VERSION,
+    events: structuredClone(sim.events),
     seed: sim.seed,
     tick: sim.tick,
     rng: sim.rng.state,
@@ -140,15 +137,10 @@ export function serializeCore(sim: Sim): SavedCore {
     timber: sim.timber,
     fold: sim.fold,
     favor: { ...sim.favor },
-    prayer: sim.prayer,
     alarmUntil: sim.alarmUntil,
     raidUntil: sim.raidUntil,
-    pendingCreations: structuredClone(sim.pendingCreations),
-    domainHistory: structuredClone(sim.domainHistory),
     nightIndex: sim.nightIndex,
     lastJudgedCalDay: sim.lastJudgedCalDay,
-    creations: structuredClone(sim.creations),
-    missingSystems: [...sim.missingSystems],
     championId: sim.championId,
     championPendingDawn: sim.championPendingDawn,
     champState: structuredClone((sim as any).champState ?? null),
@@ -164,6 +156,7 @@ export function serializeCore(sim: Sim): SavedCore {
 export function deserializeCore(s: SavedCore): Sim {
   if (s.v !== SCHEMA_VERSION) throw new Error(`unsupported save schema ${s.v}`);
   const sim = new Sim(s.seed);
+  sim.events = structuredClone(s.events);
   sim.tick = s.tick;
   sim.rng.state = s.rng >>> 0;
   sim.nextId = s.nextId;
@@ -187,15 +180,10 @@ export function deserializeCore(s: SavedCore): Sim {
   sim.timber = s.timber;
   sim.fold = s.fold;
   sim.favor = { ...s.favor };
-  sim.prayer = s.prayer;
   sim.alarmUntil = s.alarmUntil;
   sim.raidUntil = s.raidUntil ?? 0;
-  sim.pendingCreations = structuredClone(s.pendingCreations);
-  sim.domainHistory = structuredClone(s.domainHistory);
   sim.nightIndex = s.nightIndex;
   sim.lastJudgedCalDay = s.lastJudgedCalDay;
-  sim.creations = structuredClone(s.creations);
-  sim.missingSystems = [...s.missingSystems];
   sim.championId = s.championId;
   sim.championPendingDawn = s.championPendingDawn;
   if (s.champState) (sim as any).champState = structuredClone(s.champState);
@@ -224,5 +212,7 @@ export function deserializeCore(s: SavedCore): Sim {
     S.ambushed ??= [];
     S.wield ??= 'sword'; // saves from before the spear could be wielded
   }
+  sim.director.restore();
+  sim.light = sim.computeLight();
   return sim;
 }

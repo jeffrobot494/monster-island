@@ -116,7 +116,26 @@ export class Entities {
     return null;
   }
 
+  private disposeFx(v: View) {
+    v.root.traverse(o => { if (o instanceof THREE.Mesh) for (const m of Array.isArray(o.material) ? o.material : [o.material]) if(m.userData.eventClone) m.dispose(); });
+  }
+  private applyFx(v: View, fx: number) {
+    const colors = ['', '#c02020', '#4a6a2a', '#d0a030'];
+    const intensity = [0, 0.6, 0.4, 0.5];
+    if (!fx) return;
+    v.root.traverse(o => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const clone = (m: THREE.Material) => {
+        const copy = m.clone() as THREE.MeshStandardMaterial;
+        copy.userData = {...copy.userData, eventClone: true};
+        if (copy.emissive) { copy.emissive.set(colors[fx]); copy.emissiveIntensity = intensity[fx]; }
+        return copy;
+      };
+      o.material = Array.isArray(o.material) ? o.material.map(clone) : clone(o.material);
+    });
+  }
   private build(v: View) {
+    this.disposeFx(v);
     for (const c of [...v.root.children]) v.root.remove(c);
     v.rig = null;
     v.shapeParts = [];
@@ -171,11 +190,13 @@ export class Entities {
       }
       v.shape = shape;
       v.flags = flags;
-      const key = `${shape}|${tint}|${flags & (F_CORE_SHAPE | F_CORPSE)}`;
+      const fx = ents[o + O.fx] || 0;
+      const key = `${shape}|${tint}|${flags & (F_CORE_SHAPE | F_CORPSE)}|${fx}`;
       v.tint = tint;
       if (key !== v.key) {
         v.key = key;
         this.build(v);
+        this.applyFx(v, fx);
       }
       v.scale = ents[o + O.scale];
       v.squash = ents[o + O.squash];
@@ -203,6 +224,7 @@ export class Entities {
     }
     for (const [id, v] of this.views) {
       if (v.lastFrame !== this.frameNo) {
+        this.disposeFx(v);
         this.group.remove(v.root);
         this.views.delete(id);
       }

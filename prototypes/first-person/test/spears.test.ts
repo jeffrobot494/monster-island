@@ -12,7 +12,7 @@ import { now, START } from './helpers';
 import { armFactor, kill } from '../src/sim/combat';
 import { bodyR } from '../src/sim/body';
 
-const make = (seed = 1) => Island.create(seed, START, 1, { now });
+const make = (seed = 1) => Island.create(seed, START, 1);
 const spears = (sim: Island['sim']) => [...sim.ents.values()].filter((e) => e.kind === 'spear');
 const carried = (sim: Island['sim']) => sim.humans().reduce((n, h) => n + spearsOf(h), 0);
 

@@ -1,3 +1,4 @@
+import { hostile } from './team';
 // Monster AI (§6 + R6–R14): hours, pre-rolled hunts, prowling, stalking, grabbing, carrying, sacrifice, fighting,
 // roars and responses, visits, feeding, fleeing, downed.
 import type { Sim } from './sim';
@@ -22,13 +23,9 @@ export function boldness(sim: Sim) {
 
 export function monsterWindows(sim: Sim, m: Entity): [number, number][] {
   const M = m.monster!;
-  const w = Math.min(6, boldness(sim) * 0.5);
-  switch (M.hours) {
-    case 'day': return [[7 - w, 17 + w]];
-    case 'night': return [[19 - w, 5 + w]];
-    case 'dusk-dawn': return [[4 - w, 8 + w], [16 - w, 21 + w]];
-    default: return M.restless.map(([a, b]) => [a - w, b + w] as [number, number]);
-  }
+  const w = Math.min(6, boldness(sim) * 0.5) + sim.night.windowBonus;
+  const windows: [number,number][] = M.hours === 'day' ? [[7,17]] : M.hours === 'night' ? [[19,5]] : M.hours === 'dusk-dawn' ? [[4,8],[16,21]] : M.restless;
+  return windows.map(([a,b]) => ((b-a+24)%24 || 24)+2*w >=24 ? [0,0] : [a-w,b+w]);
 }
 
 export function isEnraged(sim: Sim, m: Entity) {
@@ -239,7 +236,7 @@ export function insideWalls(sim: Sim, p: { x: number; z: number }, pad = 0.5) {
 }
 
 function preyScore(sim: Sim, m: Entity, h: Entity): number {
-  if (h.kind !== 'human' || h.hidden || h.state === 'captive' || h.carriedBy !== undefined) return -Infinity;
+  if (h.kind !== 'human' || h.faction !== 'human' || h.hidden || h.state === 'captive' || h.carriedBy !== undefined) return -Infinity;
   if (!bold(sim, m) && insideWalls(sim, h, 1.5)) return -Infinity;
   const isChamp = h.id === sim.championId;
   if (isChamp && h.state !== 'downed' && h.hp > sim.maxHp(h) * 0.4) return -Infinity;
@@ -247,14 +244,14 @@ function preyScore(sim: Sim, m: Entity, h: Entity): number {
   const d = Math.hypot(h.x - m.x, h.z - m.z);
   if (d > sightOf(sim, m)) return -Infinity;
   let lone = true;
-  for (const o of sim.ents.values()) if (o !== h && o.kind === 'human' && !o.hidden && Math.hypot(o.x - h.x, o.z - h.z) < 4) { lone = false; break; }
+  for (const o of sim.ents.values()) if (o !== h && o.kind === 'human' && o.faction === 'human' && !o.hidden && Math.hypot(o.x - h.x, o.z - h.z) < 4) { lone = false; break; }
   return h.level * 2 + (lone ? 3 : 0) + (h.state === 'downed' ? 5 : 0) + (isChamp ? 6 : 0) - d / 10;
 }
 
 function findPrey(sim: Sim, m: Entity): Entity | null {
   let best: Entity | null = null, bs = -Infinity;
   for (const h of sim.ents.values()) {
-    if (h.kind !== 'human') continue;
+    if (h.kind !== 'human' || h.faction !== 'human') continue;
     const s = preyScore(sim, m, h);
     if (s > bs) { bs = s; best = h; }
   }
@@ -268,7 +265,7 @@ function pickGround(sim: Sim, m: Entity): { x: number; z: number } {
   const roam = Math.min(90, 30 + 4 * boldness(sim));
   const cands: { x: number; z: number; w: number }[] = [];
   for (const h of sim.ents.values()) {
-    if (h.kind !== 'human' || h.hidden) continue;
+    if (h.kind !== 'human' || h.faction !== 'human' || h.hidden) continue;
     if (Math.hypot(h.x - V.x, h.z - V.z) < sim.layout.wallRadius) continue;
     if (Math.hypot(h.x - M.lairX, h.z - M.lairZ) > roam) continue;
     const dv = Math.hypot(h.x - V.x, h.z - V.z);
@@ -305,7 +302,9 @@ function stepMonsterAI(sim: Sim, m: Entity) {
     case 'downed':
       if (sim.tick % 100 === 0) roar(sim, m);
       if (sim.tick - M.downedAt > DOWNED_TICKS) {
-        m.state = 'flee';
+        const prey = m.tags.includes('no-retreat') ? findPrey(sim, m) ?? sim.humans().filter(h=>h.faction==='human').sort((a,b)=>sim.dist(m,a)-sim.dist(m,b))[0] : undefined;
+        m.state = prey ? 'stalk' : 'flee';
+        if (prey) M.prey = prey.id;
         m.roll = 0;
         m.hp = Math.max(m.hp, max * 0.3);
         sim.emote(m, '💢', 2);
@@ -334,14 +333,14 @@ function stepMonsterAI(sim: Sim, m: Entity) {
   const t = m.target >= 0 ? sim.ents.get(m.target) : undefined;
   // raiders don't chase a runaway across the island: they stay on the village
   const strayed = !!t && raiding(sim) && Math.hypot(t.x - sim.layout.village.x, t.z - sim.layout.village.z) > sim.layout.wallRadius + 12;
-  if (t && !strayed && !ignoring(sim, m, t) && t.kind === 'human' && t.state !== 'captive' && !t.hidden && Math.hypot(t.x - m.x, t.z - m.z) < 14 && (bold(sim, m) || !insideWalls(sim, t, 1))) {
+  if (t && !strayed && !ignoring(sim, m, t) && hostile(m, t) && t.state !== 'captive' && !t.hidden && Math.hypot(t.x - m.x, t.z - m.z) < 14 && (bold(sim, m) || !insideWalls(sim, t, 1))) {
     if (t.state === 'downed' && !raiding(sim)) {
       m.target = -1;
       M.prey = t.id;
       setState(sim, m, 'stalk');
     } else {
       // flee from guards when badly hurt; never from the champion (R9)
-      if (m.hp < max * 0.3 && t.id !== sim.championId) {
+      if (!m.tags.includes('no-retreat') && m.hp < max * 0.3 && t.id !== sim.championId) {
         m.target = -1;
         return startFlee(sim, m);
       }
@@ -387,7 +386,7 @@ function stepMonsterAI(sim: Sim, m: Entity) {
 
   const active = monsterActive(sim, m) && (M.satedUntil ?? 0) <= sim.clockMs;
   // wounded monsters heal at the lair
-  if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && isWounded(sim, m) && sim.tick % 10 === 0) heal(sim, m, (max * 0.1 * sim.msPerTick * 10) / HOUR_MS);
+  if (Math.hypot(m.x - M.lairX, m.z - M.lairZ) < 3 && isWounded(sim, m) && sim.tick % 10 === 0) heal(sim, m, (max * 0.1 * sim.dtMs * 10) / HOUR_MS);
 
   // anak (and the hungry, after a kill) eat the dead
   if ((M.archetype === 'anak' || sim.tick < M.feedAt) && sim.tick % 20 === 0 && m.state !== 'stalk' && m.state !== 'grab' && !raiding(sim)) {
@@ -524,6 +523,7 @@ function raid(sim: Sim, m: Entity) {
   if (sim.tick % 5 === m.id % 5) {
     let best: Entity | null = null, bd = RAID_SIGHT;
     for (const h of sim.humans()) {
+      if (h.faction !== 'human') continue;
       if (h.hidden || h.state === 'captive' || h.carriedBy !== undefined || ignoring(sim, m, h)) continue;
       const d = Math.hypot(h.x - m.x, h.z - m.z) + (h.id === sim.championId ? 4 : 0);
       if (d < bd) { bd = d; best = h; }
@@ -612,6 +612,7 @@ function hunt(sim: Sim, m: Entity) {
   const M = m.monster!;
   // validate prey
   let prey = M.prey >= 0 ? sim.ents.get(M.prey) : undefined;
+  if (prey?.kind === 'human' && prey.faction !== 'human') prey = undefined;
   if (prey && (prey.kind === 'human' ? preyScore(sim, m, prey) === -Infinity && Math.hypot(prey.x - m.x, prey.z - m.z) > 3 : prey.carriedBy !== undefined)) prey = undefined;
   if (prey && prey.hidden) prey = undefined;
   if (!prey) {
@@ -1062,7 +1063,7 @@ function besiege(sim: Sim, m: Entity, t: Entity, d: number, hitR: number): boole
   if (sim.clockMs > M.besiegeUntil!) {
     clearBesiege(m);
     m.target = -1;
-    M.ignoreChampUntil = sim.clockMs + HOUR_MS;
+    if (!m.tags.includes('no-retreat')) M.ignoreChampUntil = sim.clockMs + HOUR_MS;
     setState(sim, m, 'return');
     sim.toast(`${M.seen ? firstName(m) : 'The monster'} gives up and slinks off.`);
     return true;

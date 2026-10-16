@@ -185,6 +185,7 @@ export class HudView {
       h('div', { class: 'favor' }, h('span', { class: 'fh' }, `☀ ${hud.favor.human}`), h('span', { class: 'fbar' }, h('i', { style: `width:${(hud.favor.human / total) * 100}%` })), h('span', { class: 'fm' }, `${hud.favor.monster} ☾`)),
       h('div', { class: 'muted-l' }, `Judgment in ${jmin}:${String(js).padStart(2, '0')}`),
       ...raid,
+      ...hud.events.map(e => h('div', {class: 'muted-l'}, `${e.title} · ${e.at === null ? 'permanent' : `${e.phase === 'armed' ? 'falls at' : 'until'} ${fmtClock(e.at)}`}`)),
     );
     const slain = 6 - hud.monstersAlive;
     this.tr.replaceChildren(

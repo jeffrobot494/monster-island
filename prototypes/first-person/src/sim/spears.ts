@@ -1,3 +1,4 @@
+import { hostile } from './team';
 // Spears (real items): the champion and the guards carry them, throw them on a ballistic arc, and must pick them up
 // again. Nothing makes new ones: the village starts with a rack of them, and a spear that falls into the sea is gone.
 // Positions in tiles, heights and velocities in meters (the ground function's units).
@@ -137,7 +138,7 @@ export function champThrow(sim: Sim, c: Entity, i: { yaw: number; pitch: number;
   const y = feetY(sim.ground, c) + 1.6;
   const t = i.targetId !== null ? sim.ents.get(i.targetId) : undefined;
   let sol: { yaw: number; pitch: number } | null = null;
-  if (t && !t.hidden && t.hp > 0 && (t.kind === 'monster' || t.tags.includes('hittable')) && Math.hypot(t.x - c.x, t.z - c.z) * M < 100) {
+  if (t && !t.hidden && t.hp > 0 && (t.inhabitant ? hostile(c,t) : t.tags.includes('hittable')) && Math.hypot(t.x - c.x, t.z - c.z) * M < 100) {
     sol = aimAt(sim, c.x, y, c.z, t, i.zone, CHAMP_SPEED);
     // only help a throw that is already pointed at the target
     if (sol) {
@@ -164,8 +165,9 @@ export function guardThrow(sim: Sim, g: Entity, m: Entity): boolean {
 
 function hittable(sim: Sim, e: Entity, s: Entity): boolean {
   if (e === s || e.hidden || e.hp <= 0 || e.carriedBy !== undefined) return false;
-  if (e.kind === 'monster') return e.state !== 'downed' && e.state !== 'bound';
-  return e.tags.includes('hittable') && e.kind !== 'human';
+  const thrower = sim.ents.get(s.spear!.thrower);
+  if (e.inhabitant) return !!thrower && hostile(thrower,e) && e.state !== 'downed' && e.state !== 'bound';
+  return e.tags.includes('hittable');
 }
 
 const isOpen = (sim: Sim, x: number, z: number) => !!sim.grid.defs.get(sim.grid.get(Math.floor(x), Math.floor(z)))?.walkable;

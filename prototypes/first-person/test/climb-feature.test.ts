@@ -247,7 +247,7 @@ describe('climbing the feature mesh', () => {
 
 describe('the real terrain', () => {
   it('29: every triangle is hashed; real spire faces can be grabbed and climbed', () => {
-    const island = Island.create(7, START, 1, { now }, DEFAULT_SETTINGS);
+    const island = Island.create(7, START, 1, DEFAULT_SETTINGS);
     const { surface } = buildFeatureMesh(DEFAULT_SETTINGS);
     expect(surface.count).toBeGreaterThan(5000);
     // every triangle can be found from its own centroid's tile
@@ -303,7 +303,7 @@ describe('the real terrain', () => {
   }, 60000);
 
   it('30: the sim takes an arch-top pose over a drop, and a ground monster under it can\'t reach', () => {
-    const island = Island.create(7, START, 1, { now }, DEFAULT_SETTINGS);
+    const island = Island.create(7, START, 1, DEFAULT_SETTINGS);
     const sim = island.sim;
     const c = sim.champion()!;
     // a walkable spot with a steep drop beside it: the feet stay level while the ground under them falls away

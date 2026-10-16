@@ -31,6 +31,15 @@ const house = (lit: boolean): ShapeDef => ({
 
 export const CORE_SHAPES: Record<string, ShapeDef> = {
   ...MONSTER_SHAPES,
+  jackal: {parts: [
+    {prim:'box',size:[0.22,0.22,0.5],pos:[0,0.28,0],color:'tint'},
+    {prim:'box',size:[0.18,0.2,0.2],pos:[0,0.39,0.28],color:'tint'},
+    {prim:'box',size:[0.1,0.08,0.19],pos:[0,0.34,0.43],color:'#453329'},
+    {prim:'cone',size:[0.09,0.2,0.08],pos:[-0.07,0.55,0.27],color:'tint'},
+    {prim:'cone',size:[0.09,0.2,0.08],pos:[0.07,0.55,0.27],color:'tint'},
+    ...[-1,1].flatMap(x=>[-1,1].map(z=>({prim:'box' as const,size:[0.06,0.22,0.06] as [number,number,number],pos:[x*0.08,0.11,z*0.19] as [number,number,number],color:'#584133'}))),
+    {prim:'box',size:[0.07,0.07,0.3],pos:[0,0.3,-0.35],rot:[-25,0,0],color:'tint'},
+  ]},
   // a 2.4 m bronze-tipped spear lying along +z (on the ground or in flight)
   spear: { parts: [
     { prim: 'cylinder', size: [0.022, 1.0, 0.022], pos: [0, 0.02, -0.04], rot: [90, 0, 0], color: '#7a5634' },

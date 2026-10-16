@@ -1,3 +1,4 @@
+import { hostile } from './team';
 // Village sim (§5): shifts, work sites and drift, food, sleep, flight, guards, the shofar, growth.
 import { dropSpears, guardFetch, guardThrow, setSpears, spearsOf } from './spears';
 import { axisDist, bodyR } from './body';
@@ -83,7 +84,7 @@ export function pickSite(sim: Sim, e: Entity): number {
 export function nearestThreat(sim: Sim, e: Entity, r: number): Entity | null {
   let best: Entity | null = null, bd = r;
   for (const m of sim.ents.values()) {
-    if (m.kind !== 'monster' || m.state === 'downed' || m.state === 'bound') continue;
+    if (!hostile(m, e) || m.state === 'downed' || m.state === 'bound') continue;
     const d = Math.hypot(m.x - e.x, m.z - e.z);
     if (d < bd) { bd = d; best = m; }
   }
@@ -118,7 +119,7 @@ function enterHouse(sim: Sim, e: Entity, state: 'sleep' | 'hide') {
   if (h) updateHouseLight(sim, h);
 }
 
-function leaveHouse(sim: Sim, e: Entity) {
+export function leaveHouse(sim: Sim, e: Entity) {
   if (!e.hidden) return;
   e.hidden = false;
   const h = home(sim, e);
@@ -176,7 +177,7 @@ export function stepHuman(sim: Sim, e: Entity) {
     }
     if (m && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius + 3 && e.hp > sim.maxHp(e) * 0.3) {
       e.state = 'fight';
-      guardFight(sim, e, m);
+      meleeFight(sim, e, m);
       return;
     }
     // unarmed: fetch a spear (a lying one, else one from the rack)
@@ -272,7 +273,7 @@ export function stepHuman(sim: Sim, e: Entity) {
   // off shift: go home and sleep
   if (e.state === 'sleep' || e.state === 'hide') {
     if (e.state === 'hide') e.state = 'sleep';
-    if (sim.food > 0) heal(sim, e, (5 * sim.msPerTick) / HOUR_MS);
+    if (sim.food > 0) heal(sim, e, (5 * sim.dtMs) / HOUR_MS);
     return;
   }
   if (homeBreached(sim, e)) return scatter(sim, e);
@@ -345,7 +346,7 @@ function wander(sim: Sim, e: Entity) {
   sim.advancePath(e, humanSpeed(sim, e) * 0.7);
 }
 
-function guardFight(sim: Sim, e: Entity, m: Entity) {
+export function meleeFight(sim: Sim, e: Entity, m: Entity) {
   const armed = spearsOf(e) > 0;
   const reach = (armed ? 2.6 : 1.4) / 8; // spear or knife, meters → tiles (§2)
   const d = axisDist(m, e.x, e.z) - bodyR(m);
@@ -381,14 +382,14 @@ export function soundShofar(sim: Sim, guard: Entity, m: Entity) {
 // ---------- economy ----------
 
 export function foodTick(sim: Sim) {
-  const dt = sim.msPerTick;
+  const dt = sim.dtMs;
   let eaters = 0;
   for (const e of sim.ents.values()) {
     if (e.kind !== 'human') continue;
     if (e.id !== sim.championId) eaters++;
     const H = e.human!;
-    if (e.state !== 'work' || H.site < 0) continue;
-    const rate = PRODUCTION[H.job] * productionMul(sim, H.job);
+    if (e.faction !== 'human' || e.state !== 'work' || H.site < 0) continue;
+    const rate = PRODUCTION[H.job];
     sim.food += (rate * dt) / HOUR_MS;
     if (H.job === 'woodcutter') sim.timber += dt / HOUR_MS;
     if (H.job === 'guard') continue;
@@ -403,22 +404,8 @@ export function foodTick(sim: Sim) {
   if (sim.food <= 0) {
     sim.food = 0;
     // starvation: 4 HP per game hour
-    if (sim.tick % 10 === 0) for (const e of sim.humans()) if (e.id !== sim.championId) applyDamage(sim, e, (4 * dt * 10) / HOUR_MS, { type: 'hunger', noRules: true, deathType: 'slain' });
+    if (sim.tick % 10 === 0) for (const e of sim.humans()) if (e.id !== sim.championId) applyDamage(sim, e, (4 * dt * 10) / HOUR_MS, { type: 'hunger', deathType: 'slain' });
   }
-}
-
-export function productionMul(sim: Sim, job: Job): number {
-  let m = 1;
-  for (const r of (sim as any).productionRules ?? []) {
-    let v: number | undefined;
-    try {
-      v = r.fn(job);
-    } catch {
-      v = undefined;
-    }
-    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) m *= Math.min(5, v);
-  }
-  return m;
 }
 
 export function villageHour(sim: Sim) {

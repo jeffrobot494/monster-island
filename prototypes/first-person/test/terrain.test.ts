@@ -1,7 +1,7 @@
 // Terraformer islands (sim/terrain-import.ts, sim/island-import.ts).
 import { describe, it, expect } from 'vitest';
 import { Island } from '../src/sim/island';
-import { reachabilityProblem } from '../src/sim/validator';
+import { reachabilityProblem } from '../src/sim/reachability';
 import { serializeCore, deserializeCore } from '../src/sim/serialize';
 import { DEFAULT_SETTINGS, type TerrainSettings } from '../src/sim/terrain-import';
 import { M, WATER_Y } from '../src/sim/ground';
@@ -18,7 +18,7 @@ describe('terraformer islands', () => {
   for (const [name, settings] of CASES) {
     it(`${name}: reachable, village level, survives a save`, () => {
       const t0 = now();
-      const island = Island.create(7, START, 1, { now }, settings);
+      const island = Island.create(7, START, 1, settings);
       const ms = now() - t0;
       const sim = island.sim;
       const L = sim.layout;
@@ -53,7 +53,7 @@ describe('terraformer islands', () => {
   }
 
   it('repainted tiles move the ground relative to the terraformer surface', () => {
-    const sim = Island.create(3, START, 1, { now }, DEFAULT_SETTINGS).sim;
+    const sim = Island.create(3, START, 1, DEFAULT_SETTINGS).sim;
     // a 3×3 patch of plain walkable land, turned into a pond
     const plain = (x: number, z: number) => ['grass', 'scrub', 'olive', 'cedar'].includes(sim.grid.get(x, z));
     let c: { x: number; z: number } | null = null;

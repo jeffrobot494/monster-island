@@ -7,7 +7,7 @@ const START = Date.UTC(2026, 9, 10, 8, 0);
 
 it('runs days at a timescale without errors', () => {
   const TS = Number(process.env.TS ?? 60), DAYS = Number(process.env.DAYS ?? 3);
-  const island = Island.create(Number(process.env.SEED ?? 1), START, TS, { now });
+  const island = Island.create(Number(process.env.SEED ?? 1), START, TS);
   const sim = island.sim;
   if (process.env.NOCHAMP) { const c = sim.champion()!; cs(sim).lastInput = 1e12; c.x = sim.layout.village.x; }
   const t0 = performance.now();

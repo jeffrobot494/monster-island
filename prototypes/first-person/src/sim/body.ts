@@ -1,3 +1,4 @@
+import { UNITS } from './events/defs';
 // Physical bodies in meters (spec §2, F12, F14): radius, reach and capsule half-length per archetype. The sim works in
 // tiles, so helpers return tiles (meters / 8).
 import type { Entity } from './types';
@@ -34,6 +35,7 @@ const meters = (e: Entity, units: number) => units * e.scale * SHAPE_M;
 
 /** body radius in tiles */
 export function bodyR(e: Entity): number {
+  if (e.unit) return UNITS[e.unit.type].radiusM / M;
   if (e.kind === 'human') return 0.3 / M;
   return meters(e, bodyOf(e).r) / M;
 }

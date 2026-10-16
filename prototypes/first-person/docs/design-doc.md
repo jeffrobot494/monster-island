@@ -1,3 +1,5 @@
+> The LLM creation system has been replaced by the fixed night events described in [night-events-plan.md](night-events-plan.md).
+
 # Island Humans and Monsters — MVP Game Design Doc
 
 Oct 9, 2026 · @Bo Banducci

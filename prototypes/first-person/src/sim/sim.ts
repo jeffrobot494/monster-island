@@ -1,5 +1,11 @@
 // The core simulation: entities, the game clock, movement, the tick. Systems live in village.ts, monster-ai.ts,
 // combat.ts, champion.ts, favor.ts, vision.ts; this file owns state and the per-tick order.
+import { stepUnit } from './events/units';
+import { turncoatBehavior } from './events/turncoat';
+import { EventDirector } from './events/director';
+import { DECK } from './events/defs';
+import { emptyEvents } from './events/types';
+import { noNightMods } from './night';
 import { Rng, hashSeed } from './rng';
 import { DAY_MS, HOUR_MS, MS_PER_REAL_TICK, baseLight, calDay, hourOf, isNightHour, type TimeInfo } from './clock';
 import { SIZE, TileGrid } from './world';
@@ -7,7 +13,7 @@ import { generateIsland, type IslandLayout } from './island-gen';
 import type { TerrainSettings } from './terrain-import';
 import { findPath, type CostTable } from './pathfind';
 import { CORE_EMITTERS, CORE_SHAPES } from './core-defs';
-import type { Atmosphere, ChronicleEvent, CreationRecord, CreationRequest, EmitterDef, Entity, Faction, ShapeDef, Stat } from './types';
+import type { Atmosphere, ChronicleEvent, EmitterDef, Entity, Faction, ShapeDef, Stat } from './types';
 import { populate } from './populate';
 import { stepHuman, villageHour, villageMidnight, foodTick } from './village';
 import { stepMonster, monsterMidnight } from './monster-ai';
@@ -32,15 +38,6 @@ export interface BehaviorEntry {
   appliesTo(e: Entity): boolean;
   score(e: Entity): number;
   act(e: Entity): void;
-}
-
-export interface DamageInfo {
-  amount: number;
-  type: string;
-  targetKind: string;
-  targetFaction?: Faction;
-  sourceKind: string;
-  sourceFaction?: Faction;
 }
 
 export interface DeathInfo {
@@ -79,7 +76,7 @@ export interface Emote {
 }
 
 export interface Alert {
-  kind: 'scream' | 'missing' | 'shofar' | 'judgment' | 'lair' | 'death' | 'info' | 'champion' | 'forbidden' | 'gameover' | 'altar' | 'creation';
+  kind: 'scream' | 'missing' | 'shofar' | 'judgment' | 'lair' | 'death' | 'info' | 'champion' | 'forbidden' | 'gameover' | 'altar' | 'creation' | 'omen';
   text: string;
   /** entity to point at (scream) */
   ent?: number;
@@ -102,6 +99,10 @@ export interface GameStats {
 }
 
 export class Sim {
+  events = emptyEvents();
+  deck = structuredClone(DECK);
+  director = new EventDirector(this);
+  night = noNightMods();
   seed: number;
   tick = 0;
   rng: Rng;
@@ -114,7 +115,10 @@ export class Sim {
 
   // clock
   clockMs = 0;
-  msPerTick = MS_PER_REAL_TICK;
+  private _msPerTick = MS_PER_REAL_TICK;
+  dtMs = MS_PER_REAL_TICK;
+  get msPerTick() { return this._msPerTick; }
+  set msPerTick(value: number) { this._msPerTick = value; this.dtMs = value; }
   timescale = 1;
   createdClock = 0;
   lastRealMs = 0;
@@ -122,14 +126,11 @@ export class Sim {
   // visuals / defs
   shapes = new Map<string, ShapeDef>();
   emitters = new Map<string, EmitterDef>();
-  defsVersion = 0;
   attached = new Map<number, Set<string>>();
   atmosphere: Atmosphere = {};
 
   // modules
   behaviors: BehaviorEntry[] = [];
-  ruleFns: { owner: string; fn: (kind: string, tile: string) => number | undefined }[] = [];
-  damageRules: { owner: string; fn: (info: DamageInfo) => number | undefined }[] = [];
   listeners: SimListener[] = [];
 
   // paths
@@ -138,7 +139,6 @@ export class Sim {
   rulesVersion = 0;
   /** bumped when a module changes tiles (work-site caches rebuild) */
   tileEpoch = 0;
-  productionRules: { owner: string; fn: (job: string) => number | undefined }[] = [];
   repathQueue: number[] = [];
   repathsThisTick = 0;
 
@@ -151,17 +151,12 @@ export class Sim {
   timber = 0;
   fold = 6;
   favor: Record<Faction, number> = { human: 0, monster: 0 };
-  prayer = '';
   alarmUntil = 0;
   alarmCooldownUntil = 0;
   /** clockMs the current raid on the village ends (0 = none); rolled each evening */
   raidUntil = 0;
-  pendingCreations: CreationRequest[] = [];
-  domainHistory: Record<Faction, { night: number; domain: string }[]> = { human: [], monster: [] };
   nightIndex = 0;
   lastJudgedCalDay = -1;
-  creations: CreationRecord[] = [];
-  missingSystems = ['Pain', 'Aging', 'Desire and birth', 'Cooking and the oven', 'Hunger', 'Sleep', 'Metalworking', 'Speech among monsters'];
   championId = -1;
   championPendingDawn = false;
   /** the champion's current internal order (autopilot, dev scripts) */
@@ -189,6 +184,7 @@ export class Sim {
   out = { emitterOps: [] as EmitterOp[], emotes: [] as Emote[], events: [] as ChronicleEvent[], alerts: [] as Alert[], atmosphereDirty: false, sounds: [] as SoundEvent[], toasts: [] as string[], hurt: 0 as number | undefined };
 
   constructor(seed: number) {
+    this.behaviors.push(turncoatBehavior(this));
     this.seed = seed >>> 0;
     this.rng = new Rng(hashSeed(this.seed, 'sim'));
     for (const [id, s] of Object.entries(CORE_SHAPES)) this.shapes.set(id, s);
@@ -389,27 +385,12 @@ export class Sim {
       const flies = flags.includes('f');
       const swims = flags.includes('s');
       for (const [id, d] of this.grid.defs) {
-        let blocked = false, best: number | undefined;
-        for (const r of this.ruleFns) {
-          for (const k of plain === named ? [named] : [named, plain]) {
-            let c: number | undefined;
-            try {
-              c = r.fn(k, id);
-            } catch {
-              c = undefined;
-            }
-            if (typeof c !== 'number' || Number.isNaN(c) || c < 0) continue;
-            if (c === Infinity) blocked = true;
-            else if (best === undefined || c > best) best = c;
-            break;
-          }
-        }
         let base = d.walkable ? d.moveCost : Infinity;
         if (flies) base = id === 'deep-water' ? 2 : 1;
         if (swims && id === 'shallow-water') base = 1.3;
         if (plain === 'animal' && id === 'road') base = 3;
         if (plain === 'monster' && isFinite(base) && !flies) base = 1 + (base - 1) / 2; // monsters pay half the terrain penalty
-        t.set(id, blocked ? Infinity : best !== undefined ? Math.max(0.05, best) : base);
+        t.set(id, base);
       }
       this.costTables.set(key, t);
     }
@@ -646,6 +627,7 @@ export class Sim {
     const h = Math.round(hourOf(this.clockMs)) % 24;
     if (h === 0) this.midnight();
     villageHour(this);
+    this.director.update(false);
     if (live) for (const l of this.listeners) l.onHour?.();
     if (h === 6) {
       championDawn(this);
@@ -673,7 +655,9 @@ export class Sim {
     if (this.gameOver) return;
     this.tick++;
     this.repathsThisTick = 0;
-    this.advanceClock(this.msPerTick);
+    this.director.restore();
+    this.dtMs = this.msPerTick * this.night.clockRate;
+    this.advanceClock(this.dtMs);
     this.light = this.computeLight();
     this.processRepaths();
     if (this.grid.groundChanged.size) {
@@ -690,10 +674,10 @@ export class Sim {
       switch (e.kind) {
         case 'human':
           if (e.id === this.championId) stepChampion(this, e);
-          else if (!this.moduleBehavior(e)) stepHuman(this, e);
+          else if (!this.overrideBehavior(e)) stepHuman(this, e);
           break;
         case 'monster':
-          if (!this.moduleBehavior(e)) stepMonster(this, e);
+          if (!this.overrideBehavior(e)) stepMonster(this, e);
           break;
         case 'animal':
           stepAnimal(this, e);
@@ -706,7 +690,8 @@ export class Sim {
           stepSpear(this, e);
           break;
         default:
-          if (e.owner && (e.path || e.want)) this.advancePath(e, this.stat(e, 'speed'));
+          if (e.unit) stepUnit(this, e);
+          else if (e.owner && (e.path || e.want)) this.advancePath(e, this.stat(e, 'speed'));
       }
     }
     if (this.tick % 2 === 0) this.separate();
@@ -717,6 +702,7 @@ export class Sim {
       if (!this.monsters().some((m) => m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < 22)) this.alarmUntil = 0;
     }
     for (const l of this.listeners) l.onTick?.();
+    this.director.update();
     this.checkGameOver();
   }
 
@@ -780,7 +766,7 @@ export class Sim {
   }
 
   /** Let a module behavior take over an inhabitant for this tick. */
-  private moduleBehavior(e: Entity): boolean {
+  private overrideBehavior(e: Entity): boolean {
     if (!this.behaviors.length || LOCKED_STATES.has(e.state)) return false;
     let best: BehaviorEntry | null = null, bs = CORE_BASELINE;
     for (const b of this.behaviors) {

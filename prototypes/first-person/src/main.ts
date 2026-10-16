@@ -1,5 +1,5 @@
 // Boot and wiring for the first-person desktop game (spec §3–§12): sim worker, renderer, controller, HUD, journal,
-// map, audio, and the creation pipeline.
+// map, audio, and night events.
 import * as THREE from 'three';
 import { Renderer } from './render/renderer';
 import { SimClient } from './sim-client';
@@ -9,10 +9,8 @@ import { WorldMap, type MapMarker } from './ui/map';
 import { Minimap, type MinimapDot } from './ui/minimap';
 import { pickPlatform } from './platform';
 import { KEYS } from './persist/save-store';
-import { CreationPipeline } from './god/pipeline';
-import { runValidation } from './god/validation-host';
 import type { SavedWorld } from './sim/island';
-import type { ChronicleEvent, CreationRecord, Entity, Zone } from './sim/types';
+import type { ChronicleEvent, Entity, Zone } from './sim/types';
 import { F_ANIMAL, F_BOUND, F_CORPSE, F_DOWNED, F_HUMAN, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, F_HITTABLE, type FramePayload, type Hud, type MonsterCard, type NameInfo, type SimToMain } from './protocol';
 import { GAME_TIMESCALE } from './sim/clock';
 import type { Alert } from './sim/sim';
@@ -45,12 +43,9 @@ function savedTerrain(): TerrainSettings | null {
     return null;
   }
 }
-import houndsSrc from './god/reference-modules/war-hounds.js?raw';
-import fogSrc from './god/reference-modules/poison-fog.js?raw';
 
 const params = new URLSearchParams(location.search);
 const devMode = import.meta.env.DEV;
-const REF: Record<string, string> = { 'war-hounds': houndsSrc, 'poison-fog': fogSrc };
 
 if (params.has('debug')) {
   const pre = document.createElement('pre');
@@ -108,13 +103,7 @@ async function boot() {
   let landmarks: CompassMarker[] = [];
   let ui!: Ui;
 
-  const autoSource = (prompt: string) => {
-    const name = params.get('manualsrc');
-    const id = prompt.match(/Its id MUST be '([^']+)'/)?.[1];
-    if (!devMode || !name || !id || !REF[name]) return null;
-    return REF[name].replace(/id: '(war-hounds|poison-fog)'/, `id: '${id}'`);
-  };
-  const platform = await pickPlatform(params, (p) => ui.askSource(p), autoSource);
+  const platform = await pickPlatform(params);
   const store = platform.store;
   // Another tab starting a new island on this save slot (the in-game "new island", the terraformer's "Save & play")
   // replaces this one: stop saving, or this tab's next save would overwrite the new island.
@@ -132,16 +121,11 @@ async function boot() {
   // ---------- persisted state ----------
   let worldJson = await store.get(KEYS.world);
   let world: SavedWorld | null = worldJson ? JSON.parse(worldJson) : null;
-  if (world && world.core?.v !== 3) {
+  if (world && world.core?.v !== 4) {
     world = null;
     worldJson = null;
   }
   let chronicle: ChronicleEvent[] = JSON.parse((await store.get(KEYS.chronicle)) ?? '[]');
-  const sources: Record<string, string> = {};
-  for (const m of world?.manifest ?? []) {
-    const s = await store.get(KEYS.mod(m.id));
-    if (s !== null) sources[m.id] = s;
-  }
   const seed = Number(params.get('seed')) || world?.core.seed || (crypto.getRandomValues(new Uint32Array(1))[0] >>> 0);
 
   // ---------- live state ----------
@@ -166,11 +150,6 @@ async function boot() {
   let hud: Hud | null = null;
   let chronicleDirty = false;
   let saveWaiters: ((w: string) => void)[] = [];
-  let installWaiter: ((r: { ok: boolean; error?: string }) => void) | null = null;
-  let readyCreation: CreationRecord | null = null;
-  let creationMarker: { x: number; z: number; until: number; label: string } | null = null;
-  let safeSince = 0;
-  const firstVisible = new Map<string, { x: number; z: number }>();
   let gameOverShown = false;
   const names = new Map<number, NameInfo>();
   let monsterCards: MonsterCard[] = [];
@@ -191,7 +170,6 @@ async function boot() {
     chronicleDirty = true;
     ui.setChronicle(chronicle);
   };
-  const godLog = (text: string, importance: number) => pushEvents([{ tick: hud?.tick ?? 0, clockMs: hud?.clockMs ?? localNow(), day: hud?.day ?? 1, text, importance, source: 'god' }]);
   const input = (i: unknown) => sim.post({ type: 'input', input: i as never });
 
   // ---------- settings panel (journal → Settings) ----------
@@ -241,7 +219,7 @@ async function boot() {
     });
     return h('div', {},
       h('h3', { class: 'serif' }, 'How to play'),
-      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). A day lasts 8 minutes: 4 of daylight, 4 of night. Judgment falls at midnight: the god with more favor reshapes the island. The world keeps running while you read this, unless you paused first (Esc).'),
+      h('p', { class: 'muted' }, 'Hunt the six monsters in their hidden lairs. Beat one down to 20 %, bind it (E), drag it home and burn it on the altar of the Most High for its full HP in favor, or finish it (F). Watch for the red ring of a wind-up: dodge (C) or raise your shield (right mouse). A day lasts 8 minutes: 4 of daylight, 4 of night. Judgment falls at midnight: if Dagon’s followers offered more, a curse falls on the island. The world keeps running while you read this, unless you paused first (Esc).'),
       h('h3', { class: 'serif' }, 'Controls'),
       h('div', { class: 'settings-block' },
         range('Mouse sensitivity', 0.5, 6, 0.1, () => settings.sensitivity, (v) => (settings.sensitivity = v)),
@@ -278,7 +256,6 @@ async function boot() {
       p.set('fresh', '1'); // and clear once more on boot, before anything is read
       location.search = p.toString();
     },
-    showCreation: () => showCreation(),
     dev: (cmd) => {
       if (cmd === 'judge-human') sim.post({ type: 'devJudge', human: 300, monster: 0 });
       else if (cmd === 'judge-monster') sim.post({ type: 'devJudge', human: 0, monster: 300 });
@@ -289,7 +266,6 @@ async function boot() {
       else if (cmd === 'fly') toggleFly();
       else if (cmd === 'sky-lapse') toggleSkyLapse();
       else if (cmd === 'monsters') toggleShowMonsters();
-      else if (cmd.startsWith('install-')) devInstall(cmd.slice(8));
       else if (cmd === 'reveal') {
         map.reveal = !map.reveal;
         map.tilesChanged();
@@ -460,43 +436,6 @@ async function boot() {
       sim.post({ type: 'requestSave' });
     });
 
-  async function install(id: string, source: string, record: CreationRecord, night: number): Promise<{ ok: boolean; error?: string }> {
-    await store.set(KEYS.mod(id), source);
-    sources[id] = source;
-    const r = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-      installWaiter = resolve;
-      sim.post({ type: 'install', id, source, record, night });
-    });
-    if (!r.ok) {
-      delete sources[id];
-      await store.remove(KEYS.mod(id));
-    }
-    return r;
-  }
-
-  async function devInstall(name: string) {
-    const src = REF[name];
-    if (!src || sources[name]) return ui.toast(`${name} is already installed.`);
-    const rec: CreationRecord = { id: name, title: name === 'war-hounds' ? 'War-hounds of the Most High' : 'The sweet fog of the salt flats', god: name === 'war-hounds' ? 'human' : 'monster', domain: name === 'war-hounds' ? 'creatures' : 'weather', scale: 2, day: hud?.day ?? 1, announcement: name === 'war-hounds' ? 'And the Most High said, Let hounds walk beside my people and hunt the beasts. And it was so.' : 'And the god of the beasts said, Let a fog rise from the salt flats, sweet to my children and bitter to men. And it was so.' };
-    const r = await install(name, src, rec, -1);
-    if (r.ok) {
-      readyCreation = rec;
-      showCreation();
-    } else ui.toast(`Install failed: ${r.error}`);
-  }
-
-  function showCreation() {
-    if (!readyCreation) return;
-    const rec = readyCreation;
-    readyCreation = null;
-    ui.setCreationReady(false);
-    const p = firstVisible.get(rec.id);
-    if (p) creationMarker = { x: p.x, z: p.z, until: performance.now() + 600_000, label: rec.title };
-    controls.exitLock();
-    ui.genesis(rec);
-    audio.play('judgment');
-  }
-
   function handleAlert(a: Alert) {
     switch (a.kind) {
       case 'scream':
@@ -510,8 +449,9 @@ async function boot() {
         ui.toast(a.text, 'shofar', 6);
         audio.play('shofar');
         break;
+      case 'omen':
       case 'judgment':
-        ui.banner('Judgment', a.text, 'judgment', 9);
+        ui.banner(a.kind === 'omen' ? 'Omen' : 'Judgment', a.text, 'judgment', 9);
         audio.play('judgment');
         break;
       case 'lair':
@@ -595,6 +535,7 @@ async function boot() {
   const climbLog = devMode && params.has('climblog');
   const scenario = devMode ? params.get('script') : null;
   let firstFull = true;
+  let requestedEvent = params.get('event');
   sim.onMessage = (m: SimToMain) => {
     switch (m.type) {
       case 'defs':
@@ -602,6 +543,7 @@ async function boot() {
         map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
         break;
       case 'fullState': {
+        if (requestedEvent) { sim.post({type:'devEvent',op:'fire',id:requestedEvent}); requestedEvent=null; }
         renderer.onFullState(m);
         minimap.terrainChanged();
         map.setTiles(renderer.terrain.grid.types, renderer.terrain.defs);
@@ -663,9 +605,6 @@ async function boot() {
           ui.gameOver(hud.gameOver.winner, hud);
         }
         // the Genesis card waits until the champion is out of danger (R31)
-        if (hud.dangerNear) safeSince = performance.now();
-        if (readyCreation && !screenOpen() && !paused && performance.now() - safeSince > 10_000) showCreation();
-        if (pipeline && hud.pendingCreations.length) pipeline.kick();
         break;
       }
       case 'villagers':
@@ -691,13 +630,6 @@ async function boot() {
         for (const fn of w) fn(m.world);
         break;
       }
-      case 'installed':
-        installWaiter?.(m);
-        installWaiter = null;
-        break;
-      case 'visible':
-        if (!firstVisible.has(m.id)) firstVisible.set(m.id, { x: m.x, z: m.z });
-        break;
       case 'away':
         if (m.summary.hours >= 0.25) {
           controls.exitLock();
@@ -710,26 +642,13 @@ async function boot() {
       case 'actionResult':
         if (m.error) ui.toast(m.error, 'info', 4);
         break;
-      case 'moduleFault':
-        console.warn(`[creation ${m.id}] ${m.hook}: ${m.error}${m.stack ? ` (${m.stack})` : ''}`);
-        break;
-      case 'quarantined':
-        console.warn(`[creation ${m.id}] quarantined: ${m.reason}`);
-        break;
       case 'error':
         console.error('[sim]', m.error);
         break;
     }
   };
 
-  sim.onHang = () => {
-    const active = (world?.manifest ?? []).filter((x) => x.status === 'active');
-    const culprit = active[active.length - 1];
-    godLog(culprit ? `The world froze. "${culprit.title}" is stilled.` : 'The world trembled and froze for a moment.', 2);
-    startSim(culprit ? [culprit.id] : []);
-  };
-
-  const modulesFor = (w: SavedWorld | null) => (w?.manifest ?? []).filter((x) => sources[x.id] !== undefined).map((x) => ({ id: x.id, source: sources[x.id], status: x.status }));
+  sim.onHang = () => { ui.toast('The world paused unexpectedly. Restoring the last save.'); startSim(); };
 
   replaced = () => {
     sim.stop();
@@ -737,14 +656,14 @@ async function boot() {
     ui.banner('A new island', 'This island was replaced by a new one in another tab. Reload to play it.', 'judgment', 3600);
   };
 
-  function startSim(quarantine: string[] = []) {
+  function startSim() {
     // a new island starts at 07:00 (or ?at=HH:MM), so the first day is a full one
     let clock = localNow();
     const [hh, mm] = (params.get('at') ?? '07:00').split(':').map(Number);
     if (!worldJson) clock = clock - (clock % 86_400_000) + ((hh || 0) * 60 + (mm || 0)) * 60_000;
     sim.start({
-      save: worldJson, seed, modules: modulesFor(world), clockMs: clock, realMs: Date.now(),
-      timescale: Math.max(1, Number(params.get('timescale')) || GAME_TIMESCALE), quarantine, reveal: params.has('reveal'), invincible: devMode && params.has('god'),
+      save: worldJson, seed, clockMs: clock, realMs: Date.now(),
+      timescale: Math.max(1, Number(params.get('timescale')) || GAME_TIMESCALE), reveal: params.has('reveal'), invincible: devMode && params.has('god'),
       skip: devMode ? Number(params.get('skip')) || 0 : 0,
       // ?terrain=off: a procedural island even when the terraformer has saved one; ?terrain=default: the
       // terraformer's defaults (floating isles, for riding a flyer up to one) whatever is saved
@@ -753,29 +672,6 @@ async function boot() {
   }
 
   // ---------- the gods ----------
-  const pipeline = new CreationPipeline({
-    provider: platform.provider,
-    loadPending: () => store.get(KEYS.pending),
-    savePending: (json) => store.set(KEYS.pending, json),
-    snapshotWorld,
-    sources: () => ({ ...sources }),
-    chronicle: () => chronicle,
-    pending: () => hud?.pendingCreations ?? [],
-    domainHistory: () => hud?.domainHistory ?? { human: [], monster: [] },
-    log: godLog,
-    validate: (req, onStage) => runValidation(req, onStage),
-    install,
-    failed: (night) => sim.post({ type: 'creationFailed', night }),
-    onCreated: (rec) => {
-      readyCreation = rec;
-      ui.setCreationReady(true);
-    },
-    onChange: () => ui.setGodStatus(pipeline?.status ?? '', pipeline?.trace ?? [], pipeline?.live ?? null, pipeline?.traceVersion ?? 0),
-    isHidden: () => document.hidden,
-  });
-  await pipeline.load();
-  setInterval(() => ui.setGodStatus(pipeline.status, pipeline.trace, pipeline.live, pipeline.traceVersion), 500);
-
   // ---------- the look target, interact, swings ----------
   const ALTAR_R = 4.5 / M + 0.15; // tiles from the altar's center (§2)
   function nearAltar(): boolean {
@@ -1186,7 +1082,6 @@ async function boot() {
       }
       if (showMonsters) for (const m of hud?.devMonsters ?? []) marks.push({ x: m.x, z: m.z, icon: '◆', cls: 'dev-monster', label: `${m.name} · ${m.state}${m.target ? ` → ${m.target}` : ''}` });
       for (const s of screams) marks.push({ x: s.x, z: s.z, icon: '!', cls: 'scream', label: 'A scream' });
-      if (creationMarker && performance.now() < creationMarker.until) marks.push({ x: creationMarker.x, z: creationMarker.z, icon: '✦', label: creationMarker.label });
       landmarks = marks;
       const dead = ctrlReason === 'dead';
       hudView.setCompass(dead ? spectator.yaw : controller.yaw, dead ? spectator.x / M : controller.x, dead ? spectator.z / M : controller.z, marks);
@@ -1215,7 +1110,6 @@ async function boot() {
       sim.setPaused(paused);
       // a paused island waited for you: there's no time away to catch up
       if (!paused) sim.post({ type: 'catchUp', clockMs: localNow(), realMs: Date.now() });
-      pipeline.kick();
     }
   });
   window.addEventListener('pagehide', () => sim.post({ type: 'requestSave' }));
@@ -1223,10 +1117,8 @@ async function boot() {
 
   // ---------- go ----------
   startSim();
-  if (params.has('nogod')) pipeline.stop();
-  pipeline.kick();
+
   updateLockUi();
-  if (devMode && params.get('devinstall')) setTimeout(() => devInstall(params.get('devinstall')!), 1500);
   const panel = devMode ? params.get('panel') : null;
   if (panel) setTimeout(() => (panel === 'altar' ? ui.openAltar() : panel === 'map' ? map.toggle(true, { x: controller.x, z: controller.z }) : ui.openSheet(panel)), 2500);
   if (devMode && params.has('pitch')) setInterval(() => (controller.pitch = (Number(params.get('pitch')) * Math.PI) / 180), 200);
@@ -1287,7 +1179,7 @@ async function boot() {
     sim.post({ type: 'devJudge', human: g === 'human' ? Number(n) || 300 : 0, monster: g === 'monster' ? Number(n) || 300 : 0 });
   }, 1500);
   renderer.renderer.setAnimationLoop(frame);
-  (window as any).__hm = { sim, pipeline, renderer, store, controller, audio, minimap, hud: () => hud, chronicle: () => chronicle };
+  (window as any).__hm = { sim, events: { fire: (id: string) => sim.post({type: 'devEvent', op: 'fire', id}), end: (iid: number) => sim.post({type: 'devEvent', op: 'end', iid}), list: () => hud?.events ?? [] }, renderer, store, controller, audio, minimap, hud: () => hud, chronicle: () => chronicle };
 }
 
 boot().catch((err) => {

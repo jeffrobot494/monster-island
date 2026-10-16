@@ -198,6 +198,10 @@ export interface CorpseInfo {
 }
 
 export interface Entity {
+  unit?: {type: 'jackal'; leader: number; iid: number; mode: string; until: number; stolen: number};
+  eventTagOwners?: Record<string,string[]>;
+  fx?: {id:string;key:string}[];
+  scaleMods?: Record<string,number>;
   id: number;
   kind: string; // 'human' | 'monster' | 'animal' | 'corpse' | 'part' | 'blood' | 'structure' | module kinds
   faction?: Faction;
@@ -259,25 +263,4 @@ export interface ChronicleEvent {
   importance: number;
   source: string; // 'core' | module id | 'god'
   kind?: string;
-}
-
-export interface CreationRequest {
-  night: number;
-  day: number;
-  god: Faction;
-  favor: number;
-  scale: number;
-  allowedDomains: string[];
-  prayer: string | null;
-  tallies: { human: number; monster: number };
-}
-
-export interface CreationRecord {
-  id: string;
-  title: string;
-  god: Faction;
-  domain: string;
-  scale: number;
-  day: number;
-  announcement: string;
 }

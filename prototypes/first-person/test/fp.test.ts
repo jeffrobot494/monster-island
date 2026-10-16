@@ -5,7 +5,7 @@ import { Island } from '../src/sim/island';
 import { cs, champSpeedMul, releaseOnChampion, type ChampInput } from '../src/sim/champion';
 import { offerDragged } from '../src/sim/favor';
 import { resolveAway } from '../src/sim/offline';
-import { reachabilityProblem } from '../src/sim/validator';
+import { reachabilityProblem } from '../src/sim/reachability';
 import { serializeCore } from '../src/sim/serialize';
 import { findPath } from '../src/sim/pathfind';
 import { NV, RES } from '../src/sim/ground';
@@ -21,7 +21,7 @@ import { crown } from '../src/sim/champion';
 import { ChampionController, EYE_H } from '../src/input/controller';
 import type { Controls } from '../src/input/controls';
 
-const make = (seed = 1, ts = 1) => Island.create(seed, START, ts, { now });
+const make = (seed = 1, ts = 1) => Island.create(seed, START, ts);
 const M = 8;
 
 function feed(island: Island, i: ChampInput) {

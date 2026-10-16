@@ -1,9 +1,8 @@
 // DOM overlay (§14): HUD, champion card, actions, alerts, inspector, sheets (village, monsters, book, chronicle, god,
 // settings), altar, Judgment/Genesis cards, away panel, game over.
 import type { Action, Hud, InspectInfo, MonsterCard, VillagerInfo } from '../protocol';
-import type { ChronicleEvent, CreationRecord, Job } from '../sim/types';
+import type { ChronicleEvent, Job } from '../sim/types';
 import type { AwaySummary } from '../sim/offline';
-import type { LiveCall, TraceEntry } from '../god/pipeline';
 import { GAME_TIMESCALE, fmtClock } from '../sim/clock';
 import { JOBS } from '../sim/types';
 
@@ -29,7 +28,6 @@ export interface UiCallbacks {
   settingsPanel(): HTMLElement;
   closeInspector(): void;
   newIsland(): void;
-  showCreation(): void;
   dev(cmd: string): void;
   panelChanged(open: boolean): void;
 }
@@ -72,8 +70,6 @@ export class Ui {
   private dropBtn: HTMLButtonElement;
   private altarBtn: HTMLButtonElement;
   private toasts = h('div', { class: 'toasts' });
-  private status = h('div', { class: 'godstatus hidden' });
-  private ready = h('button', { class: 'ready hidden' }, '✦ A creation is ready');
   private inspector = h('div', { class: 'card inspector hidden' });
   private sheet = h('div', { class: 'sheet hidden' });
   private sheetBody = h('div', { class: 'sheet-body' });
@@ -86,7 +82,6 @@ export class Ui {
   private villagers: VillagerInfo[] = [];
   private monsters: MonsterCard[] = [];
   private chronicle: ChronicleEvent[] = [];
-  private god: { trace: TraceEntry[]; live: LiveCall | null; version: number; status: string } = { trace: [], live: null, version: 0, status: '' };
   private renderedTab = '';
   private altarOpen = false;
   /** where the journal was dragged to (its top-left, px), or null: centered */
@@ -100,10 +95,9 @@ export class Ui {
     this.finishBtn = h('button', { class: 'act hidden' });
     this.dropBtn = h('button', { class: 'act hidden' });
     this.altarBtn = h('button', { class: 'act hidden' });
-    this.ready.addEventListener('click', () => cb.showCreation());
     const head = h('div', { class: 'sheet-head' });
     head.append(h('div', { class: 'journal-title' }, 'Journal'));
-    for (const [k, label] of [['village', 'Village'], ['monsters', 'Monsters'], ['book', 'Book of Creation'], ['chronicle', 'Chronicle'], ['god', 'Gods'], ['settings', 'Settings']] as const) {
+    for (const [k, label] of [['village', 'Village'], ['monsters', 'Monsters'], ['book', 'Omens'], ['chronicle', 'Chronicle'],  ['settings', 'Settings']] as const) {
       const b = h('button', { class: 'tab', onclick: () => this.showTab(k) }, label);
       this.tabs[k] = b;
       head.append(b);
@@ -113,7 +107,7 @@ export class Ui {
     this.dragByHead(head);
     window.addEventListener('resize', () => this.placeSheet());
     // first person: the HUD (hud.ts) replaces the mobile top bar, champion card and buttons
-    this.root.append(this.toasts, this.status, this.ready, this.inspector, this.sheet, this.modal, this.fallen);
+    this.root.append(this.toasts, this.inspector, this.sheet, this.modal, this.fallen);
   }
 
   isBusy(): boolean {
@@ -162,18 +156,7 @@ export class Ui {
     this.fallen.classList.toggle('hidden', !hud.championPendingDawn || !!hud.gameOver);
     if (hud.championPendingDawn) this.fallen.textContent = `Your champion has fallen. A new champion will rise at dawn. (WASD + mouse: look around${this.devMode ? ' · dev: F8 for a new champion now' : ''})`;
     if (this.altarOpen) this.renderAltar();
-    if (!this.sheet.classList.contains('hidden') && (this.tab === 'book' || this.tab === 'god')) this.renderTab();
-  }
-
-  setGodStatus(text: string, trace: TraceEntry[], live: LiveCall | null, version: number) {
-    this.god = { trace, live, version, status: text };
-    this.status.classList.toggle('hidden', !text);
-    this.status.textContent = text;
-    if (!this.sheet.classList.contains('hidden') && this.tab === 'god') this.renderTab();
-  }
-
-  setCreationReady(on: boolean) {
-    this.ready.classList.toggle('hidden', !on);
+    if (!this.sheet.classList.contains('hidden') && this.tab === 'book') this.renderTab();
   }
 
   setVillagers(v: VillagerInfo[], m: MonsterCard[]) {
@@ -351,36 +334,21 @@ export class Ui {
             m.hp !== null && m.maxHp ? h('div', { class: 'hp small' }, h('i', { style: `width:${(m.hp / m.maxHp) * 100}%` })) : null))),
       );
     } else if (this.tab === 'book') {
-      const key = JSON.stringify([hud?.creations, hud?.pendingCreations, hud?.missingSystems]);
+      const list = hud?.eventHistory ?? [];
+      const key = JSON.stringify([list, hud?.events]);
       if (key === this.renderedTab) return;
       this.renderedTab = key;
-      const list = hud?.creations ?? [];
-      fill(body, 
-        h('h3', { class: 'serif' }, 'The Book of Creation'),
-        list.length ? null : h('p', { class: 'muted' }, 'Nothing has been added to the world yet. Each midnight, the god whose followers offered more favor shapes it.'),
-        ...[...list].reverse().map((c) => h('div', { class: `creation ${c.god}` },
+      fill(body, h('h3', { class: 'serif' }, 'Omens'),
+        list.length ? null : h('p', { class: 'muted' }, "When Dagon wins the midnight Judgment, a curse falls on the island."),
+        ...[...list].reverse().map(c => h('div', { class: 'creation monster' },
           h('div', { class: 'rc-name' }, `Day ${c.day} · ${c.title}`),
-          h('div', { class: 'muted' }, `${c.god === 'human' ? 'The Most High' : 'Dagon'} · ${c.domain} · scale ${c.scale}`),
-          h('p', { class: 'serif' }, c.announcement))),
-        hud?.pendingCreations.length ? h('p', { class: 'muted' }, `Awaiting: ${hud.pendingCreations.map((r) => `${GOD[r.god]} (day ${r.day}, scale ${r.scale})`).join(', ')}`) : null,
-        h('p', { class: 'muted' }, `The world still lacks: ${(hud?.missingSystems ?? []).join(', ')}.`),
-      );
+          h('div', { class: 'muted' }, c.endedDay === undefined ? (hud?.events.find(e=>e.iid===c.iid)?.phase === 'armed' ? 'Armed' : 'Active') : `Ended on day ${c.endedDay}`))));
     } else if (this.tab === 'chronicle') {
       const key = String(this.chronicle.length);
       if (key === this.renderedTab) return;
       this.renderedTab = key;
       fill(body, h('ol', { class: 'chron' }, ...[...this.chronicle].reverse().slice(0, 150).map((e) =>
         h('li', { class: `imp${e.importance} src-${e.source === 'core' ? 'core' : e.source === 'god' ? 'god' : 'mod'}` }, h('span', { class: 'when' }, `D${e.day} ${fmtClock(e.clockMs)}`), ' ', e.text))));
-    } else if (this.tab === 'god') {
-      const key = `${this.god.version}:${this.god.status}`;
-      if (key === this.renderedTab) return;
-      this.renderedTab = key;
-      const live = this.god.live;
-      fill(body, 
-        h('p', {}, this.god.status || 'The gods wait for midnight.'),
-        live ? h('div', { class: 'live' }, h('div', { class: 'muted' }, `${live.label} · ${live.status} · ${Math.round((Date.now() - live.startedAt) / 1000)}s${live.thinkingTokens ? ` · ~${live.thinkingTokens} thinking tokens` : ''}`), h('pre', {}, live.output.slice(-1500))) : null,
-        h('ol', { class: 'chron' }, ...[...this.god.trace].reverse().slice(0, 80).map((t) => h('li', { class: `lvl-${t.level}` }, h('span', { class: 'when' }, new Date(t.t).toLocaleTimeString()), ' ', t.text, t.detail ? h('pre', { class: 'detail' }, t.detail) : null))),
-      );
     } else if (this.tab === 'settings') {
       if (this.renderedTab === 'settings') return;
       this.renderedTab = 'settings';
@@ -389,7 +357,7 @@ export class Ui {
         h('button', { class: 'btn wide danger', onclick: () => { if (confirm('Abandon this island and start a new one?')) this.cb.newIsland(); } }, 'New island'),
         this.devMode ? h('div', { class: 'dev' },
           h('h3', {}, 'Dev'),
-          ...[['crown', 'New champion now (F8)'], ['kill-champion', 'Kill the champion'], ['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['raid', 'Start a raid now'], ['fly', 'Fly mode (F9)'], ['sky-lapse', 'Sky time-lapse (F10)'], ['monsters', 'Show every monster (F7)'], ['install-war-hounds', 'Install war-hounds'], ['install-poison-fog', 'Install poison fog'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
+          ...[['crown', 'New champion now (F8)'], ['kill-champion', 'Kill the champion'], ['judge-human', 'Judgment: Most High 300'], ['judge-monster', 'Judgment: Dagon 300'], ['skip-8', 'Away 8 hours'], ['raid', 'Start a raid now'], ['fly', 'Fly mode (F9)'], ['sky-lapse', 'Sky time-lapse (F10)'], ['monsters', 'Show every monster (F7)'], ['reveal', 'Toggle fog of war']].map(([c, l]) => h('button', { class: 'btn wide', onclick: () => this.cb.dev(c) }, l))) : null,
       );
     }
     body.scrollTop = scroll;
@@ -411,16 +379,12 @@ export class Ui {
   }
 
   private altarKey = '';
-  private praying = false;
   private renderAltar(force = false) {
-    if (this.praying) return; // hold the "prayer rises" state until the modal closes
     const hud = this.hud;
     const c = hud?.champion;
-    const key = JSON.stringify([hud?.fold, c?.dragging, c?.nearAltar, hud?.favor, hud?.prayer, this.villagers.filter((v) => v.inVillage).length]);
+    const key = JSON.stringify([hud?.fold, c?.dragging, c?.nearAltar, hud?.favor, this.villagers.filter((v) => v.inVillage).length]);
     if (!force && key === this.altarKey) return;
     this.altarKey = key;
-    const prayer = h('textarea', { maxlength: '200', placeholder: 'Pray for what the Most High should make tonight…' }) as HTMLTextAreaElement;
-    prayer.value = hud?.prayer ?? '';
     const near = !!c?.nearAltar;
     const forbidden = h('details', { class: 'forbidden' }, h('summary', {}, '⚠ The forbidden offering'),
       h('p', { class: 'muted' }, 'You may burn one of your own people. The elder will condemn you, and Dagon drinks the same blood: his favor rises by the same amount.'),
@@ -434,35 +398,8 @@ export class Ui {
       near ? null : h('p', { class: 'warn' }, 'You must stand at the altar to make offerings.'),
       h('button', { class: 'btn wide', ...(near && (hud?.fold ?? 0) > 0 ? {} : { disabled: true }), onclick: () => this.cb.action({ kind: 'offerLamb' }) }, `🐑 Offer a lamb (+40) · ${hud?.fold ?? 0} in the fold`),
       c?.dragging ? h('button', { class: 'btn wide gold', ...(near && c.dragging.value > 0 ? {} : { disabled: true }), onclick: () => this.cb.action({ kind: 'offerDragged' }) }, `🔥 Burn ${c.dragging.name.split(' ')[0]} (+${c.dragging.value})`) : h('p', { class: 'muted' }, 'Drag a crippled monster (or a fresh carcass) here for a far greater offering.'),
-      h('div', { class: 'pray' }, prayer, h('button', { class: 'btn wide', onclick: (e: Event) => this.pray(e.currentTarget as HTMLButtonElement, prayer) }, '🙏 Pray')),
       forbidden,
     ));
-  }
-
-  private pray(btn: HTMLButtonElement, prayer: HTMLTextAreaElement) {
-    if (this.praying) return;
-    this.cb.action({ kind: 'pray', text: prayer.value });
-    this.praying = true;
-    btn.classList.add('sent');
-    btn.disabled = prayer.disabled = true;
-    btn.textContent = prayer.value.trim() ? '🙏 Your prayer rises…' : '🙏 Prayer withdrawn';
-    setTimeout(() => {
-      this.praying = false;
-      if (btn.isConnected) this.closeModal(); // skip if another card (e.g. genesis) replaced the altar meanwhile
-    }, 900);
-  }
-
-  // ---------- cards ----------
-
-  genesis(rec: CreationRecord) {
-    fill(this.modal, h('div', { class: `card genesis ${rec.god}` },
-      h('div', { class: 'muted' }, `Day ${rec.day} · ${rec.god === 'human' ? 'The Most High' : 'Dagon'} · ${rec.domain} · scale ${rec.scale}`),
-      h('div', { class: 'card-title big' }, rec.title),
-      h('p', { class: 'serif scripture' }, rec.announcement),
-      h('button', { class: 'btn wide', onclick: () => this.closeModal() }, 'And it was so.'),
-    ));
-    this.modal.classList.remove('hidden');
-    this.cb.panelChanged(true);
   }
 
   away(s: AwaySummary) {
@@ -483,22 +420,10 @@ export class Ui {
     fill(this.modal, h('div', { class: `card gameover ${winner}` },
       h('div', { class: 'card-title big' }, winner === 'human' ? 'The island is yours' : 'The island belongs to the beasts'),
       h('p', { class: 'serif' }, winner === 'human' ? 'The last monster is dead. The hills are quiet, and the Most High rests.' : 'The last of the village is gone. Dagon feasts on the High Place.'),
-      h('p', { class: 'muted' }, `Day ${hud.gameOver?.day ?? hud.day} · monsters slain ${hud.stats.monsterKills} · villagers lost ${hud.stats.villagerDeaths} · creations ${hud.creations.length}`),
+      h('p', { class: 'muted' }, `Day ${hud.gameOver?.day ?? hud.day} · monsters slain ${hud.stats.monsterKills} · villagers lost ${hud.stats.villagerDeaths} · omens ${hud.eventHistory.length}`),
       h('button', { class: 'btn wide gold', onclick: () => this.cb.newIsland() }, 'A new island'),
     ));
     this.modal.classList.remove('hidden');
   }
 
-  askSource(prompt: string): Promise<string> {
-    return new Promise((resolve) => {
-      const ta = h('textarea', { spellcheck: 'false', class: 'code', placeholder: 'export default { id: …, title: …, define(api) {}, tests: [...] }' }) as HTMLTextAreaElement;
-      fill(this.modal, h('div', { class: 'card' },
-        h('div', { class: 'card-title' }, 'Manual god: paste a module'),
-        h('pre', { class: 'detail' }, prompt.slice(-1200)),
-        ta,
-        h('button', { class: 'btn wide', onclick: () => { this.closeModal(); resolve(ta.value); } }, 'Offer it to the world'),
-      ));
-      this.modal.classList.remove('hidden');
-    });
-  }
 }

@@ -4,12 +4,7 @@ import type { Entity, Faction } from './types';
 import { calDay } from './clock';
 import { firstName, gainXp, kill } from './combat';
 
-export const DOMAINS = ['creatures', 'weather', 'sky', 'land', 'plants', 'bodies', 'laws'] as const;
 export const GOD_NAME: Record<Faction, string> = { human: 'The Most High', monster: 'Dagon' };
-
-export function scaleFor(favor: number): number {
-  return favor < 100 ? 1 : favor < 300 ? 2 : favor < 600 ? 3 : favor < 1000 ? 4 : 5;
-}
 
 export function offerFavor(sim: Sim, faction: Faction, value: number, altar: 'village' | 'high', victimKind: string) {
   sim.favor[faction] += value;
@@ -18,6 +13,7 @@ export function offerFavor(sim: Sim, faction: Faction, value: number, altar: 'vi
 
 /** Value of an offering at the village altar (live = 100 % max HP; fresh carcass = 50 %; bones = 0). */
 export function offeringValue(sim: Sim, e: Entity): number {
+  if(e.unit || e.corpse?.species === 'jackal') return 0;
   if (e.kind === 'corpse' && e.corpse) {
     if (e.corpse.bones || e.corpse.diedCalDay !== calDay(sim.clockMs)) return 0;
     return Math.round(e.corpse.maxHp * 0.5);
@@ -105,41 +101,18 @@ function condemn(sim: Sim, value: number) {
   for (const h of sim.humans()) if (!h.hidden && h.id !== sim.championId) sim.emote(h, '😠', 3);
 }
 
-export function setPrayer(sim: Sim, text: string) {
-  sim.prayer = text.trim().slice(0, 200);
-  if (sim.prayer) sim.log(`Your prayer rises: "${sim.prayer}"`, 1, 'core', 'prayer');
-}
-
-/** Domains the god may use for a creation made for `night` (variety rule; computed when the job starts, R23). */
-export function allowedDomains(sim: Sim, god: Faction, night: number, scale: number, inFlight: string[] = []): string[] {
-  const recent = new Set(sim.domainHistory[god].filter((d) => d.night >= night - 3 && d.night < night).map((d) => d.domain));
-  for (const d of inFlight) recent.add(d);
-  const out: string[] = DOMAINS.filter((d) => !recent.has(d));
-  if (scale >= 4 && !recent.has('fundamental')) out.push('fundamental');
-  return out.length ? out : [...DOMAINS];
-}
-
 export function judgment(sim: Sim) {
   const h = Math.round(sim.favor.human), m = Math.round(sim.favor.monster);
-  const night = sim.nightIndex;
   if (h === m) {
     sim.log(`Midnight. Judgment: ${h} to ${m}. Both gods rest.`, 3, 'core', 'judgment');
     sim.alert({ kind: 'judgment', text: `Judgment: ${h} to ${m}. Both gods rest.` });
   } else {
     const god: Faction = h > m ? 'human' : 'monster';
-    const favor = Math.max(h, m);
-    const scale = scaleFor(favor);
-    const text = `Midnight. Judgment: the Most High ${h}, Dagon ${m}. ${GOD_NAME[god]} prevails, and shapes the world (scale ${scale}).`;
+    const text = `Midnight. Judgment: the Most High ${h}, Dagon ${m}. ${god === 'monster' ? 'Dagon prevails. A curse falls on the island.' : 'The Most High prevails. The night passes in peace.'}`;
     sim.log(text, 3, 'core', 'judgment');
     sim.alert({ kind: 'judgment', text });
-    if (sim.judgmentEnabled) {
-      sim.pendingCreations.push({ night, day: sim.day, god, favor, scale, allowedDomains: [], prayer: god === 'human' ? sim.prayer || null : null, tallies: { human: h, monster: m } });
-      while (sim.pendingCreations.length > 3) {
-        const r = sim.pendingCreations.shift()!;
-        sim.log(`${GOD_NAME[r.god]} let the night of day ${r.day} pass without a creation.`, 1, 'core', 'judgment');
-      }
-    }
   }
+  if (sim.judgmentEnabled) sim.director.onVerdict(h === m ? null : h > m ? 'human' : 'monster');
+
   sim.favor = { human: 0, monster: 0 };
-  sim.prayer = '';
 }

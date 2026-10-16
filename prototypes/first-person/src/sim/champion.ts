@@ -1,3 +1,4 @@
+import { hostile } from './team';
 // The player's champion in first person (spec §4–5, F6–F10, F31): pose messages from the client-side controller,
 // swings with a client-chosen target and zone, dodge i-frames, block, interact, finish, torch; hold and autopilot
 // modes when the player isn't driving; dragging along a breadcrumb trail; regeneration; succession.
@@ -421,7 +422,7 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
   if (c.human?.mount) return strikeFromBody(sim, c, w.dmg, w.type);
   const ok = (t: Entity | undefined): t is Entity => {
     if (!t || t.hp <= 0 || !sim.ents.has(t.id)) return false;
-    const hittable = t.kind === 'monster' ? t.state !== 'downed' && t.state !== 'bound' : t.tags.includes('hittable');
+    const hittable = t.inhabitant ? hostile(c, t) && t.state !== 'downed' && t.state !== 'bound' : t.tags.includes('hittable');
     if (!hittable || t.hidden) return false;
     const p = axisPoint(t, c.x, c.z);
     const dist = axisDist(t, c.x, c.z) - bodyR(t);
@@ -440,7 +441,7 @@ function swing(sim: Sim, c: Entity, i: { yaw: number; targetId: number | null; z
     zone = undefined;
     let best = Infinity;
     for (const m of sim.ents.values()) {
-      if (m.kind !== 'monster' || !ok(m)) continue;
+      if (!hostile(c, m) || !ok(m)) continue;
       const p = axisPoint(m, c.x, c.z);
       const off = bearingOff(i.yaw, c.x, c.z, p.x, p.z);
       if (off > (w.near * Math.PI) / 180 || axisDist(m, c.x, c.z) - bodyR(m) > w.reach / M) continue;
@@ -640,7 +641,7 @@ export function stepChampion(sim: Sim, c: Entity) {
   }
   // regeneration out of danger (R16)
   for (const m of sim.ents.values()) {
-    if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && m.state !== 'rest' && Math.hypot(m.x - c.x, m.z - c.z) < 15) {
+    if (hostile(c, m) && m.state !== 'downed' && m.state !== 'bound' && m.state !== 'rest' && Math.hypot(m.x - c.x, m.z - c.z) < 15) {
       S.lastThreat = sim.tick;
       break;
     }
@@ -651,7 +652,7 @@ export function stepChampion(sim: Sim, c: Entity) {
   if (!sim.order && sim.tick - S.lastInput > IDLE_TICKS) {
     const V = sim.layout.village;
     let threat: Entity | null = null;
-    for (const m of sim.ents.values()) if (m.kind === 'monster' && m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius - 1) threat = m;
+    for (const m of sim.ents.values()) if (hostile(c, m) && m.state !== 'downed' && m.state !== 'bound' && Math.hypot(m.x - V.x, m.z - V.z) < sim.layout.wallRadius - 1) threat = m;
     if (threat) sim.order = { type: 'attack', id: threat.id, idle: true };
     else if (Math.hypot(c.x - V.x, c.z - V.z) > 4) sim.order = { type: 'move', x: V.x + 0.5, z: V.z + 1.5 };
   }
@@ -673,7 +674,7 @@ function holdGround(sim: Sim, c: Entity) {
   c.state = sim.dragging >= 0 ? 'drag' : 'idle';
   let foe: Entity | null = null, bd = Infinity;
   for (const m of sim.ents.values()) {
-    if (m.kind !== 'monster' || m.target !== c.id || m.state === 'downed' || m.state === 'bound') continue;
+    if (!hostile(c, m) || m.target !== c.id || m.state === 'downed' || m.state === 'bound') continue;
     const d = axisDist(m, c.x, c.z) - bodyR(m);
     if (d < bd) { bd = d; foe = m; }
   }
@@ -718,7 +719,7 @@ function runOrder(sim: Sim, c: Entity) {
     case 'attack':
     case 'finish': {
       const t = sim.ents.get(o.id);
-      if (!t || t.kind !== 'monster' || (o.type === 'attack' && (t.state === 'bound' || t.state === 'downed'))) {
+      if (!t || (o.type === 'finish' ? t.kind !== 'monster' : !hostile(c, t)) || (o.type === 'attack' && (t.state === 'bound' || t.state === 'downed'))) {
         sim.order = null;
         return;
       }
@@ -812,7 +813,7 @@ export function onChampionDied(sim: Sim) {
 }
 
 export function crown(sim: Sim) {
-  const pool = sim.humans().filter((h) => h.state !== 'captive' && h.state !== 'downed' && h.carriedBy === undefined);
+  const pool = sim.humans().filter((h) => h.faction === 'human' && h.state !== 'captive' && h.state !== 'downed' && h.carriedBy === undefined);
   if (!pool.length) return;
   const c = sim.rng.pick(pool)!;
   sim.championPendingDawn = false;

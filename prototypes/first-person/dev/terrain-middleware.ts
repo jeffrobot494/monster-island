@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
-import { allowed } from './claude-code-middleware';
+import { allowed } from './dev-middleware';
 import { checkSettings } from '../src/sim/terrain-import';
 
 const FILE = fileURLToPath(new URL('../src/terrain/saved-terrain.json', import.meta.url));

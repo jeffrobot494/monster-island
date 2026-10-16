@@ -1,3 +1,5 @@
+> The LLM creation system has been replaced by the fixed night events described in [night-events-plan.md](night-events-plan.md).
+
 # Island Humans and Monsters (First-Person Desktop) — MVP Tech Spec
 
 Source design: [`design-doc.md`](design-doc.md) (Oct 9, 2026), with one platform change requested by the

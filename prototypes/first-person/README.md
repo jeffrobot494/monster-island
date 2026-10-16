@@ -234,7 +234,7 @@ How the game uses it:
   - `climb-rig.ts`: a monster's climb volumes on its current pose, a rider's place on them, and the rules for getting on.
 - `src/audio/audio.ts`: positional sound, played from CC0 recordings in `public/audio` (credits in `public/audio/credits.md`).
 - `src/ui/`: `hud.ts` (crosshair, compass, bars, prompts, hints), `map.ts`, `ui.ts` (journal, altar, cards).
-- `src/god/`: the decree → implement → validate → install pipeline (prompts updated for first person).
+- `src/sim/events/`: fixed, data-driven night events. Dagon’s midnight victories draw Long Night, Jackal Escort, Frenzy, Turncoats, then Ascension; the deck loops.
 
 ## Tests
 
@@ -255,8 +255,7 @@ npm run deploy   # vite build, vendor the RUN.world SDK into dist/, rundot deplo
   unbundled into `dist/vendor/rundot-sdk/` and adds it as its own `<script type="module">`: it reports ready to the
   host, and builds with the SDK bundled into the game's JS hang at "Processing game file" (see
   `../monster-island/docs/run-world-findings.md`). The game code does not import the SDK.
-- `public/thumbnail.jpg` must be a 512×512 JPEG. `rundot/textGen.config.json` caps hosted-LLM spend, in credits (1 credit = $0.001): $10/player and $50/game per day.
-- Deployed builds have no dev server, so the god is the **manual** one (the Claude Code provider needs
-  `dev/claude-code-middleware.ts`). A RUN.world `textGen` provider is the next step.
+- `public/thumbnail.jpg` must be a 512×512 JPEG. Night events run locally without hosted LLM calls.
+- Use `?event=frenzy` (or `long-night`, `jackals`, `turncoats`, `ascension`) to trigger an event after loading. Console: `__hm.events.fire(id)`, `__hm.events.end(iid)`, `__hm.events.list()`. Save schema 4 starts a fresh island for older saves.
 - Preflight's `sandbox-blocked-modals` check is skipped: all but two hits are `sim.alert(...)`. The real ones are the
   `confirm()` calls in `src/ui/ui.ts` (New island, burning a villager), which the host's sandbox may block.

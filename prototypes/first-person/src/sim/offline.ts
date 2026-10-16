@@ -3,10 +3,11 @@ import type { Sim } from './sim';
 import type { Entity } from './types';
 import { DAY_MS, HOUR_MS } from './clock';
 import { SIZE } from './world';
-import { PRODUCTION, doorOf, onShift, pickSite, productionMul } from './village';
+import { PRODUCTION, doorOf, onShift, pickSite } from './village';
 import { boldness, isEnraged, raiding } from './monster-ai';
 import { applyDamage, firstName, gainXp, heal, isWounded, kill } from './combat';
 import { offerFavor, GOD_NAME } from './favor';
+import { leaveHouse } from './village';
 import { clearClimb, cs } from './champion';
 
 export interface AwaySummary {
@@ -108,15 +109,17 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     for (const h of sim.humans()) {
       if (h.id === sim.championId) continue;
       eaters++;
-      if (onShift(sim, h)) sim.food += PRODUCTION[h.human!.job] * productionMul(sim, h.human!.job) * f * 0.85;
+      if (h.faction === 'human' && onShift(sim, h)) sim.food += PRODUCTION[h.human!.job] * f * 0.85;
     }
     sim.food = Math.min(sim.foodCap, sim.food - (eaters * 10 * step) / DAY_MS);
     if (sim.food <= 0) {
       sim.food = 0;
-      for (const h of sim.humans()) if (h.id !== sim.championId) applyDamage(sim, h, 4 * f, { type: 'hunger', noRules: true });
+      for (const h of sim.humans()) if (h.id !== sim.championId) applyDamage(sim, h, 4 * f, { type: 'hunger' });
     }
     const raidBefore = sim.raidUntil;
+    sim.director.resolveAway(f, sum);
     sim.advanceClock(step);
+    for (const e of [...sim.ents.values()]) if(e.unit?.mode === 'scatter') sim.remove(e);
     left -= step;
     // a raid began while you were away: every monster comes for the village once
     if (raiding(sim) && sim.raidUntil !== raidBefore) {
@@ -153,10 +156,11 @@ export function resolveAway(sim: Sim, gapClockMs: number, realGapMs: number): Aw
     m.state = 'rest';
   }
 
+  for (const h of sim.humans()) if(h.tags.includes('turncoat')) {leaveHouse(sim,h);h.state='idle';}
   sum.foodAfter = Math.round(sim.food);
   for (const e of sim.out.events.slice(evStart)) {
     if (e.kind === 'judgment') sum.judgments.push(e.text);
-    else if (e.kind === 'growth' || e.kind === 'champion' || e.kind === 'gameover') sum.events.push(e.text);
+    else if (e.kind === 'omen' || e.kind === 'growth' || e.kind === 'champion' || e.kind === 'gameover') sum.events.push(e.text);
   }
   cs(sim).epoch++; // the resolver may have moved the champion: stale client poses are dropped (F6)
   cs(sim).trail = [];
@@ -176,7 +180,7 @@ function resolveHunt(sim: Sim, m: Entity, sum: AwaySummary) {
   const champ = sim.champion();
   const cands: { h: Entity; w: number; near: boolean }[] = [];
   for (const h of sim.humans()) {
-    if (h.id === sim.championId) continue;
+    if (h.id === sim.championId || h.faction !== 'human') continue;
     const p = siteXZ(h);
     const near = Math.hypot(p.x - V.x, p.z - V.z) < 12 + sim.layout.wallRadius;
     if (!raid) {
@@ -197,7 +201,7 @@ function resolveHunt(sim: Sim, m: Entity, sum: AwaySummary) {
   for (const c of cands) if ((r -= c.w) <= 0) { pick = c; break; }
   const p = raid ? 0.35 : pick.near ? 0.2 : 0.35;
   if (raid && champ) {
-    applyDamage(sim, m, Math.max(0, Math.min(sim.maxHp(m) * 0.25, m.hp - sim.maxHp(m) * 0.3)), { type: 'slash', sourceId: champ.id, noRules: true });
+    applyDamage(sim, m, Math.max(0, Math.min(sim.maxHp(m) * 0.25, m.hp - sim.maxHp(m) * 0.3)), { type: 'slash', sourceId: champ.id });
     sum.events.push(`${firstName(m)} raided the village; your champion wounded it.`);
   }
   if (sim.rng.chance(p)) {
@@ -205,7 +209,7 @@ function resolveHunt(sim: Sim, m: Entity, sum: AwaySummary) {
     sacrificeOffline(sim, m, pick.h, sum);
   } else if (sim.rng.chance(0.3)) {
     const dmg = Math.max(0, Math.min(sim.maxHp(m) * 0.15, m.hp - sim.maxHp(m) * 0.3));
-    if (dmg > 0) applyDamage(sim, m, dmg, { type: 'pierce', noRules: true });
+    if (dmg > 0) applyDamage(sim, m, dmg, { type: 'pierce' });
   }
 }
 

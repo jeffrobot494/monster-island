@@ -1,7 +1,7 @@
-import { harden, hostCreateBlobUrl, hostNow, hostPost, hostRevokeUrl, hostSetTimeout } from './harden';
-import { Island, importDefault, type SavedWorld } from '../sim/island';
-import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type ModuleStat, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
-import type { FaultInfo, VisibleEffect } from '../sim/module-runtime';
+import { FX } from '../protocol';
+import { hostNow, hostPost, hostSetTimeout } from './harden';
+import { Island, type SavedWorld } from '../sim/island';
+import { ENT_STRIDE, F_ANIMAL, F_BOUND, F_CHAMPION, F_CORE_SHAPE, F_CORPSE, F_DOWNED, F_DRAGGED, F_HITTABLE, F_HUMAN, F_INHABITANT, F_ITEM, F_MONSTER, F_SHAKE, F_TELEGRAPH, type Hud, type InspectInfo, type MainToSim, type MonsterCard, type NameInfo, type SimToMain, type VillagerInfo } from '../protocol';
 import { TICKS_PER_SECOND, HOUR_MS, MS_PER_REAL_TICK, fmtClock } from '../sim/clock';
 import type { Entity } from '../sim/types';
 import { visibleMonsters, championSight } from '../sim/vision';
@@ -12,7 +12,7 @@ import { M as MPT } from '../sim/ground';
 import { frontPoint } from '../sim/body';
 import { shapeForJob } from '../sim/populate';
 import { DAY_MS } from '../sim/clock';
-import { offerDragged, offerLamb, offerVillager, offeringValue, setPrayer, nearAltar, judgment } from '../sim/favor';
+import { offerDragged, offerLamb, offerVillager, offeringValue, nearAltar, judgment } from '../sim/favor';
 import { kill, xpToNext, firstName } from '../sim/combat';
 import { resolveAway } from '../sim/offline';
 import { ARCH } from '../sim/monsters-gen';
@@ -23,7 +23,7 @@ const post = (m: SimToMain, transfer?: Transferable[]) => hostPost(m, transfer);
 // capture before hardening removes them
 const listen = self.addEventListener.bind(self);
 const realNow = Date.now.bind(Date);
-harden();
+
 
 let island: Island | null = null;
 let paused = false;
@@ -36,30 +36,11 @@ let busy = false;
 let lastLoop = 0;
 let acc = 0;
 
-const loader = async (_id: string, source: string) => {
-  const url = hostCreateBlobUrl(source);
-  try {
-    return await importDefault(url);
-  } finally {
-    hostRevokeUrl(url);
-  }
-};
-
-const runtimeOpts = {
-  now: hostNow,
-  onFault: (f: FaultInfo) => post({ type: 'moduleFault', id: f.id, hook: f.hook, error: f.error, stack: f.line ? `line ${f.line}` : undefined }),
-  onQuarantine: (id: string, reason: string) => {
-    post({ type: 'quarantined', id, reason });
-    saveReason = 'quarantine';
-  },
-  onVisible: (id: string, v: VisibleEffect) => post({ type: 'visible', id, x: v.x, z: v.z, what: v.what }),
-};
-
 let saveReason: string | null = null;
 
 function sendDefs(force = false) {
   const sim = island!.sim;
-  const key = `${sim.defsVersion}:${sim.grid.defsVersion}:${sim.shapes.size}:${sim.emitters.size}`;
+  const key = `${sim.grid.defsVersion}:${sim.shapes.size}:${sim.emitters.size}`;
   if (!force && key === defsKey) return;
   defsKey = key;
   shapeIndex = [...sim.shapes.keys()];
@@ -86,7 +67,7 @@ function rendered(e: Entity, vis: Set<number>, ex: number, ez: number, sight: nu
   if (e.hidden) return false;
   if (e.kind === 'structure' && e.role && CORE_ROLES.test(e.role)) return false; // drawn as static geometry
   const d = Math.hypot(e.x - ex, e.z - ez);
-  if (e.kind === 'monster') {
+  if (e.kind === 'monster' || e.unit) {
     if (sim.revealAll) return true;
     if (e.state === 'bound' || e.id === sim.dragging) return true;
     // a resting monster is inside its lair unless you're at the mouth (F11)
@@ -128,6 +109,7 @@ function zoneMask(e: Entity): number {
 }
 
 function titleOf(e: Entity): NameInfo | null {
+  if(e.unit) return {name:e.name ?? e.unit.type,title:'Dagon’s escort'};
   if (e.kind === 'human') {
     const job = e.human!.job;
     return { name: e.name ?? 'Villager', title: e.tags.includes('elder') ? `the elder · ${job}` : job };
@@ -142,10 +124,7 @@ function titleOf(e: Entity): NameInfo | null {
   }
   if (e.kind === 'animal') return { name: `Wild ${e.animal!.species}`, title: 'beast' };
   if (e.kind === 'spear') return { name: 'Spear', title: e.spear?.st === 'rack' ? 'in the village rack' : 'bronze-tipped' };
-  if (e.owner) {
-    const m = island!.manifest.find((x) => x.id === e.owner);
-    return { name: e.kind, title: m ? `a creation: ${m.title}` : 'a creation' };
-  }
+
   return null;
 }
 
@@ -204,6 +183,7 @@ function packEnts(): Float32Array {
     arr[o++] = e.inhabitant ? Math.max(0, Math.min(1, e.hp / sim.maxHp(e))) : 1;
     arr[o++] = e.monster ? (e.monster.seen ? 1 : 0) : 1;
     arr[o++] = e.monster ? windupProgress(sim, e) : -1;
+    arr[o++] = Math.max(0, FX.indexOf(e.fx?.at(-1)?.id ?? ''));
     const ni = titleOf(e);
     if (ni) {
       const key = ni.name + '|' + ni.title;
@@ -244,7 +224,6 @@ function sendFullState() {
 }
 
 function save(reason: string) {
-  island!.runtime.enforceStateCaps();
   island!.sim.lastRealMs = realNow();
   post({ type: 'save', world: JSON.stringify(island!.serialize()), tick: island!.sim.tick, reason });
 }
@@ -281,15 +260,12 @@ function sendHud() {
     monstersAlive: sim.monsters().length,
     alarm: sim.alarmUntil > sim.tick,
     raid: raiding(sim),
-    prayer: sim.prayer,
-    pendingCreations: sim.pendingCreations,
-    creations: sim.creations,
-    domainHistory: sim.domainHistory,
-    missingSystems: sim.missingSystems,
+    events: sim.director.list(),
+    eventHistory: sim.events.history.map(h => ({...h, title: sim.director.definition(h.def).title})),
     gameOver: sim.gameOver,
     stats: sim.stats,
     dangerNear,
-    judgmentInMs: (DAY_MS - (((sim.clockMs % DAY_MS) + DAY_MS) % DAY_MS)) / sim.timescale,
+    judgmentInMs: sim.director.realMsUntil(Math.floor(sim.clockMs / DAY_MS) * DAY_MS + DAY_MS),
     lairsHome: sim.monsters().filter((m) => m.state === 'rest' && sim.byRole(`lair:${m.monster!.region}`)?.tags.includes('found')).map((m) => m.monster!.region),
     devMonsters: showMonsters ? sim.monsters().map((m) => {
       const t = m.target >= 0 ? sim.ents.get(m.target) : undefined;
@@ -311,6 +287,7 @@ function sendVillagers() {
   if (!monsterRoster.length) monsterRoster = sim.monsters().map((m) => ({ id: m.id, name: m.name!, archetype: m.monster!.archetype, region: m.monster!.region }));
   const monsters: MonsterCard[] = monsterRoster.map((r) => {
     const m = sim.ents.get(r.id);
+    if (m?.name) r.name = m.name;
     const lair = sim.byRole(`lair:${r.region}`);
     const alive = !!m && m.kind === 'monster';
     const M = alive ? m!.monster! : null;
@@ -363,7 +340,6 @@ function tickOnce() {
   sendWalkCost();
   if (sim.tick % 5 === 0) sendHud();
   if (sim.tick % 5 === 0 && inspectId !== null) sendInspect();
-  if (sim.tick % 30 === 0) sendStats();
   if (sim.tick % 25 === 0) sendVillagers();
   if (sim.tick % 300 === 0) saveReason ??= 'autosave';
   if (saveReason) {
@@ -413,10 +389,6 @@ function inspectLines(e: Entity): InspectInfo {
     lines.push("Dagon's altar. The monsters bring their captives here.");
   } else if (e.kind === 'animal') {
     title = `Wild ${e.animal!.species}`;
-  } else if (e.owner) {
-    const m = island!.manifest.find((x) => x.id === e.owner);
-    title = e.kind;
-    if (m) lines.push(`A creation: ${m.title}`);
   }
   return { id: e.id, name: e.name, kind: e.kind, title, lines, hp: e.inhabitant ? e.hp : undefined, maxHp: e.inhabitant ? sim.maxHp(e) : undefined };
 }
@@ -430,15 +402,6 @@ function sendInspect() {
     return;
   }
   post({ type: 'inspect', info: inspectLines(e) });
-}
-
-function sendStats() {
-  const stats: ModuleStat[] = island!.runtime.mods.map((m) => {
-    const s = { id: m.id, status: m.status, faultsToday: m.faultDay === island!.sim.day ? m.faultCount : 0, msPerTick: m.timeMs / 30 };
-    m.timeMs = 0;
-    return s;
-  });
-  post({ type: 'moduleStats', stats });
 }
 
 /** Catch up a gap (R1): short gaps tick by tick, long gaps through the resolver. */
@@ -458,7 +421,6 @@ function catchUp(clockNow: number, realMs: number) {
     sendFullState();
     return;
   }
-  island!.runtime.schedules = [];
   const summary = resolveAway(sim, gapClock, realGap || gapClock / sim.timescale);
   sim.lastRealMs = realMs;
   post({ type: 'away', summary });
@@ -492,13 +454,12 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         paused = false;
         if (msg.save) {
           const world = JSON.parse(msg.save) as SavedWorld;
-          const sources = Object.fromEntries(msg.modules.map((m) => [m.id, m.source]));
-          island = await Island.load(world, sources, loader, runtimeOpts, msg.quarantine ?? []);
+          island = await Island.load(world);
           // the game speed is the client's to set: older saves ran on the real clock
           island.sim.timescale = msg.timescale;
           island.sim.msPerTick = MS_PER_REAL_TICK * msg.timescale;
         } else {
-          island = Island.create(msg.seed, msg.clockMs, msg.timescale, runtimeOpts, msg.terrain ?? null);
+          island = Island.create(msg.seed, msg.clockMs, msg.timescale, msg.terrain ?? null);
           island.sim.lastRealMs = msg.realMs;
         }
         island.sim.revealAll = !!msg.reveal;
@@ -508,7 +469,7 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         busy = false;
         if (msg.save) catchUp(msg.clockMs, msg.realMs);
         sendFullState();
-        if (msg.quarantine?.length || !msg.save) save('init');
+        if (!msg.save) save('init');
         lastLoop = hostNow();
         break;
       }
@@ -530,7 +491,6 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         if (a.kind === 'offerLamb') err = offerLamb(sim);
         else if (a.kind === 'offerDragged') err = offerDragged(sim);
         else if (a.kind === 'offerVillager') err = offerVillager(sim, a.id);
-        else if (a.kind === 'pray') setPrayer(sim, a.text);
         else if (a.kind === 'setJob') {
           const v = sim.ents.get(a.id);
           if (v?.human && v.id !== sim.championId) v.human.nextJob = a.job === v.human.job ? undefined : a.job;
@@ -542,43 +502,6 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         saveReason = 'action';
         break;
       }
-      case 'install': {
-        busy = true;
-        const sim = island!.sim;
-        try {
-          const def = await loader(msg.id, msg.source);
-          island!.install(msg.id, def);
-          sim.creations.push(msg.record);
-          sim.domainHistory[msg.record.god].push({ night: msg.night, domain: msg.record.domain });
-          if (msg.record.domain === 'fundamental') {
-            const hit = sim.missingSystems.find((s) => msg.record.title.toLowerCase().includes(s.split(' ')[0].toLowerCase()));
-            sim.missingSystems = sim.missingSystems.filter((s) => s !== hit);
-          }
-          sim.pendingCreations = sim.pendingCreations.filter((r) => r.night !== msg.night);
-          sim.log(msg.record.announcement, 3, 'god', 'creation');
-          post({ type: 'installed', id: msg.id, ok: true });
-          sendDefs(true);
-          save('creation');
-        } catch (err) {
-          post({ type: 'installed', id: msg.id, ok: false, error: (err as Error).message });
-        } finally {
-          busy = false;
-        }
-        sendHud();
-        break;
-      }
-      case 'creationFailed': {
-        const sim = island!.sim;
-        sim.pendingCreations = sim.pendingCreations.filter((r) => r.night !== msg.night);
-        sendHud();
-        save('creation-failed');
-        break;
-      }
-      case 'setModuleStatus':
-        island!.runtime.setStatus(msg.id, msg.status);
-        island!.syncManifest();
-        save('status');
-        break;
       case 'requestSave':
         if (island) save('requested');
         break;
@@ -598,6 +521,13 @@ listen('message', async (ev: MessageEvent<MainToSim>) => {
         startRaid(island!.sim);
         flushOut();
         sendHud();
+        break;
+      }
+      case 'devEvent': {
+        const sim = island!.sim;
+        if (msg.op === 'fire' && msg.id) sim.director.fire(msg.id);
+        if (msg.op === 'end' && msg.iid !== undefined) sim.director.end(msg.iid);
+        flushOut(); sendHud(); save('dev-event');
         break;
       }
       case 'devJudge': {

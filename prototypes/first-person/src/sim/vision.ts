@@ -60,7 +60,7 @@ export function updateVision(sim: Sim, initial = false) {
   const night = sim.light < 0.5;
   const villR = 3 + 4 * sim.light;
   for (const h of sim.ents.values()) {
-    if (h.kind !== 'human' || h.hidden || h.id === sim.championId || h.state === 'captive') continue;
+    if (h.kind !== 'human' || h.faction !== 'human' || h.hidden || h.id === sim.championId || h.state === 'captive') continue;
     const inside = Math.hypot(h.x - V.x, h.z - V.z) < L.wallRadius + 1;
     eyes.push({ x: h.x, z: h.z, r: inside && night ? 10 : h.human?.job === 'guard' ? Math.max(villR, 8) : villR });
   }

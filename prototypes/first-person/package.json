@@ -27,7 +27,6 @@
   },
   "dependencies": {
     "@series-inc/rundot-game-sdk": "5.29.1",
-    "acorn": "^8.19.0",
     "three": "^0.186.1"
   },
   "devDependencies": {

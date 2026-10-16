@@ -23,7 +23,7 @@ import { now, START } from './helpers';
 
 /** seed 1 on the default terraformer island: it has a nephil, a ziz and a saraph */
 function world(arch = 'nephil') {
-  const island = Island.create(1, START, 1, { now }, DEFAULT_SETTINGS);
+  const island = Island.create(1, START, 1, DEFAULT_SETTINGS);
   const sim = island.sim;
   const c = sim.champion()!;
   const m = sim.monsters().find((e) => e.monster!.archetype === arch)!;

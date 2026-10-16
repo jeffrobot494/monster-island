@@ -1,6 +1,8 @@
 // Combat and the violent death system (§7): zones, crippling, severing, downed, death types, corpses, XP.
 import type { Sim, DeathInfo } from './sim';
 import type { DeathType, DmgType, Entity, Zone } from './types';
+import { surrender } from './events/turncoat';
+import { scaleMul } from './events/entity-effects';
 import { ARCH } from './monsters-gen';
 import { calDay } from './clock';
 import { onChampionDied } from './champion';
@@ -96,7 +98,6 @@ export interface DamageOpts {
   zone?: Zone;
   sourceId?: number;
   deathType?: DeathType;
-  noRules?: boolean;
   /** extra multiplier applied before rules (enrage, ambush) */
   mul?: number;
 }
@@ -108,20 +109,8 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
   if (!sim.ents.has(t.id) || t.hp <= 0) return { killed: false, downed: false, dealt: 0 };
   const src = o.sourceId !== undefined ? sim.ents.get(o.sourceId) : undefined;
   let d = amount * (o.mul ?? 1);
-  if (!o.noRules && sim.damageRules.length) {
-    const info = { amount: d, type: String(o.type), targetKind: t.kind, targetFaction: t.faction, sourceKind: src?.kind ?? 'none', sourceFaction: src?.faction };
-    for (const r of sim.damageRules) {
-      let m: number | undefined;
-      try {
-        m = r.fn(info);
-      } catch {
-        m = undefined;
-      }
-      if (typeof m === 'number' && Number.isFinite(m) && m >= 0) d *= Math.min(10, m);
-    }
-  }
   if (!(d > 0)) return { killed: false, downed: false, dealt: 0 };
-  if (t.id === sim.championId && src && src.kind !== 'human') sim.out.hurt = (sim.out.hurt ?? 0) + d;
+  if (t.id === sim.championId && src && src.faction !== t.faction) sim.out.hurt = (sim.out.hurt ?? 0) + d;
   const max = sim.maxHp(t);
   const before = t.hp;
   const isChamp = t.id === sim.championId;
@@ -170,8 +159,9 @@ export function applyDamage(sim: Sim, t: Entity, amount: number, o: DamageOpts):
     return { killed: true, downed: false, dealt, zone, severed: !!severed };
   }
   // downed: crossing 20 % from above
-  if (t.inhabitant && t.state !== 'downed' && t.state !== 'bound' && t.state !== 'captive' && before > max * 0.2 && t.hp <= max * 0.2) {
+  if (t.inhabitant && !t.unit && t.state !== 'downed' && t.state !== 'bound' && t.state !== 'captive' && (before > max * 0.2 || t.tags.includes('turncoat')) && t.hp <= max * 0.2) {
     if (!(isChamp && sim.invincible)) {
+      if (t.tags.includes('turncoat')) { surrender(sim, t); return {killed:false,downed:false,dealt,zone,severed:!!severed}; }
       setDowned(sim, t);
       return { killed: false, downed: true, dealt, zone, severed: !!severed };
     }
@@ -258,7 +248,7 @@ export function kill(sim: Sim, e: Entity, info: DeathInfo) {
   if (e.kind === 'monster') {
     sim.stats.monsterKills++;
     if (e.monster!.alt) e.monster!.alt = 0; // a flyer killed in the air drops
-    if (src?.kind === 'human') gainXp(sim, src, 50);
+    if (src?.faction === 'human') gainXp(sim, src, 50);
     const m = e.monster!;
     for (const nid of m.neighbors) {
       const n = sim.ents.get(nid);
@@ -273,7 +263,7 @@ export function kill(sim: Sim, e: Entity, info: DeathInfo) {
     sim.stats.villagerDeaths++;
     dropSpears(sim, e);
     if (e.shape === 'guard-bare') e.shape = 'guard';
-    if (src?.kind === 'monster') gainXp(sim, src, 25);
+    if (src?.faction === 'monster' && e.faction !== src.faction) gainXp(sim, src, 25);
     const how = src ? `${DEATH_VERB[deathType]} by ${src.name ?? src.kind}` : DEATH_VERB[deathType];
     const job = e.human!.job === 'champion' ? 'the champion' : e.human!.job;
     sim.log(`${e.name}, ${job}, was ${how}${where ? ` in ${where}` : ''}.`, e.id === sim.championId ? 3 : 2, 'core', 'death');
@@ -494,7 +484,7 @@ export function xpToNext(e: Entity): number {
 }
 
 export function gainXp(sim: Sim, e: Entity, n: number) {
-  if (!(n > 0) || !sim.ents.has(e.id)) return;
+  if (e.unit || !(n > 0) || !sim.ents.has(e.id)) return;
   e.xp += n;
   while (e.xp >= xpToNext(e)) {
     e.xp -= xpToNext(e);
@@ -507,7 +497,7 @@ export function levelUp(sim: Sim, e: Entity) {
   e.level++;
   if (e.kind === 'monster') {
     e.base.maxHp = monsterMaxHp(e);
-    e.scale = ARCH[e.monster!.archetype].scale * Math.pow(1.05, e.level - 1);
+    e.scale = ARCH[e.monster!.archetype].scale * Math.pow(1.05, e.level - 1) * scaleMul(e);
   } else e.base.maxHp = humanMaxHp(e.level);
   const after = sim.maxHp(e);
   e.hp = Math.min(after, e.hp + (after - before));

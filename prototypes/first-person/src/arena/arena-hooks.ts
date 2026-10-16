@@ -2,7 +2,6 @@
 // the island for the arena: Island.create builds an ArenaSim and its director, and a message listener of its own
 // takes the arena's commands. The game's worker runs as it is around it.
 import { Island } from '../sim/island';
-import type { RuntimeOptions } from '../sim/module-runtime';
 import { hostPost } from '../workers/harden';
 import { ArenaSim } from './arena-sim';
 import { ArenaDirector } from './director';
@@ -12,10 +11,10 @@ let config: ArenaConfig = DEFAULT_CONFIG;
 let island: Island | null = null;
 let director: ArenaDirector | null = null;
 
-function createArena(seed: number, clockMs: number, timescale: number, opts: RuntimeOptions): Island {
+function createArena(seed: number, clockMs: number, timescale: number): Island {
   const sim = new ArenaSim(seed);
   sim.build(config.shape, clockMs, timescale);
-  island = new Island(sim, opts);
+  island = new Island(sim);
   director = new ArenaDirector(sim, config.rules);
   director.reset();
   sim.listeners.push({
@@ -29,9 +28,9 @@ function createArena(seed: number, clockMs: number, timescale: number, opts: Run
   return island;
 }
 
-Island.create = (seed, clockMs, timescale, opts) => createArena(seed, clockMs, timescale, opts);
+Island.create = (seed, clockMs, timescale) => createArena(seed, clockMs, timescale);
 // a watchdog restart hands the worker the last save: the arena starts over instead
-Island.load = async (world, _sources, _loader, opts) => createArena(world.core.seed, world.core.clockMs, world.core.timescale, opts);
+Island.load = async (world) => createArena(world.core.seed, world.core.clockMs, world.core.timescale);
 
 self.addEventListener('message', (ev: MessageEvent) => {
   const msg = ev.data as { type: string; arena?: unknown } | ArenaCommand;

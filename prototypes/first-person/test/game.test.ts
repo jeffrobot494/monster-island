@@ -4,15 +4,15 @@ import { TileGrid } from '../src/sim/world';
 import { generateIsland } from '../src/sim/island-gen';
 import { generateMonsters, neighborGraph } from '../src/sim/monsters-gen';
 import { issueOrder } from '../src/sim/champion';
-import { offerDragged, offerLamb, offerVillager as offerVillagerFn, judgment, scaleFor } from '../src/sim/favor';
+import { offerDragged, offerLamb, offerVillager as offerVillagerFn, judgment } from '../src/sim/favor';
 import { applyDamage } from '../src/sim/combat';
 import { resolveAway } from '../src/sim/offline';
-import { reachabilityProblem } from '../src/sim/validator';
+import { reachabilityProblem } from '../src/sim/reachability';
 import { serializeCore } from '../src/sim/serialize';
 import { HOUR_MS, DAY_MS } from '../src/sim/clock';
 import { now, START } from './helpers';
 
-const make = (seed = 1, ts = 1) => Island.create(seed, START, ts, { now });
+const make = (seed = 1, ts = 1) => Island.create(seed, START, ts);
 
 describe('generation', () => {
   it('20 seeds: regions, reachable lairs, 6 distinct monsters, graph degrees 2–3', () => {
@@ -119,19 +119,19 @@ describe('capture loop', () => {
 });
 
 describe('judgment', () => {
-  it('ties rest, scales follow thresholds, the queue is capped, favor resets', () => {
+  it('ties rest, monster verdicts advance the deck, favor resets', () => {
     const sim = make(1).sim;
-    expect([99, 100, 299, 300, 599, 600, 999, 1000].map(scaleFor)).toEqual([1, 2, 2, 3, 3, 4, 4, 5]);
     sim.favor = { human: 50, monster: 50 };
     judgment(sim);
-    expect(sim.pendingCreations.length).toBe(0);
+    expect(sim.events.deckPos).toBe(0);
+    sim.director.defs = [{id:'test', title:'Test', announce:'Test omen', start:'now', duration:{hours:1}, stacking:'skip', effects:[]}];
+    sim.deck = {order:['test'],mode:'sequential',onExhausted:'loop'};
     for (let k = 0; k < 5; k++) {
       sim.nightIndex++;
       sim.favor = { human: 0, monster: 650 };
       judgment(sim);
     }
-    expect(sim.pendingCreations.length).toBe(3);
-    expect(sim.pendingCreations[0].scale).toBe(4);
+    expect(sim.events.deckPos).toBe(1);
     expect(sim.favor).toEqual({ human: 0, monster: 0 });
     // a lamb at the altar
     const c = sim.champion()!;
