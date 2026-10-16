@@ -1,0 +1,630 @@
+<title>Night Events Editor</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: three working panes — the deck (order of curses), the selected event's form, and a live preview (night timeline, checks, generated defs.ts). */
+:root {
+  --bg: #eceef3; --panel: #ffffff; --sunk: #f5f6f9; --ink: #1b1f2e; --muted: #5c6377; --line: #d6dae4;
+  --accent: #8a5a1c; --accent-ink: #ffffff; --accent-soft: #f3e7d3;
+  --night: #303a6e; --day: #e9dfc4; --ramp: #1b1f2e; --rate: #4f74b8;
+  --ok: #2f7a4f; --warn: #9a620f; --bad: #b23a3a;
+  --f-display: "Marcellus", "Trajan Pro", Georgia, serif;
+  --f-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1119; --panel: #171a26; --sunk: #12141e; --ink: #e5e7ef; --muted: #959cb2; --line: #2a2f43;
+  --accent: #d8a75e; --accent-ink: #1a1306; --accent-soft: #3a2d19;
+  --night: #3a4580; --day: #4a4532; --ramp: #c8cce0; --rate: #7d9de0;
+  --ok: #5cbf86; --warn: #e0a548; --bad: #e57373; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1119; --panel: #171a26; --sunk: #12141e; --ink: #e5e7ef; --muted: #959cb2; --line: #2a2f43;
+  --accent: #d8a75e; --accent-ink: #1a1306; --accent-soft: #3a2d19;
+  --night: #3a4580; --day: #4a4532; --ramp: #c8cce0; --rate: #7d9de0;
+  --ok: #5cbf86; --warn: #e0a548; --bad: #e57373; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 32px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 400; margin: 0; text-wrap: balance }
+h1 { font-size: 1.6rem; letter-spacing: .01em }
+h2 { font-size: 1.15rem }
+h3 { font-size: .72rem; font-family: var(--f-body); font-weight: 600; text-transform: uppercase; letter-spacing: .09em; color: var(--muted) }
+button, input, select, textarea { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+
+.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; max-width: 1440px; margin: 0 auto 14px }
+.top p { margin: 2px 0 0; color: var(--muted) }
+.top .actions { display: flex; gap: 8px; flex-wrap: wrap }
+.mock { font-size: .72rem; padding: 2px 8px; border: 1px dashed var(--muted); border-radius: 99px; color: var(--muted); margin-left: 8px; vertical-align: middle; font-family: var(--f-body) }
+
+.grid { display: grid; grid-template-columns: 260px minmax(0, 1fr) 380px; gap: 14px; max-width: 1440px; margin: 0 auto; align-items: start }
+@media (max-width: 1150px) { .grid { grid-template-columns: 240px minmax(0, 1fr) } .preview { grid-column: 1 / -1 } }
+@media (max-width: 720px) { .grid { grid-template-columns: minmax(0, 1fr) } }
+.pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); min-width: 0 }
+.pane > header { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px }
+.pane > .body { padding: 14px; display: grid; gap: 16px }
+
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r); padding: 6px 11px; cursor: pointer; white-space: nowrap }
+.btn:hover { border-color: var(--muted) }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600 }
+.btn.small { padding: 3px 8px; font-size: .8rem }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--muted) }
+.btn.ghost:hover { color: var(--bad) }
+.icon { width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; line-height: 1 }
+
+/* deck */
+.deck { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; counter-reset: d }
+.deck li { display: grid; grid-template-columns: 22px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--sunk); cursor: pointer }
+.deck li.sel { border-color: var(--accent); background: var(--accent-soft) }
+.deck li.off { opacity: .55 }
+.deck li .n { font: 500 .75rem var(--f-mono); color: var(--muted); text-align: right }
+.deck li .t { font-family: var(--f-display); font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.deck li .meta { grid-column: 2; font-size: .75rem; color: var(--muted) }
+.deck li .mv { grid-row: 1 / span 2; grid-column: 3; display: flex; flex-direction: column; gap: 2px }
+.deck .next { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 600; margin-left: 6px }
+.bench { display: grid; gap: 6px }
+.bench .row { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: .85rem }
+
+/* forms */
+.field { display: grid; gap: 4px; min-width: 0 }
+.field > label, .lbl { font-size: .74rem; color: var(--muted); font-weight: 500 }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px }
+input[type=text], input[type=number], select, textarea { width: 100%; background: var(--sunk); border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; min-width: 0 }
+input[type=number] { font-family: var(--f-mono); font-variant-numeric: tabular-nums }
+input[type=color] { width: 100%; height: 32px; border: 1px solid var(--line); border-radius: 5px; background: var(--sunk); padding: 2px }
+textarea { resize: vertical; min-height: 54px }
+.inline { display: flex; gap: 6px; align-items: center }
+.inline > * { flex: 1; min-width: 0 }
+.check { display: flex; gap: 6px; align-items: center; font-size: .85rem }
+.title-in { font-family: var(--f-display); font-size: 1.35rem; background: transparent !important; border-color: transparent !important; padding-left: 0 !important }
+.title-in:hover, .title-in:focus { border-color: var(--line) !important; padding-left: 8px !important }
+
+.block { display: grid; gap: 10px }
+.block > .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); padding-bottom: 6px }
+
+.card { border: 1px solid var(--line); border-radius: var(--r); background: var(--sunk); padding: 10px; display: grid; gap: 8px }
+.card .ch { display: flex; align-items: center; gap: 8px }
+.card .ch .kind { font: 500 .8rem var(--f-mono); padding: 2px 7px; border-radius: 4px; background: var(--panel); border: 1px solid var(--line) }
+.card .ch .desc { color: var(--muted); font-size: .78rem; flex: 1; min-width: 0 }
+.card.global { border-left: 3px solid var(--rate) }
+.card.entity { border-left: 3px solid var(--accent) }
+.tag { font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 600; color: var(--muted) }
+
+.addbar { display: flex; flex-wrap: wrap; gap: 6px }
+.addbar select { flex: 1; min-width: 160px }
+
+/* preview */
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px }
+.stat { background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r); padding: 8px }
+.stat b { display: block; font: 500 1.05rem var(--f-mono); font-variant-numeric: tabular-nums }
+.stat span { font-size: .7rem; color: var(--muted) }
+.tl svg { width: 100%; height: auto; display: block }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .72rem; color: var(--muted) }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px }
+.issues { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px }
+.issues li { display: flex; gap: 8px; align-items: baseline; font-size: .84rem }
+.chip { font-size: .64rem; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; padding: 1px 6px; border-radius: 99px; border: 1px solid currentColor; flex: none }
+.chip.ok { color: var(--ok) } .chip.warn { color: var(--warn) } .chip.bad { color: var(--bad) }
+pre.code { margin: 0; background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; font: .74rem/1.5 var(--f-mono); overflow: auto; max-height: 360px; white-space: pre }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden }
+.seg button { border: 0; background: transparent; padding: 4px 10px; cursor: pointer; font-size: .8rem; color: var(--muted) }
+.seg button[aria-pressed=true] { background: var(--accent-soft); color: var(--ink) }
+
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: var(--r); font-size: .85rem; max-width: calc(100% - 32px) }
+@media (prefers-reduced-motion: no-preference) { .toast { transition: opacity .2s } }
+</style>
+
+<div class="top">
+  <div>
+    <h1>Night Events <span class="mock">Mockup · not connected to the game</span></h1>
+    <p>When Dagon wins the midnight Judgment, the next event in the deck falls on the island.</p>
+  </div>
+  <div class="actions">
+    <button class="btn" id="reset">Reset to plan defaults</button>
+    <button class="btn" id="fire">Fire in game</button>
+    <button class="btn primary" id="copy">Copy defs.ts</button>
+  </div>
+</div>
+
+<div class="grid">
+  <section class="pane" aria-label="Deck">
+    <header><h2>Deck</h2></header>
+    <div class="body">
+      <div class="field">
+        <span class="lbl">Order</span>
+        <div class="seg" id="mode" role="group" aria-label="Deck order">
+          <button data-v="sequential">Sequential</button><button data-v="shuffle">Shuffle</button>
+        </div>
+      </div>
+      <ol class="deck" id="deck"></ol>
+      <div class="field">
+        <label for="exhausted">After the last event</label>
+        <select id="exhausted">
+          <option value="loop">Loop back to the first</option>
+          <option value="repeatLast">Repeat the last one</option>
+          <option value="stop">Stop: no more curses</option>
+        </select>
+      </div>
+      <div class="block">
+        <div class="head"><h3>Not in the deck</h3></div>
+        <div class="bench" id="bench"></div>
+        <button class="btn small" id="newEvent">New event</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" aria-label="Event" id="editor"></section>
+
+  <section class="pane preview" aria-label="Preview">
+    <header><h2>Preview</h2><span class="tag" id="pvName"></span></header>
+    <div class="body">
+      <div class="stats" id="stats"></div>
+      <div class="tl">
+        <h3 style="margin-bottom:6px">Two nights · the curse's night and the next</h3>
+        <div id="timeline"></div>
+        <div class="legend">
+          <span><i style="background:var(--night)"></i>Normal night</span>
+          <span><i style="background:var(--accent)"></i>Event active</span>
+          <span><i style="background:var(--ramp)"></i>Darkness</span>
+          <span><i style="background:var(--rate)"></i>Slowed clock</span>
+        </div>
+      </div>
+      <div class="block">
+        <div class="head"><h3>Checks</h3></div>
+        <ul class="issues" id="issues"></ul>
+      </div>
+      <div class="block">
+        <div class="head"><h3>defs.ts</h3>
+          <div class="seg" id="codeScope" role="group" aria-label="Code scope"><button data-v="event">This event</button><button data-v="all">All</button></div>
+        </div>
+        <pre class="code" id="code"></pre>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+// ---- primitive registry: what each effect type takes (mirrors primitives.ts in the plan) ----
+const P = {
+  statMod:     { scope: 'entity', desc: 'Multiply a stat while active', params: { who: 'who', stat: ['select', ['speed','strength','maxHp','sight']], mul: ['num', 0.1, 20, 0.1] } },
+  tag:         { scope: 'entity', desc: 'Flag read by the AI (e.g. no-retreat)', params: { who: 'who', tag: ['text'] } },
+  fx:          { scope: 'entity', desc: 'Visual aura on the rig', params: { who: 'who', fx: ['select', ['frenzy','turncoat','ascended']] } },
+  scale:       { scope: 'entity', desc: 'Grow or shrink the body', params: { who: 'who', mul: ['num', 0.3, 4, 0.05] } },
+  rename:      { scope: 'entity', desc: 'Permanent title, {name} = old name', params: { who: 'who', pattern: ['text'] } },
+  healFull:    { scope: 'entity', desc: 'Restore HP and limbs', params: { who: 'who' } },
+  spawnEscort: { scope: 'entity', desc: 'Spawn units that follow each leader; maxFood caps what the whole event steals', params: { who: 'who', unit: ['select', ['jackal']], count: ['range', 0, 12], maxFood: ['num', 0, 1000, 10], awayFoodPerHour: ['num', 0, 100, 1] } },
+  convert:     { scope: 'entity', desc: 'Switch team for the duration', params: { who: 'who', to: ['select', ['monster','human']], brain: ['select', ['turncoat']], fx: ['select', ['turncoat','frenzy','ascended']] } },
+  darkness:    { scope: 'global', desc: 'Darken by clock hour (hour:amount, …)', params: { ramp: ['ramp'] } },
+  clockRate:   { scope: 'global', desc: 'Slow the clock inside a window', params: { from: ['hour'], to: ['hour'], rate: ['num', 0.1, 2, 0.05] } },
+  atmosphere:  { scope: 'global', desc: 'Fog and weather', params: { fogDensity: ['num', 0, 0.2, 0.01], fogColor: ['color'] } },
+  windowBonus: { scope: 'global', desc: 'Widen monster hunting hours', params: { hours: ['num', 0, 6, 0.5], reroll: ['bool'] } },
+};
+const DEFAULTS = {
+  statMod: { stat: 'speed', mul: 1.5 }, tag: { tag: 'no-retreat' }, fx: { fx: 'frenzy' }, scale: { mul: 1.4 }, rename: { pattern: '{name} the Ascended' },
+  healFull: {}, spawnEscort: { unit: 'jackal', count: [2, 4], maxFood: 150, awayFoodPerHour: 10 }, convert: { to: 'monster', brain: 'turncoat', fx: 'turncoat' },
+  darkness: { ramp: [[14, 0], [16, 0.95], [6, 0.95], [8.5, 0]] }, clockRate: { from: 16, to: 6, rate: 0.6 },
+  atmosphere: { fogDensity: 0.08, fogColor: '#1a1f2a' }, windowBonus: { hours: 2, reroll: true },
+};
+
+// ---- the plan's five events (docs/night-events-plan.md) ----
+const PLAN = {
+  deck: { order: ['long-night', 'jackals', 'frenzy', 'turncoats', 'ascension'], mode: 'sequential', onExhausted: 'loop' },
+  events: [
+    { id: 'long-night', title: 'The Long Night', armText: 'Dagon swallows the sun. Tomorrow the dark comes early, and it will not hurry.',
+      announce: 'The sun sickens in the sky. The long night is coming.', endText: 'The long night ends at last.',
+      start: { atHour: 14 }, duration: { untilHour: 9 }, stacking: 'refresh', targets: {},
+      effects: [ { type: 'darkness', ramp: [[14, 0], [16, 0.95], [6, 0.95], [8.5, 0]] }, { type: 'clockRate', from: 16, to: 6, rate: 0.6 },
+                 { type: 'atmosphere', fogDensity: 0.08, fogColor: '#1a1f2a' }, { type: 'windowBonus', hours: 2, reroll: true } ] },
+    { id: 'jackals', title: 'Jackal Escort', announce: 'Jackals come yipping out of the dark, running at the heels of every beast.', endText: 'The jackals slink away at dawn.',
+      start: 'now', duration: { until: 'dawn' }, stacking: 'refresh', targets: { leaders: { kind: 'monster' } },
+      effects: [ { type: 'spawnEscort', who: 'leaders', unit: 'jackal', count: [2, 4], maxFood: 150, awayFoodPerHour: 10 } ] },
+    { id: 'frenzy', title: 'Frenzy', announce: 'Dagon drinks deep. The monsters go mad with blood.', endText: 'The frenzy breaks with the dawn.',
+      start: 'now', duration: { until: 'dawn' }, stacking: 'refresh', targets: { monsters: { kind: 'monster' } },
+      effects: [ { type: 'statMod', who: 'monsters', stat: 'speed', mul: 1.5 }, { type: 'statMod', who: 'monsters', stat: 'strength', mul: 1.5 },
+                 { type: 'fx', who: 'monsters', fx: 'frenzy' }, { type: 'tag', who: 'monsters', tag: 'no-retreat' } ] },
+    { id: 'turncoats', title: 'Turncoats', announce: 'Some in the village hear Dagon whisper, and answer.', endText: 'With the dawn the turncoats come back to themselves.',
+      start: 'now', duration: { until: 'dawn' }, stacking: 'skip',
+      targets: { traitors: { kind: 'human', faction: 'human', pick: 'random', fraction: [0.10, 0.15], min: 1, includeHidden: true } },
+      effects: [ { type: 'convert', who: 'traitors', to: 'monster', brain: 'turncoat', fx: 'turncoat' } ] },
+    { id: 'ascension', title: 'Ascension', announce: 'Dagon lays a hand on the mightiest of his children.', endText: '',
+      start: 'now', duration: 'permanent', stacking: 'stack', targets: { boss: { kind: 'monster', pick: 'strongest', withoutTag: 'ascended', count: 1 } },
+      effects: [ { type: 'statMod', who: 'boss', stat: 'maxHp', mul: 10 }, { type: 'healFull', who: 'boss' }, { type: 'scale', who: 'boss', mul: 1.4 },
+                 { type: 'rename', who: 'boss', pattern: '{name} the Ascended' }, { type: 'tag', who: 'boss', tag: 'ascended' }, { type: 'fx', who: 'boss', fx: 'ascended' } ] },
+  ],
+};
+
+const KEY = 'night-events-editor-v1';
+let S, sel, codeScope = 'event';
+function load() {
+  try { const raw = localStorage.getItem(KEY); if (raw) { S = JSON.parse(raw); migrate(); return; } } catch {}
+  S = structuredClone(PLAN);
+}
+// Saves from before the review: fill new params with defaults; split Long Night's old midnight text into armText + announce.
+function migrate() {
+  for (const e of S.events) {
+    for (const f of e.effects) for (const [k, v] of Object.entries(DEFAULTS[f.type] ?? {})) if (f[k] === undefined) f[k] = structuredClone(v);
+    const plan = PLAN.events.find((p) => p.id === e.id);
+    if (plan?.armText && e.armText === undefined && e.announce === plan.armText) { e.armText = plan.armText; e.announce = plan.announce; }
+  }
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+load();
+sel = S.deck.order[0] ?? S.events[0]?.id;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const ev = () => S.events.find((e) => e.id === sel);
+const hh = (h) => { h = ((h % 24) + 24) % 24; const H = Math.floor(h), M = Math.round((h - H) * 60); return `${String(H).padStart(2, '0')}:${String(M).padStart(2, '0')}`; };
+
+function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (el.hidden = true), 2600); }
+
+// ---- time math (same rules as director.ts) ----
+// The verdict falls at 00:00. Timeline x runs 12:00 (day before) → 12:00 (next day); returns hours since 12:00.
+function span(e) {
+  const at = (h) => (h >= 12 ? h - 12 : h + 12);              // hour → timeline position (night side)
+  let s = 12;                                                  // 'now' = midnight
+  if (e.start && e.start.atHour !== undefined) s = at(e.start.atHour) <= 12 ? at(e.start.atHour) + 24 : at(e.start.atHour);
+  const d = e.duration;
+  let end;
+  if (d === 'permanent') end = Infinity;
+  else if (d.until === 'dawn') { end = 18; while (end <= s) end += 24; }
+  else if (d.untilHour !== undefined) { end = at(d.untilHour); while (end <= s) end += 24; }
+  else end = s + (d.hours ?? 0);
+  return { s, end };
+}
+function darknessAt(ramp, h) {
+  if (!ramp?.length) return 0;
+  const pts = ramp.map(([hr, a]) => [hr, a]);
+  // unwrap hours onto a monotonic line starting at the first point
+  let base = pts[0][0], prev = base; const line = [[base, pts[0][1]]];
+  for (let i = 1; i < pts.length; i++) { let x = pts[i][0]; while (x < prev) x += 24; line.push([x, pts[i][1]]); prev = x; }
+  for (const k of [h, h + 24, h - 24]) {
+    if (k < line[0][0] || k > line[line.length - 1][0]) continue;
+    for (let i = 1; i < line.length; i++) if (k <= line[i][0]) { const [x0, y0] = line[i - 1], [x1, y1] = line[i]; return y0 + (y1 - y0) * ((k - x0) / ((x1 - x0) || 1)); }
+  }
+  return 0;
+}
+const REAL_S_PER_HOUR = 20; // 8 real minutes per game day
+function stats(e) {
+  const { s, end } = span(e);
+  const cr = e.effects.find((f) => f.type === 'clockRate');
+  let real = null;
+  if (Number.isFinite(end)) {
+    real = 0;
+    for (let t = s; t < end; t += 0.25) {
+      const hour = (t + 12) % 24;
+      const inWin = cr && inWindow(hour, cr.from, cr.to);
+      real += (0.25 * REAL_S_PER_HOUR) / (inWin ? cr.rate || 1 : 1);
+    }
+  }
+  return { s, end, real };
+}
+function inWindow(h, a, b) { a = ((a % 24) + 24) % 24; b = ((b % 24) + 24) % 24; return a < b ? h >= a && h < b : h >= a || h < b; }
+
+// ---- deck ----
+function renderDeck() {
+  document.querySelectorAll('#mode button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === S.deck.mode)));
+  $('exhausted').value = S.deck.onExhausted;
+  $('deck').innerHTML = S.deck.order.map((id, i) => {
+    const e = S.events.find((x) => x.id === id);
+    if (!e) return '';
+    return `<li class="${id === sel ? 'sel' : ''}" data-id="${esc(id)}" tabindex="0">
+      <span class="n">${i + 1}</span><span class="t">${esc(e.title)}${i === 0 ? '<span class="next">next</span>' : ''}</span>
+      <span class="meta">${esc(startLabel(e))} → ${esc(durLabel(e))}</span>
+      <span class="mv"><button class="btn small icon" data-mv="-1" data-i="${i}" aria-label="Move up">↑</button><button class="btn small icon" data-mv="1" data-i="${i}" aria-label="Move down">↓</button></span>
+    </li>`;
+  }).join('');
+  const bench = S.events.filter((e) => !S.deck.order.includes(e.id));
+  $('bench').innerHTML = bench.length ? bench.map((e) => `<div class="row"><a href="#" data-pick="${esc(e.id)}" style="color:inherit">${esc(e.title)}</a><button class="btn small" data-add="${esc(e.id)}">Add to deck</button></div>`).join('')
+    : '<span class="lbl">Every event is in the deck.</span>';
+}
+const startLabel = (e) => (e.start === 'now' ? 'at midnight' : `at ${hh(e.start.atHour)}`);
+const durLabel = (e) => { const d = e.duration; return d === 'permanent' ? 'permanent' : d.until === 'dawn' ? 'dawn' : d.untilHour !== undefined ? hh(d.untilHour) : `${d.hours} h`; };
+
+$('deck').addEventListener('click', (x) => {
+  const mv = x.target.closest('[data-mv]');
+  if (mv) { const i = +mv.dataset.i, j = i + +mv.dataset.mv; const o = S.deck.order; if (j >= 0 && j < o.length) { [o[i], o[j]] = [o[j], o[i]]; commit(); } return; }
+  const li = x.target.closest('li'); if (li) { sel = li.dataset.id; renderAll(); }
+});
+$('deck').addEventListener('keydown', (x) => { if (x.key === 'Enter' && x.target.matches('li')) { sel = x.target.dataset.id; renderAll(); } });
+$('bench').addEventListener('click', (x) => {
+  const a = x.target.closest('[data-add]'); if (a) { S.deck.order.push(a.dataset.add); commit(); return; }
+  const p = x.target.closest('[data-pick]'); if (p) { x.preventDefault(); sel = p.dataset.pick; renderAll(); }
+});
+$('mode').addEventListener('click', (x) => { const b = x.target.closest('button'); if (b) { S.deck.mode = b.dataset.v; commit(); } });
+$('exhausted').addEventListener('change', (x) => { S.deck.onExhausted = x.target.value; commit(); });
+$('newEvent').addEventListener('click', () => {
+  let n = 1; while (S.events.some((e) => e.id === `new-event-${n}`)) n++;
+  S.events.push({ id: `new-event-${n}`, title: 'New event', announce: '', endText: '', start: 'now', duration: { until: 'dawn' }, stacking: 'refresh', targets: { monsters: { kind: 'monster' } }, effects: [] });
+  sel = `new-event-${n}`; commit();
+});
+
+// ---- editor ----
+function input(id, type, val, extra = '') {
+  if (type === 'bool') return `<label class="check"><input type="checkbox" id="${id}" ${val ? 'checked' : ''} ${extra}> yes</label>`;
+  return `<input id="${id}" type="${type}" value="${esc(val)}" ${extra}>`;
+}
+function selectEl(id, opts, val) { return `<select id="${id}">${opts.map((o) => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`; }
+
+function renderEditor() {
+  const e = ev(); const el = $('editor');
+  if (!e) { el.innerHTML = '<div class="body"><p class="lbl">Pick an event.</p></div>'; return; }
+  const inDeck = S.deck.order.includes(e.id);
+  const startKind = e.start === 'now' ? 'now' : 'atHour';
+  const d = e.duration, durKind = d === 'permanent' ? 'permanent' : d.until === 'dawn' ? 'dawn' : d.untilHour !== undefined ? 'untilHour' : 'hours';
+  const whoOpts = Object.keys(e.targets);
+  el.innerHTML = `
+    <header>
+      <div class="field" style="flex:1"><label for="f-title" class="lbl" hidden>Title</label><input id="f-title" class="title-in" type="text" value="${esc(e.title)}"></div>
+      <div class="inline" style="flex:none">
+        ${inDeck ? '<button class="btn small" id="f-bench">Take out of deck</button>' : '<button class="btn small" id="f-deck">Add to deck</button>'}
+        <button class="btn small ghost" id="f-del">Delete</button>
+      </div>
+    </header>
+    <div class="body">
+      <div class="row2">
+        <div class="field"><label for="f-id">Id</label><input id="f-id" type="text" value="${esc(e.id)}" style="font-family:var(--f-mono)"></div>
+        <div class="field"><label for="f-stack">If already active</label>${selectEl('f-stack', [['refresh', 'Refresh (extend to new end)'], ['stack', 'Stack a second copy'], ['skip', 'Skip']], e.stacking)}</div>
+      </div>
+      ${startKind === 'atHour' ? `<div class="field"><label for="f-arm">Warning at the Judgment (alert and chronicle, shown at the verdict)</label><textarea id="f-arm" placeholder="Players see this at midnight, hours before it starts">${esc(e.armText ?? '')}</textarea></div>` : ''}
+      <div class="field"><label for="f-ann">${startKind === 'atHour' ? 'Announcement when it starts' : 'Announcement (alert and chronicle)'}</label><textarea id="f-ann">${esc(e.announce)}</textarea></div>
+      <div class="field"><label for="f-end">Chronicle line when it ends</label><input id="f-end" type="text" value="${esc(e.endText ?? '')}" placeholder="Leave empty for permanent events"></div>
+
+      <div class="block">
+        <div class="head"><h3>When</h3></div>
+        <div class="row2">
+          <div class="field"><label for="f-sk">Starts</label>${selectEl('f-sk', [['now', 'At once (midnight)'], ['atHour', 'At an hour']], startKind)}</div>
+          ${startKind === 'atHour' ? `<div class="field"><label for="f-sh">Start hour</label>${input('f-sh', 'number', e.start.atHour, 'min="0" max="23.75" step="0.25"')}</div>` : ''}
+          <div class="field"><label for="f-dk">Lasts until</label>${selectEl('f-dk', [['dawn', 'Dawn (06:00)'], ['untilHour', 'An hour'], ['hours', 'A number of hours'], ['permanent', 'Forever']], durKind)}</div>
+          ${durKind === 'untilHour' ? `<div class="field"><label for="f-dh">End hour</label>${input('f-dh', 'number', d.untilHour, 'min="0" max="23.75" step="0.25"')}</div>` : ''}
+          ${durKind === 'hours' ? `<div class="field"><label for="f-dn">Hours</label>${input('f-dn', 'number', d.hours, 'min="0.5" max="96" step="0.5"')}</div>` : ''}
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="head"><h3>Targets</h3><button class="btn small" id="t-add">Add target set</button></div>
+        ${whoOpts.length ? whoOpts.map((name) => targetCard(name, e.targets[name])).join('') : '<p class="lbl" style="margin:0">No target sets. Global effects (darkness, clock, fog) don\'t need one.</p>'}
+      </div>
+
+      <div class="block">
+        <div class="head"><h3>Effects</h3><span class="lbl">${e.effects.length} effect${e.effects.length === 1 ? '' : 's'}</span></div>
+        ${e.effects.map((f, i) => effectCard(f, i, whoOpts)).join('')}
+        <div class="addbar">
+          <select id="fx-new" aria-label="Effect to add">
+            <optgroup label="On entities">${Object.entries(P).filter(([, p]) => p.scope === 'entity').map(([k, p]) => `<option value="${k}">${k}: ${esc(p.desc)}</option>`).join('')}</optgroup>
+            <optgroup label="On the world">${Object.entries(P).filter(([, p]) => p.scope === 'global').map(([k, p]) => `<option value="${k}">${k}: ${esc(p.desc)}</option>`).join('')}</optgroup>
+          </select>
+          <button class="btn" id="fx-add">Add effect</button>
+        </div>
+      </div>
+    </div>`;
+}
+function targetCard(name, t) {
+  const n = esc(name);
+  const fr = t.fraction, ct = t.count;
+  const amt = fr !== undefined ? 'fraction' : ct !== undefined ? 'count' : 'all';
+  return `<div class="card" data-target="${n}">
+    <div class="ch"><span class="kind">${n}</span><span class="desc">${esc(describeTarget(t))}</span><button class="btn small ghost" data-tdel="${n}">Remove</button></div>
+    <div class="row2">
+      <div class="field"><label for="t-${n}-kind">Kind</label>${selectEl(`t-${n}-kind`, ['monster', 'human', 'jackal'], t.kind ?? 'monster')}</div>
+      <div class="field"><label for="t-${n}-pick">Pick</label>${selectEl(`t-${n}-pick`, [['all', 'All of them'], ['random', 'At random'], ['strongest', 'The strongest']], t.pick ?? 'all')}</div>
+      <div class="field"><label for="t-${n}-amt">How many</label>${selectEl(`t-${n}-amt`, [['all', 'Every match'], ['count', 'A count'], ['fraction', 'A fraction']], amt)}</div>
+      ${amt === 'count' ? `<div class="field"><span class="lbl">Count</span><div class="inline">${input(`t-${n}-c`, 'number', Array.isArray(ct) ? ct[0] : ct, 'min="1" max="50"')}</div></div>` : ''}
+      ${amt === 'fraction' ? `<div class="field"><span class="lbl">Fraction (min – max)</span><div class="inline">${input(`t-${n}-f0`, 'number', fr[0], 'min="0" max="1" step="0.01" aria-label="Minimum fraction"')}${input(`t-${n}-f1`, 'number', fr[1], 'min="0" max="1" step="0.01" aria-label="Maximum fraction"')}</div></div>
+        <div class="field"><label for="t-${n}-min">At least</label>${input(`t-${n}-min`, 'number', t.min ?? 0, 'min="0" max="20"')}</div>` : ''}
+      <div class="field"><label for="t-${n}-wo">Skip if tagged</label>${input(`t-${n}-wo`, 'text', t.withoutTag ?? '', 'placeholder="e.g. ascended"')}</div>
+      ${t.kind === 'human' ? `<div class="field"><span class="lbl">Include villagers indoors</span>${input(`t-${n}-hid`, 'bool', t.includeHidden)}</div>` : ''}
+    </div>
+  </div>`;
+}
+function describeTarget(t) {
+  const k = t.kind === 'human' ? 'villagers' : t.kind === 'jackal' ? 'jackals' : 'monsters';
+  let s = t.pick === 'strongest' ? `the strongest ${k.replace(/s$/, '')}` : t.fraction ? `${Math.round(t.fraction[0] * 100)}–${Math.round(t.fraction[1] * 100)} % of ${k}, at random` : t.count ? `${Array.isArray(t.count) ? t.count.join('–') : t.count} ${k}${t.pick === 'random' ? ', at random' : ''}` : `every ${k.replace(/s$/, '')}`;
+  if (t.withoutTag) s += ` not tagged ${t.withoutTag}`;
+  if (t.min) s += `, at least ${t.min}`;
+  return s;
+}
+function effectCard(f, i, whoOpts) {
+  const p = P[f.type];
+  if (!p) return `<div class="card"><div class="ch"><span class="kind">${esc(f.type)}</span><span class="desc" style="color:var(--bad)">Unknown effect type</span></div></div>`;
+  const fields = Object.entries(p.params).map(([k, spec]) => {
+    const id = `e-${i}-${k}`;
+    if (spec === 'who') return `<div class="field"><label for="${id}">Applies to</label>${selectEl(id, whoOpts.length ? whoOpts : ['(no target sets)'], f.who)}</div>`;
+    const [t, a, b, step] = spec;
+    if (t === 'select') return `<div class="field"><label for="${id}">${k}</label>${selectEl(id, a, f[k])}</div>`;
+    if (t === 'num') return `<div class="field"><label for="${id}">${k}</label>${input(id, 'number', f[k], `min="${a}" max="${b}" step="${step}"`)}</div>`;
+    if (t === 'hour') return `<div class="field"><label for="${id}">${k} (hour)</label>${input(id, 'number', f[k], 'min="0" max="23.75" step="0.25"')}</div>`;
+    if (t === 'text') return `<div class="field"><label for="${id}">${k}</label>${input(id, 'text', f[k])}</div>`;
+    if (t === 'color') return `<div class="field"><label for="${id}">${k}</label>${input(id, 'color', f[k])}</div>`;
+    if (t === 'bool') return `<div class="field"><span class="lbl">${k}</span>${input(id, 'bool', f[k])}</div>`;
+    if (t === 'range') return `<div class="field"><span class="lbl">${k} (min – max)</span><div class="inline">${input(id + '-0', 'number', f[k][0], `min="${a}" max="${b}" aria-label="${k} minimum"`)}${input(id + '-1', 'number', f[k][1], `min="${a}" max="${b}" aria-label="${k} maximum"`)}</div></div>`;
+    if (t === 'ramp') return `<div class="field" style="grid-column:1/-1"><label for="${id}">ramp (hour:amount, …)</label>${input(id, 'text', f.ramp.map(([h, v]) => `${h}:${v}`).join(', '), 'style="font-family:var(--f-mono)"')}</div>`;
+    return '';
+  }).join('');
+  return `<div class="card ${p.scope}" data-eff="${i}">
+    <div class="ch"><span class="kind">${esc(f.type)}</span><span class="desc">${esc(p.desc)}</span>
+      <button class="btn small icon" data-emv="-1" data-i="${i}" aria-label="Move effect up">↑</button><button class="btn small icon" data-emv="1" data-i="${i}" aria-label="Move effect down">↓</button>
+      <button class="btn small ghost" data-edel="${i}">Remove</button></div>
+    ${fields ? `<div class="row2">${fields}</div>` : ''}
+  </div>`;
+}
+
+// editor events: structural changes re-render the form; value edits only refresh deck labels + preview (keeps focus)
+$('editor').addEventListener('click', (x) => {
+  const e = ev(); if (!e) return;
+  const t = x.target.closest('button'); if (!t) return;
+  if (t.id === 'f-bench') { S.deck.order = S.deck.order.filter((id) => id !== e.id); return commit(); }
+  if (t.id === 'f-deck') { S.deck.order.push(e.id); return commit(); }
+  if (t.id === 'f-del') {
+    if (t.dataset.armed) { S.events = S.events.filter((v) => v !== e); S.deck.order = S.deck.order.filter((id) => id !== e.id); sel = S.deck.order[0] ?? S.events[0]?.id; return commit(); }
+    t.dataset.armed = '1'; t.textContent = 'Click again to delete'; t.style.color = 'var(--bad)'; return;
+  }
+  if (t.id === 't-add') { let n = 'targets', k = 1; while (e.targets[n]) n = `targets${++k}`; e.targets[n] = { kind: 'monster' }; return commit(); }
+  if (t.dataset.tdel) { delete e.targets[t.dataset.tdel]; return commit(); }
+  if (t.id === 'fx-add') { const type = $('fx-new').value; const f = { type, ...structuredClone(DEFAULTS[type]) }; if (P[type].params.who) f.who = Object.keys(e.targets)[0]; e.effects.push(f); return commit(); }
+  if (t.dataset.edel !== undefined) { e.effects.splice(+t.dataset.edel, 1); return commit(); }
+  if (t.dataset.emv) { const i = +t.dataset.i, j = i + +t.dataset.emv; if (j >= 0 && j < e.effects.length) { [e.effects[i], e.effects[j]] = [e.effects[j], e.effects[i]]; commit(); } }
+});
+$('editor').addEventListener('change', (x) => onEdit(x, true));
+$('editor').addEventListener('input', (x) => { if (x.target.matches('input[type=text], textarea, input[type=number]')) onEdit(x, false); });
+
+function onEdit(x, isChange) {
+  const e = ev(); if (!e) return;
+  const el = x.target, id = el.id, v = el.type === 'checkbox' ? el.checked : el.value;
+  const num = (s) => (s === '' ? NaN : +s);
+  let structural = false;
+  if (id === 'f-title') e.title = v;
+  else if (id === 'f-id') { if (!isChange) return; const nv = v.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-'); if (!nv || S.events.some((o) => o !== e && o.id === nv)) { el.value = e.id; toast('Ids must be unique and not empty.'); return; } S.deck.order = S.deck.order.map((o) => (o === e.id ? nv : o)); e.id = sel = nv; }
+  else if (id === 'f-ann') e.announce = v;
+  else if (id === 'f-arm') e.armText = v;
+  else if (id === 'f-end') e.endText = v;
+  else if (id === 'f-stack') e.stacking = v;
+  else if (id === 'f-sk') { e.start = v === 'now' ? 'now' : { atHour: 14 }; structural = true; }
+  else if (id === 'f-sh') e.start = { atHour: num(v) };
+  else if (id === 'f-dk') { e.duration = v === 'permanent' ? 'permanent' : v === 'dawn' ? { until: 'dawn' } : v === 'untilHour' ? { untilHour: 9 } : { hours: 6 }; structural = true; }
+  else if (id === 'f-dh') e.duration = { untilHour: num(v) };
+  else if (id === 'f-dn') e.duration = { hours: num(v) };
+  else if (id.startsWith('t-')) {
+    const card = el.closest('[data-target]'); const t = e.targets[card.dataset.target]; const k = id.slice(3 + card.dataset.target.length);
+    if (k === '-kind') { t.kind = v; structural = true; }
+    else if (k === '-pick') { t.pick = v === 'all' ? undefined : v; }
+    else if (k === '-amt') { delete t.count; delete t.fraction; delete t.min; if (v === 'count') t.count = 1; if (v === 'fraction') { t.fraction = [0.1, 0.15]; t.min = 1; } structural = true; }
+    else if (k === '-c') t.count = num(v);
+    else if (k === '-f0') t.fraction[0] = num(v);
+    else if (k === '-f1') t.fraction[1] = num(v);
+    else if (k === '-min') t.min = num(v);
+    else if (k === '-wo') t.withoutTag = v || undefined;
+    else if (k === '-hid') t.includeHidden = v || undefined;
+    const desc = card.querySelector('.desc'); if (desc) desc.textContent = describeTarget(t);
+  } else if (id.startsWith('e-')) {
+    const [, i, key, part] = id.split('-'); const f = e.effects[+i]; const spec = P[f.type].params[key];
+    if (spec === 'who') f.who = v;
+    else if (spec[0] === 'num' || spec[0] === 'hour') f[key] = num(v);
+    else if (spec[0] === 'range') f[key][+part] = num(v);
+    else if (spec[0] === 'ramp') f.ramp = v.split(',').map((p) => p.split(':').map((s) => +s.trim())).filter((p) => p.length === 2);
+    else f[key] = v;
+  } else return;
+  save();
+  if (structural) renderAll(); else { renderDeck(); renderPreview(); }
+}
+
+// ---- preview ----
+function checks(e) {
+  const out = [];
+  const tnames = Object.keys(e.targets);
+  if (!e.title.trim()) out.push(['bad', 'The event has no title.']);
+  if (!e.announce.trim()) out.push(['warn', 'No announcement: players won\'t know what happened.']);
+  if (e.start !== 'now' && !e.armText?.trim()) out.push(['warn', 'Starts later with no warning at the Judgment: players won\'t know it\'s coming until it starts.']);
+  for (const f of e.effects) if (f.type === 'spawnEscort' && f.maxFood === 0) out.push(['warn', 'maxFood is 0: the escort steals nothing and only threatens workers.']);
+  if (!e.effects.length) out.push(['bad', 'No effects: firing this does nothing.']);
+  if (e.duration === 'permanent' && e.effects.some((f) => P[f.type]?.scope === 'global')) out.push(['warn', 'A permanent event with world effects (darkness, fog, clock) never lets them go.']);
+  if (e.duration !== 'permanent' && e.effects.some((f) => f.type === 'rename')) out.push(['warn', 'rename is never undone, even when the event ends.']);
+  for (const [i, f] of e.effects.entries()) {
+    const p = P[f.type]; if (!p) { out.push(['bad', `Effect ${i + 1}: unknown type "${f.type}".`]); continue; }
+    if (p.params.who && !tnames.includes(f.who)) out.push(['bad', `Effect ${i + 1} (${f.type}) applies to "${f.who ?? 'nothing'}", which isn't a target set.`]);
+    for (const [k, spec] of Object.entries(p.params)) {
+      if (spec === 'who') continue;
+      if ((spec[0] === 'num' || spec[0] === 'hour') && !Number.isFinite(f[k])) out.push(['bad', `Effect ${i + 1} (${f.type}): ${k} needs a number.`]);
+      else if (spec[0] === 'num' && (f[k] < spec[1] || f[k] > spec[2])) out.push(['warn', `Effect ${i + 1} (${f.type}): ${k} = ${f[k]} is outside ${spec[1]}–${spec[2]}.`]);
+      if (spec[0] === 'range' && !(f[k][0] <= f[k][1])) out.push(['bad', `Effect ${i + 1} (${f.type}): ${k} minimum is above the maximum.`]);
+    }
+    if (f.type === 'darkness' && f.ramp.some((p) => !Number.isFinite(p[0]) || !Number.isFinite(p[1]) || p[1] < 0 || p[1] > 1)) out.push(['bad', `Effect ${i + 1} (darkness): write the ramp as hour:amount pairs, amounts 0–1.`]);
+  }
+  for (const n of tnames) {
+    if (!e.effects.some((f) => f.who === n)) out.push(['warn', `Target set "${n}" isn't used by any effect.`]);
+    const t = e.targets[n]; if (t.fraction && !(t.fraction[0] <= t.fraction[1])) out.push(['bad', `Target set "${n}": fraction minimum is above the maximum.`]);
+  }
+  const { s, end } = span(e);
+  if (Number.isFinite(end) && end - s > 30) out.push(['warn', `Lasts ${Math.round(end - s)} clock hours: it will overlap the next Judgment.`]);
+  if (!S.deck.order.includes(e.id)) out.push(['warn', 'Not in the deck: it only fires from the console.']);
+  return out;
+}
+
+function timeline(e) {
+  const W = 360, H = 104, x0 = 8, x1 = W - 8, top = 14, bot = 62;
+  const X = (t) => x0 + ((x1 - x0) * Math.min(Math.max(t, 0), 48)) / 48; // 48 h: noon → Judgment → noon → Judgment → noon
+  const parts = [];
+  // base night (18–06) for both nights shown
+  for (const [a, b] of [[6, 18], [30, 42]]) parts.push(`<rect x="${X(a)}" y="${top}" width="${X(b) - X(a)}" height="${bot - top}" style="fill:var(--night)" opacity=".28"/>`);
+  for (const [a, b] of [[0, 6], [18, 30], [42, 48]]) parts.push(`<rect x="${X(a)}" y="${top}" width="${X(b) - X(a)}" height="${bot - top}" style="fill:var(--day)" opacity=".35"/>`);
+  const cr = e.effects.find((f) => f.type === 'clockRate');
+  const dk = e.effects.find((f) => f.type === 'darkness');
+  const { s, end } = span(e);
+  const e1 = Math.min(end, 48);
+  if (cr) for (let t = s; t < e1; t += 0.25) if (inWindow((t + 12) % 24, cr.from, cr.to)) parts.push(`<rect x="${X(t)}" y="${top}" width="${X(t + 0.25) - X(t) + 0.3}" height="6" style="fill:var(--rate)"/>`);
+  if (dk) {
+    let d = `M${X(s)},${bot}`;
+    for (let t = s; t <= e1; t += 0.25) d += ` L${X(t).toFixed(1)},${(bot - (bot - top - 8) * darknessAt(dk.ramp, (t + 12) % 24)).toFixed(1)}`;
+    d += ` L${X(e1)},${bot} Z`;
+    parts.push(`<path d="${d}" style="fill:var(--ramp)" opacity=".55"/>`);
+  }
+  if (s > 12) {
+    parts.push(`<line x1="${X(12)}" x2="${X(s)}" y1="${bot + 6}" y2="${bot + 6}" style="stroke:var(--accent)" stroke-dasharray="1 3" stroke-width="2"/>`);
+    parts.push(`<text x="${X(12) + 3}" y="${bot + 20}" style="fill:var(--accent);font:600 9px var(--f-body)">${e.armText?.trim() ? 'warned' : 'armed, no warning'}</text>`);
+  }
+  parts.push(`<rect x="${X(s)}" y="${bot + 3}" width="${Math.max(2, X(e1) - X(s))}" height="6" rx="3" style="fill:var(--accent)"/>`);
+  if (!Number.isFinite(end)) parts.push(`<text x="${x1}" y="${bot + 9}" text-anchor="end" style="fill:var(--accent);font:600 9px var(--f-body)">forever →</text>`);
+  // judgment marks + axis
+  for (const t of [12, 36]) parts.push(`<line x1="${X(t)}" x2="${X(t)}" y1="${top - 4}" y2="${bot + 12}" style="stroke:var(--bad)" stroke-dasharray="2 2"/>`);
+  parts.push(`<text x="${X(12)}" y="${top - 5}" text-anchor="middle" style="fill:var(--bad);font:600 9px var(--f-body)">Judgment</text>`);
+  for (let t = 0; t <= 48; t += 6) parts.push(`<text x="${X(t)}" y="${H - 4}" text-anchor="${t === 0 ? 'start' : t === 48 ? 'end' : 'middle'}" style="fill:var(--muted);font:9px var(--f-mono)">${hh(t + 12)}</text>`);
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="When ${esc(e.title)} is active across the night">${parts.join('')}</svg>`;
+}
+
+const ser = (v, ind = '') => {
+  const pad = ind + '  ';
+  if (Array.isArray(v)) return v.every((x) => typeof x !== 'object') || v.every((x) => Array.isArray(x)) ? `[${v.map((x) => ser(x)).join(', ')}]` : `[\n${v.map((x) => pad + ser(x, pad)).join(',\n')},\n${ind}]`;
+  if (v && typeof v === 'object') {
+    const ents = Object.entries(v).filter(([, x]) => x !== undefined && x !== '');
+    const one = `{ ${ents.map(([k, x]) => `${/^[a-zA-Z_]\w*$/.test(k) ? k : `'${k}'`}: ${ser(x)}`).join(', ')} }`;
+    if (one.length < 100 && !ents.some(([, x]) => Array.isArray(x) && x.some((y) => y && typeof y === 'object' && !Array.isArray(y)))) return ents.length ? one : '{}';
+    return `{\n${ents.map(([k, x]) => `${pad}${/^[a-zA-Z_]\w*$/.test(k) ? k : `'${k}'`}: ${ser(x, pad)}`).join(',\n')},\n${ind}}`;
+  }
+  return typeof v === 'string' ? `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'` : String(v);
+};
+const cleanEvent = (e) => ({ ...e, armText: e.start !== 'now' && e.armText ? e.armText : undefined, targets: Object.keys(e.targets).length ? e.targets : undefined, endText: e.endText || undefined });
+function code() {
+  if (codeScope === 'event') return ser(cleanEvent(ev())) + ',';
+  return `export const EVENTS: EventDef[] = ${ser(S.events.map(cleanEvent))};\n\nexport const DECK: DeckDef = ${ser(S.deck)};\n`;
+}
+
+function renderPreview() {
+  const e = ev(); if (!e) return;
+  $('pvName').textContent = e.id;
+  const st = stats(e);
+  const clockH = Number.isFinite(st.end) ? `${(st.end - st.s).toFixed(1)} h` : '∞';
+  const realM = st.real === null ? 'forever' : `${(st.real / 60).toFixed(1)} min`;
+  const nEnt = e.effects.filter((f) => P[f.type]?.scope === 'entity').length, nGlob = e.effects.length - nEnt;
+  $('stats').innerHTML = `<div class="stat"><b>${hh((st.s + 12) % 24)}</b><span>${e.start === 'now' ? 'starts at once' : st.s >= 24 ? (e.armText?.trim() ? 'starts next day, warned at the Judgment' : 'starts, next day') : 'starts'}</span></div>
+    <div class="stat"><b>${clockH}</b><span>clock time</span></div>
+    <div class="stat"><b>${realM}</b><span>real time (normal night: 4.0)</span></div>`;
+  $('timeline').innerHTML = timeline(e);
+  const iss = checks(e);
+  $('issues').innerHTML = iss.length ? iss.map(([s, t]) => `<li><span class="chip ${s}">${s === 'bad' ? 'Error' : 'Check'}</span><span>${esc(t)}</span></li>`).join('')
+    : `<li><span class="chip ok">OK</span><span>${nEnt} entity effect${nEnt === 1 ? '' : 's'}, ${nGlob} world effect${nGlob === 1 ? '' : 's'}. Ready to fire.</span></li>`;
+  document.querySelectorAll('#codeScope button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === codeScope)));
+  $('code').textContent = code();
+}
+$('codeScope').addEventListener('click', (x) => { const b = x.target.closest('button'); if (b) { codeScope = b.dataset.v; renderPreview(); } });
+
+function renderAll() { renderDeck(); renderEditor(); renderPreview(); }
+function commit() { save(); renderAll(); }
+
+$('reset').addEventListener('click', (x) => {
+  const b = x.currentTarget;
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Click again to reset'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Reset to plan defaults'; }, 3000); return; }
+  delete b.dataset.armed; b.textContent = 'Reset to plan defaults';
+  S = structuredClone(PLAN); sel = S.deck.order[0]; commit(); toast('Reset to the five events in the plan.');
+});
+$('fire').addEventListener('click', () => toast(`Would send __hm.events.fire('${ev()?.id}') to the running game.`));
+$('copy').addEventListener('click', async () => {
+  const prev = codeScope; codeScope = 'all'; const txt = code(); codeScope = prev;
+  try { await navigator.clipboard.writeText(txt); toast('Copied EVENTS and DECK for src/sim/events/defs.ts.'); }
+  catch { codeScope = 'all'; renderPreview(); const r = document.createRange(); r.selectNodeContents($('code')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Copy blocked here: the code is selected, press Ctrl+C.'); }
+});
+
+renderAll();
+</script>
